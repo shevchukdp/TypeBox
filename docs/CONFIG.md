@@ -18,6 +18,16 @@ Nothing is written to the registry or `%APPDATA%`.
 | `Key` | virtual-key code of the hotkey | `113` (F2) |
 | `AltKey` / `CtrlKey` / `ShiftKey` / `WinKey` | `0`/`1` modifiers | `CtrlKey=1` |
 
+**Unrestricted hotkeys (v0.13).** Any key is allowed: single keys with no modifiers (`Key=81`
+for plain **Q**), media keys (`VolUp`, `PlayPause`), `Esc`, F13–F24, numpad and OEM symbols.
+TypeBox registers with `RegisterHotKey` first (adds `MOD_NOREPEAT`, so holding the key does not
+auto-repeat the toggle). When that API refuses — a bare single key, another app already owns the
+combo, or an extended key it cannot express — TypeBox transparently falls back to a
+**low-level keyboard hook** that matches the exact modifier state. The hook consumes the key only
+while the console is hidden (so a single-letter hotkey does not leak into the app behind and does
+not eat your typing inside the console); while the console is open the keys pass through untouched.
+The startup log shows which mode is active: `hotkey: … [RegisterHotKey]` or `… [low-level hook]`.
+
 ### `[Aliases]`
 ```ini
 [Aliases]

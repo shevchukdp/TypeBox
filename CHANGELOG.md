@@ -3,6 +3,49 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.13.0] - 2026-11-15
+
+![hotkey page](docs/screenshots/settings-hotkey.png)
+*A single letter is a hotkey now: press **A**, it lands in the box as `A` (VK 65) — no modifier
+minimum, no forbidden keys, no rejected combinations.*
+
+![font picker](docs/screenshots/settings-font.png)
+*Font page: the name is now a dropdown of installed families and the preview card repaints
+the moment you pick — no more typing font names by hand.*
+
+![about](docs/screenshots/about.png)
+*About finally says who made what: roots (TypeAndRun / Evgeniy Galantsev), inspirations,
+and the maintainer — Dima Shevchuk.*
+
+### Added
+- 🗝️ **Unrestricted hotkeys** — any key works: single keys (`Q`), media keys (`VolUp`,
+  `PlayPause`), `Esc` itself, F13–F24, numpad, OEM symbols. When `RegisterHotKey` refuses
+  (single key, another app owns the combo, unsupported extended key) TypeBox falls back to a
+  **low-level keyboard hook** with exact-modifier matching; the key is consumed while the
+  console is hidden and passed through while it is open, so a single-letter hotkey never
+  eats your typing. `MOD_NOREPEAT` kills auto-repeat on the RegisterHotKey path.
+- 🔤 **Font picker** — the Font page lists every installed family (vertical CJK variants
+  filtered); the custom INI value still round-trips if it is missing from the list.
+- 👀 **Live previews** — theme combo and font combo repaint instantly
+  (`CBN_SELCHANGE`), no Apply-click needed to try a scheme out.
+- ℹ️ **About box** now carries author/maintainer (Dima Shevchuk), repository URL and license
+  alongside the existing roots & inspiration text.
+- 🏷️ Human-readable key names everywhere the hotkey is shown: `Esc`, `Enter`, `Tab`, `PrtSc`,
+  `Mute`, `VolUp`, `NextTrack`, `Num7`, `F19`, `WebFav`, `;`, `+`, `Space`… (was `VK165`).
+
+### Fixed
+- `PgUp`/`PgDn` labels were swapped in the capture box.
+- Esc no longer "cancels" capture — it is an assignable key like any other (dialog Cancel
+  discards drafts; capture never applies anything on its own).
+
+### Verified
+- `test-v0130` (12 checks): RegisterHotKey mode log, Esc assignable in the capture box,
+  plain-**Q** single key shows the box via the hook and stays typable while open, edge guard
+  re-fires after key-up, hijacked Ctrl+Shift+F2 falls back to the hook and the chord still
+  toggles, plain Q ignored in chord mode (exact mods), `--test-settings` OK.
+- Regressions stay green: `test-v0120` 11/11, `test-v0110` 13/13, `test-v0100` 14/14,
+  `test-v091` 12/12, `test-v090` 16/16 (combo indices shifted +1 by the font picker).
+
 ## [0.12.0] - 2026-11-15
 
 ![quick-select and fuzzy](docs/screenshots/dropdown.png)

@@ -1082,7 +1082,10 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
     } else if (c == L"/about") {
         std::wstring msg =
             L"TypeBox " + WVersion() + L"\n\n" +
-            std::wstring(L(STR_ABOUT_TEXT));
+            std::wstring(L(STR_ABOUT_TEXT)) +
+            L"\n\nAuthor / Автор: Dima Shevchuk (D. Shevchuk)"
+            L"\nhttps://github.com/shevchukdp/TypeBox"
+            L"\nLicense / Лицензия: GPL-3.0";
         MessageBoxW(mainWnd, msg.c_str(), L"About TypeBox", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/checkconfig") {
         bool iniOk = PathFileExistsW(g_iniPath.c_str());
@@ -2283,6 +2286,7 @@ static HWND g_plLb = nullptr, g_plLoadChk = nullptr, g_plHistChk = nullptr,
       g_plInfo = nullptr;
 static HWND g_langCombo = nullptr;
 static HWND g_themeCombo = nullptr, g_themePrev = nullptr;
+static HWND g_fontCombo = nullptr;   // v0.13: font is picked, not typed
 struct PluginRow { std::wstring name; int load = 1, saveHist = 1; };
 static std::vector<PluginRow> g_plRows;
 static int g_plSel = -1;
@@ -2306,6 +2310,12 @@ static std::wstring HotkeyText(const Hotkey& hk) {
         buf[0] = (wchar_t)towupper(c);
     else switch (hk.key) {
         case VK_SPACE: wcscpy(buf, L"Space"); break;
+        case VK_ESCAPE: wcscpy(buf, L"Esc"); break;      // v0.13: Esc is assignable
+        case VK_RETURN: wcscpy(buf, L"Enter"); break;
+        case VK_TAB:   wcscpy(buf, L"Tab"); break;
+        case VK_CAPITAL: wcscpy(buf, L"Caps"); break;
+        case VK_NUMLOCK: wcscpy(buf, L"NumLock"); break;
+        case VK_SCROLL:  wcscpy(buf, L"Scroll"); break;
         case VK_UP:    wcscpy(buf, L"Up"); break;
         case VK_DOWN:  wcscpy(buf, L"Down"); break;
         case VK_LEFT:  wcscpy(buf, L"Left"); break;
@@ -2313,9 +2323,55 @@ static std::wstring HotkeyText(const Hotkey& hk) {
         case VK_INSERT:wcscpy(buf, L"Insert"); break;
         case VK_HOME:  wcscpy(buf, L"Home"); break;
         case VK_END:   wcscpy(buf, L"End"); break;
-        case VK_NEXT:  wcscpy(buf, L"PgUp"); break;
-        case VK_PRIOR: wcscpy(buf, L"PgDn"); break;
-        default: wsprintfW(buf, L"VK%u", hk.key);
+        case VK_NEXT:  wcscpy(buf, L"PgDn"); break;   // VK_NEXT = page down
+        case VK_PRIOR: wcscpy(buf, L"PgUp"); break;   // VK_PRIOR = page up
+        // v0.13: media / laptop / OEM keys get real names so the capture box
+        // never shows a bare VK number - the user should see what they picked.
+        case VK_VOLUME_MUTE:      wcscpy(buf, L"Mute"); break;
+        case VK_VOLUME_DOWN:      wcscpy(buf, L"VolDown"); break;
+        case VK_VOLUME_UP:        wcscpy(buf, L"VolUp"); break;
+        case VK_MEDIA_NEXT_TRACK: wcscpy(buf, L"NextTrack"); break;
+        case VK_MEDIA_PREV_TRACK: wcscpy(buf, L"PrevTrack"); break;
+        case VK_MEDIA_STOP:       wcscpy(buf, L"Stop"); break;
+        case VK_MEDIA_PLAY_PAUSE: wcscpy(buf, L"PlayPause"); break;
+        case VK_APPS:    wcscpy(buf, L"Apps"); break;
+        case VK_SLEEP:   wcscpy(buf, L"Sleep"); break;
+        case VK_SNAPSHOT:wcscpy(buf, L"PrtSc"); break;
+        case VK_CANCEL:  wcscpy(buf, L"Break"); break;
+        case VK_CLEAR:   wcscpy(buf, L"Clear"); break;
+        case VK_ADD:      wcscpy(buf, L"Num+"); break;
+        case VK_SUBTRACT: wcscpy(buf, L"Num-"); break;
+        case VK_MULTIPLY: wcscpy(buf, L"Num*"); break;
+        case VK_DIVIDE:   wcscpy(buf, L"Num/"); break;
+        case VK_DECIMAL:  wcscpy(buf, L"Num."); break;
+        case VK_OEM_1:     wcscpy(buf, L";"); break;
+        case VK_OEM_PLUS:  wcscpy(buf, L"+"); break;
+        case VK_OEM_COMMA: wcscpy(buf, L","); break;
+        case VK_OEM_MINUS: wcscpy(buf, L"-"); break;
+        case VK_OEM_PERIOD:wcscpy(buf, L"."); break;
+        case VK_OEM_2:  wcscpy(buf, L"/"); break;
+        case VK_OEM_3:  wcscpy(buf, L"`"); break;
+        case VK_OEM_4:  wcscpy(buf, L"["); break;
+        case VK_OEM_5:  wcscpy(buf, L"\\"); break;
+        case VK_OEM_6:  wcscpy(buf, L"]"); break;
+        case VK_OEM_7:  wcscpy(buf, L"'"); break;
+        default:
+            if (hk.key >= VK_NUMPAD0 && hk.key <= VK_NUMPAD9)
+                wsprintfW(buf, L"Num%d", (int)hk.key - VK_NUMPAD0);
+            else if (hk.key >= VK_F13 && hk.key <= VK_F24)
+                wsprintfW(buf, L"F%d", (int)hk.key - VK_F12);
+            else if (hk.key >= VK_BROWSER_BACK && hk.key <= VK_BROWSER_FAVORITES) {
+                static const wchar_t* bn[] = { L"WebBack", L"WebFwd", L"WebRefresh",
+                    L"WebStop", L"WebSearch", L"WebHome", L"WebFav" };
+                wcscpy(buf, bn[(int)hk.key - VK_BROWSER_BACK]);
+            }
+            else if (hk.key == VK_LWIN) wcscpy(buf, L"Win");
+            else if (hk.key == VK_RWIN) wcscpy(buf, L"RWin");
+            else if ((hk.key >= L'A' && hk.key <= L'Z') ||
+                     (hk.key >= L'0' && hk.key <= L'9')) {   // v0.13 single keys
+                buf[0] = (wchar_t)hk.key; buf[1] = 0;
+            }
+            else wsprintfW(buf, L"VK%u", hk.key);
     }
     return s + buf;
 }
@@ -2338,8 +2394,8 @@ static LRESULT CALLBACK HkCapProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, 
         g_draftHk.win   = (GetAsyncKeyState(VK_LWIN) & 0x8000) ||
                           (GetAsyncKeyState(VK_RWIN) & 0x8000);
         if (!pure) {
-            if (vk == VK_ESCAPE) { HkRefresh(); return 0; }  // cancel capture
-            g_draftHk.key = vk;
+            g_draftHk.key = vk;   // v0.13: truly any key, Esc included - the
+                                  // dialog's own Cancel button discards drafts
         }
         HkRefresh();
         return 0;
@@ -2352,6 +2408,46 @@ static LRESULT CALLBACK HkCapProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, 
 }
 
 // ---------------------------------------------------------------- control makers
+// ------------------------------------------------ v0.13.0: font picker support
+// The font NAME must be chosen from the list of installed families, not typed
+// free-form (typos produced silently-falling-back fonts). Enumerated once.
+static int CALLBACK EnumFontProc(ENUMLOGFONTEXW* elf, NEWTEXTMETRICEXW*, DWORD, LPARAM l) {
+    auto* v = (std::vector<std::wstring>*)l;
+    std::wstring f = elf->elfLogFont.lfFaceName;
+    if (!f.empty() && f[0] != L'@')                 // skip vertical CJK variants
+        v->push_back(f);
+    return 1;
+}
+static const std::vector<std::wstring>& FontFamilies() {
+    static std::vector<std::wstring> fams;
+    if (fams.empty()) {
+        HDC dc = GetDC(nullptr);
+        LOGFONTW lf = {}; lf.lfCharSet = DEFAULT_CHARSET;
+        EnumFontFamiliesExW(dc, &lf, (FONTENUMPROCW)EnumFontProc, (LPARAM)&fams, 0);
+        ReleaseDC(nullptr, dc);
+        std::sort(fams.begin(), fams.end(), [](const std::wstring& a, const std::wstring& b) {
+            return _wcsicmp(a.c_str(), b.c_str()) < 0; });
+        fams.erase(std::unique(fams.begin(), fams.end(),
+                     [](const std::wstring& a, const std::wstring& b) {
+                         return _wcsicmp(a.c_str(), b.c_str()) == 0; }), fams.end());
+    }
+    return fams;
+}
+
+// Shared by the Font page Bind and the combo CBN_SELCHANGE: the preview must
+// follow g_draft instantly while the user tries schemes/fonts out.
+static void UpdateFontPreview() {
+    if (!g_fontPreview) return;
+    static HFONT prev = nullptr;
+    if (prev) { DeleteObject(prev); prev = nullptr; }
+    prev = CreateFontW(-MulDiv(g_draft.fontSize, 96, 72), 0, 0, 0,
+        g_draft.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        VARIABLE_PITCH, g_draft.fontName.c_str());
+    SendMessageW(g_fontPreview, WM_SETFONT, (WPARAM)prev, TRUE);
+    InvalidateRect(g_fontPreview, nullptr, TRUE);
+}
+
 static HWND MkOn(HWND host, const wchar_t* cls, const wchar_t* text, DWORD style,
                  int x, int y, int w, int h) {
     HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
@@ -2603,6 +2699,25 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             SettingsShowPage((int)SendMessageW(src, LB_GETCURSEL, 0, 0));
             return 0;
         }
+        // v0.13: previews must follow the combo instantly - the user tries
+        // schemes/fonts out BEFORE pressing Apply (store() alone was too late).
+        if (src == g_themeCombo && code == CBN_SELCHANGE) {
+            int sel = (int)SendMessageW(src, CB_GETCURSEL, 0, 0);
+            if (sel >= 0 && sel < kThemeCount) {
+                g_draft.theme = kThemes[sel].name;
+                if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE);
+            }
+            return 0;
+        }
+        if (src == g_fontCombo && code == CBN_SELCHANGE) {
+            wchar_t b[LF_FACESIZE] = {};
+            int s = (int)SendMessageW(src, CB_GETCURSEL, 0, 0);
+            if (s != CB_ERR && SendMessageW(src, CB_GETLBTEXT, s, (LPARAM)b) > 0) {
+                g_draft.fontName = b;
+                UpdateFontPreview();
+            }
+            return 0;
+        }
         if (code == BN_CLICKED) {
             if (src == g_alLb) return 0;
             if (src) {
@@ -2835,20 +2950,32 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_fontPreview = MkOn(g_setPage[PG_FONT], L"STATIC", L"Aa Bb Cc 0123456789",
                          SS_LEFT, 16, y + 20, 430, 40);
     y += 70;
-    TxB(g_setPage[PG_FONT], L(STR_FO_NAME), 16, y, &Settings::fontName);                y += 28;
+    // v0.13: pick the font from the installed families - typing free text was
+    // a typo factory (unknown name => silent fallback to the GDI default).
+    MkLabel(g_setPage[PG_FONT], L(STR_FO_NAME), 16, y + 3, 150);
+    g_fontCombo = MkOn(g_setPage[PG_FONT], L"COMBOBOX", L"",
+                       CBS_DROPDOWNLIST | WS_VSCROLL, 175, y, 260, 320);
+    Bind([=]{
+        SendMessageW(g_fontCombo, CB_RESETCONTENT, 0, 0);
+        for (auto& f : FontFamilies())
+            SendMessageW(g_fontCombo, CB_ADDSTRING, 0, (LPARAM)f.c_str());
+        int i = (int)SendMessageW(g_fontCombo, CB_FINDSTRINGEXACT, -1,
+                                  (LPARAM)g_draft.fontName.c_str());
+        if (i == CB_ERR)                        // custom INI value: keep it visible
+            i = (int)SendMessageW(g_fontCombo, CB_ADDSTRING, 0,
+                                  (LPARAM)g_draft.fontName.c_str());
+        SendMessageW(g_fontCombo, CB_SETCURSEL, i, 0);
+        UpdateFontPreview(); },
+    [=]{ wchar_t b[LF_FACESIZE] = {};
+         int s = (int)SendMessageW(g_fontCombo, CB_GETCURSEL, 0, 0);
+         if (s != CB_ERR && SendMessageW(g_fontCombo, CB_GETLBTEXT, s, (LPARAM)b) > 0)
+             g_draft.fontName = b; });
+    y += 28;
     NumB(g_setPage[PG_FONT], L(STR_FO_SIZE), 16, y, &Settings::fontSize, 6, 72);        y += 28;
     CkB(g_setPage[PG_FONT], L(STR_FO_BOLD), 16, y, &Settings::fontBold);                y += 26;
     CkB(g_setPage[PG_FONT], L(STR_FO_APPLY_EN), 16, y, &Settings::applyEnglish);        y += 30;
     MkButton(g_setPage[PG_FONT], L(STR_FO_CHOOSE), 16, y, 110, IDB_FONT_CHOOSE);
-    Bind([]{
-        static HFONT prev = nullptr;
-        if (prev) { DeleteObject(prev); prev = nullptr; }
-        HFONT pf = CreateFontW(-MulDiv(g_draft.fontSize, 96, 72), 0, 0, 0,
-            g_draft.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-            OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-            VARIABLE_PITCH, g_draft.fontName.c_str());
-        prev = pf;
-        SendMessageW(g_fontPreview, WM_SETFONT, (WPARAM)pf, TRUE); }, []{});
+    Bind([]{ UpdateFontPreview(); }, []{});
 
     // --- Hotkey
     y = 12;
@@ -3420,11 +3547,79 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
     return DefSubclassProc(hWnd, msg, wp, lp);
 }
 
+// ------------------------------------------------ v0.13.0: unrestricted hotkeys
+// RegisterHotKey cannot express every key (single keys without modifiers, some
+// media/extended keys) and fails outright when another app already owns the
+// combination. To honor "the user configures it, no limits", ANY VK can be a
+// hotkey through a low-level keyboard hook that matches the exact modifier
+// state. The hook only fires while the console is hidden and consumes the key,
+// so a single-letter hotkey does not leak into the app behind and still lets
+// the user type that letter inside the console.
+#ifndef MOD_NOREPEAT
+#define MOD_NOREPEAT 0x4000
+#endif
+static HHOOK g_hkHook = nullptr;
+static HWND  g_hkWnd  = nullptr;     // WM_HOTKEY toggle messages go here
+static bool  g_hkHookMode = false;   // hotkey currently served by the hook
+static bool  g_hkEdge     = false;   // key-down edge guard (kills auto-repeat)
+
+static LRESULT CALLBACK LLKbProc(int code, WPARAM w, LPARAM l) {
+    if (code == HC_ACTION) {
+        KBDLLHOOKSTRUCT* k = (KBDLLHOOKSTRUCT*)l;
+        if ((w == WM_KEYDOWN || w == WM_SYSKEYDOWN) && !g_visible &&
+            k->vkCode == g_hotkey.key) {
+            bool ctrl  = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
+            bool shift = (GetAsyncKeyState(VK_SHIFT)   & 0x8000) != 0;
+            bool alt   = (GetAsyncKeyState(VK_MENU)    & 0x8000) != 0;
+            bool win   = (GetAsyncKeyState(VK_LWIN) & 0x8000) ||
+                         (GetAsyncKeyState(VK_RWIN) & 0x8000);
+            if (ctrl == g_hotkey.ctrl && shift == g_hotkey.shift &&
+                alt  == g_hotkey.alt  && win  == g_hotkey.win) {
+                if (!g_hkEdge && g_hkWnd) {
+                    g_hkEdge = true;
+                    PostMessageW(g_hkWnd, WM_HOTKEY, kHotkeyId, 0);
+                }
+                return 1;                    // consume: do not leak to the app
+            }
+        } else if ((w == WM_KEYUP || w == WM_SYSKEYUP) &&
+                   k->vkCode == g_hotkey.key) {
+            g_hkEdge = false;
+        }
+    }
+    return CallNextHookEx(g_hkHook, code, w, l);
+}
+
+static void ApplyHotkey(HWND mainWnd) {
+    UnregisterHotKey(mainWnd, kHotkeyId);
+    if (g_hkHook) { UnhookWindowsHookEx(g_hkHook); g_hkHook = nullptr; }
+    g_hkHookMode = false;
+    g_hkEdge = false;
+    g_hkWnd  = mainWnd;
+
+    bool wantHook = (g_hotkey.mods() == 0);  // single key: RegisterHotKey would
+                                             // eat it system-wide; hook is smarter
+    if (!wantHook &&
+        !RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods() | MOD_NOREPEAT,
+                        g_hotkey.key)) {
+        wantHook = true;                     // occupied or unsupported: hook still works
+        LogError(L"RegisterHotKey failed (key=" + std::to_wstring(g_hotkey.key) +
+                 L", mods=" + std::to_wstring(g_hotkey.mods()) +
+                 L"); falling back to low-level hook");
+    }
+    if (wantHook) {
+        g_hkHook = SetWindowsHookExW(WH_KEYBOARD_LL, LLKbProc,
+                                     (HINSTANCE)GetModuleHandleW(nullptr), 0);
+        if (g_hkHook) g_hkHookMode = true;
+        else LogError(L"SetWindowsHookEx(WH_KEYBOARD_LL) failed: hotkey disabled");
+    }
+    LogInfo(L"hotkey: " + HotkeyText(g_hotkey) +
+            (g_hkHookMode ? L" [low-level hook]" : L" [RegisterHotKey]"));
+}
+
 static void ReloadHotkey(HWND mainWnd) {
     UnregisterHotKey(mainWnd, kHotkeyId);
     LoadSettings();
-    if (!RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key))
-        LogError(L"RegisterHotKey(/reread) failed");
+    ApplyHotkey(mainWnd);
 }
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -3552,6 +3747,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_DESTROY:
         UnregisterHotKey(hWnd, kHotkeyId);
+        if (g_hkHook) { UnhookWindowsHookEx(g_hkHook); g_hkHook = nullptr; }
         RemoveTrayIcon();
         if (g_aliasProc) { CloseHandle(g_aliasProc); g_aliasProc = nullptr; }
         CallPluginsUnload();
@@ -3666,14 +3862,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     ApplyFont(g_edit);
     CallPluginsLoad(mainWnd);
 
-    if (!RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key)) {
-        LogError(L"RegisterHotKey failed (key=" + std::to_wstring(g_hotkey.key) +
-                 L", mods=" + std::to_wstring(g_hotkey.mods()) + L")");
-        MessageBoxW(mainWnd,
-            L"TypeBox: failed to register the hotkey.\n"
-            L"Check [HotKey] in TypeBox.ini, then run /reread.",
-            L"TypeBox", MB_OK | MB_ICONERROR);
-    }
+    ApplyHotkey(mainWnd);   // v0.13: RegisterHotKey + low-level hook fallback
 
     {
         size_t enabled = 0;
