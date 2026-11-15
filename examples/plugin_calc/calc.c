@@ -106,7 +106,7 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     i.size = sizeof(TInfo);
     i.name = "Calculator";
     i.version = "1.0";
-    i.description = "calc <expression> — like the legacy tar_math plugin";
+    i.description = "calc <expression> - like the legacy tar_math plugin";
     i.author = "TypeBox project";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";

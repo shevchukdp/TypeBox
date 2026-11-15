@@ -79,3 +79,50 @@ Priority: P1 next releases, P2 v1.x, P3 backlog/wildcard.
 | 50 | Settings search box | Filter text on top of page list: matches page + control labels via i18n strings | M | P2 | v1.x |
 
 **Policy reminders** for every feature: i18n keys appended at the end of `src/i18n.h`; INI keys documented in `docs/CONFIG.md`; CHANGELOG entries are image-led (screenshot of what changed) with a short bullet; releases must pass CI + local asset run gate; tests live in `C:\temp\opencode\test-vNNN.ps1`.
+
+---
+
+## Research merge (2026-11-15) — from [IDEAS-RESEARCH.md](IDEAS-RESEARCH.md) + [UX-REVIEW.md](UX-REVIEW.md)
+
+Both subagent reports reviewed. Adopted into this roadmap under my numbering; the reports keep the
+full specs and sources (PowerToys Command Palette backlash #46096/#43174, Flow 2.1.4, Wox v2.4.9,
+Raycast-Win v0.41, Listary 6.3, Keypirinha migration wave).
+
+### v0.12.0 batch — keyboard muscle memory + UX quick wins (**shipped 2026-11-15**)
+| Mine | Adopted | Item | Source |
+|---|---|---|---|
+| #51 | R#3 | **Alt+1…9 quick-select** in the drop-down (digits painted on rows) | Flow/Listary/Wox; UX-TOp |
+| #52 | R#4 | **Web-search quicklinks** `[WebSearch] g=…%s` (defaults g/yt/gh, i18n anchor) | Raycast Quicklinks, Listary |
+| — | U-D8/B2 | **Drop-down scroll** (`g_ddTop` + wheel) — rows past `Lines` selectable/visible | UX-REVIEW |
+| — | U-B3 | Hover-execute guard (Enter runs only keyboard-selected rows) | UX-REVIEW |
+| — | U-Top1/B10 | **Contrast guard** strip text ≥4.5:1 (Mix% auto-raised on light themes) | UX-REVIEW |
+| — | U-Top2/B1 | Cue banner hint in the edit (Tab/Enter/Esc discoverability, i18n) | UX-REVIEW |
+| — | U-A4 | Edit height = tmHeight+6 (stops 18pt clipping) | UX-REVIEW |
+| — | U-A2 | Unlit traffic-light lamps visible (Mix 32% + ring) | UX-REVIEW |
+| — | U-B1 | Tray tip + balloon show the actual hotkey | UX-REVIEW |
+| — | U-run-up | AutoHide timer resets on typing | UX-REVIEW |
+| — | U-defect | calc.c `GetInfo` → ASCII (settings-plugins garbled `в Б`) | UX-REVIEW |
+
+### v0.12.x–v0.13.x adoption queue (next after v0.12.0)
+| Mine | Adopted | Item | Effort |
+|---|---|---|---|
+| #53 | R#14 | History prefix search (typed word + ↑ cycles matches only) | S |
+| #54 | R#12 | Double-tap-modifier summon (double-Ctrl, opt-in) | S |
+| #55 | R#27 | Opt-in autostart (HKCU Run, tray + settings checkbox) | S |
+| #56 | R#43 | Machine/user overlay config = my #48 `TypeBox.local.ini` | S |
+| #57 | R#48 | Danger confirmation gate (`rm -rf`, `del /s`, format → [Enter] confirms) | S |
+| #58 | R#5 | `~run` verb catalog + ms-settings deep links | M |
+| #2  | R#2 | Frecency / adaptive usage ranking (`Usage.dat`) | M |
+| #59 | R#9 | Snippets `[Snippets]` (expansion via %s engine, my #17 superset) | M |
+| #60 | U-B4/D10 | Ctrl+A/PgUp/PgDn in edit + OK default button | S |
+| #61 | U-B12 | Per-Monitor V2 DPI + MonitorFromPoint centering | M |
+| #62 | U-D9 | 1px themed hairline instead of WS_BORDER on the edit | S |
+| #63 | R#7 | Window switcher `~w` (EnumWindows) | L |
+| #64 | R#8 | Clipboard history (opt-in, privacy-gated) | L |
+| #65 | R#10 | Offline calculator + conversions (my #6 superset) | M |
+
+Own extra ideas beyond both reports: **#66** INI profile switcher (`TypeBox --profile work`),
+**#67** per-monitor console geometry, **#68** "open containing folder" (Ctrl+Enter on a file row,
+Explorer), **#69** export/import as a single Base64 blob line for chat-transfer, **#70** idle-CPU
+proof badge in `/about` (< 0.1 % claim with measured number).
+

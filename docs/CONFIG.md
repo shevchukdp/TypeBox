@@ -72,7 +72,24 @@ DropDownColor trio is replaced by the scheme).
 | `ShowHistoryOnEmpty` | empty line lists the history (TypeAndRun behaviour) | `1` |
 
 Settings → **EasyType** page: *Show suggestions drop-down*, *Visible rows*, *History when the
-line is empty* (log at start: `dropdown: on (8 rows)`).
+line is empty* (log at start: `dropdown: on (8 rows)`). When the candidate list is longer than
+`Lines`, **↑/↓** and the **mouse wheel** scroll it; rows carry `1…9` and **Alt+1…9** runs one
+instantly. Hovering with the mouse highlights a row but **Enter** still runs the typed line —
+only a keyboard selection or click runs.
+
+### `[WebSearch]` — quicklinks (TypeBox 0.12.0)
+Raycast-style: a keyword + query opens the default browser. Built-in keywords **g** (Google),
+**yt** (YouTube), **gh** (GitHub) ship in the exe; rows here add or override by name. `%s` is
+replaced by the URL-encoded rest of the line (no `%s` ⇒ the query is appended). A quicklink run is
+logged (`websearch: g -> …`), recorded as EXC_URL, and previews amber in the anchor;
+`[Exec] WWW=0` blocks it.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `Enable` | register quicklinks at all | `1` |
+| `g`,`yt`,`gh`,… | `name=https://…%s` | (3 built-ins) |
+
+Example: `so=https://stackoverflow.com/search?q=%s` makes `so hello world` open a search.
 
 ### `[Color]` (scheme 0 — console)
 COLORREF integers (`0x00BBGGRR` as decimal); `-1` = system default:

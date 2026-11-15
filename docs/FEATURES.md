@@ -106,7 +106,9 @@ sources of the caret word (aliases, ~sysaliases, /commands, plugin commands) and
 the line is empty; `[DropDown] Enable / Lines / ShowHistoryOnEmpty`, keyboard
 (↑/↓ select, Tab accept, Enter run, Esc close) and mouse (hover + click) driven; colors follow the
 theme, so the old DropDownColor/DropDownText/BorderSize trio is intentionally replaced by the
-scheme ([Theme]). Hint popup — 📋
+scheme ([Theme]). Quicklinks: `[WebSearch] name=url%s` opens the browser (built-in g/yt/gh,
+0.12.0). Scrollable when longer than Lines (↑/↓ + wheel), Alt+1…9 runs a numbered row, mouse
+hover never arms **Enter** (keyboard selection or click only). Hint popup — 📋
 (tied to EasyType, Phase 2)
 
 ## Color themes  `[Color]`

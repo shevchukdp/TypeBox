@@ -3,6 +3,43 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.12.0] - 2026-11-15
+
+![quick-select and fuzzy](docs/screenshots/dropdown.png)
+*Rows now carry **1…9** on the left — press **Alt+1**…Alt+9** to run a row instantly; the typed
+fuzzy hits still glow in the accent color.*
+
+![cue banner](docs/screenshots/console-cue.png)
+*An empty console teaches itself: the cue banner spells out the four keys, and the three lamps
+stay visible even when unlit.*
+
+### Added
+- ⌨️ **Alt+1…9 quick-select** — numbered rows in the drop-down, Alt+digit runs that row
+  (Flow/Wox/Listary muscle memory); Home/End jump to first/last row.
+- 🔎 **Web-search quicklinks** — `[WebSearch] wb=https://…%s`: keyword + query opens the default
+  browser (`so hello world` → logged URL, EXC_URL history, amber anchor preview). Built-in
+  `g`/`yt`/`gh`, user rows override/add; `[WebSearch] Enable=0` disables.
+- 📜 **Drop-down scrolling** — more candidates than `[DropDown] Lines`: **↑/↓** and the mouse
+  wheel scroll the list now (rows past the cap used to be unreachable).
+- 🖱️ **Hover-execute guard** — mouse hover highlights a row but **Enter** still runs the line you
+  typed; only keyboard-selected rows (or a click) run.
+- 💡 **Cue banner** in the empty console ("Type a command — Tab completes · Enter runs · Esc
+  hides", localized) — hand-drawn so it survives screenshots and the .rc-less build.
+
+### Improved
+- 🎨 **Contrast guard** — status-strip counts, chips and the clock auto-raise their color mix
+  until ≥ 4.5:1 against the theme background (light themes were illegible at 1.85:1).
+- 📏 Console edit height follows the font (`tmHeight+6`) — 18 pt no longer clips; AutoHide timer
+  resets while typing; unlit traffic-light lamps are actually visible (32% fill + ring);
+  tray tooltip now shows the hotkey (`TypeBox 0.12.0 — Ctrl+Shift+F2`).
+- 🧹 calc plugin `GetInfo` de-mojibaked (ASCII description in the Plugins page).
+
+### Verified
+- `test-v0120` (11 checks): quicklinks count/candidate/URL log + `[Exec] WWW=0` block, hover
+  guard keeps the typed line, Alt+1 runs the top row, 12-row list scrolls to `|9|2`,
+  `--test-settings` OK. `test-v0110` 13/13, `test-v0100` 14/14, `test-v091` 12/12, `test-v090`
+  17/17 stay green.
+
 ## [0.11.0] - 2026-11-15
 
 ![fuzzy suggestions](docs/screenshots/dropdown.png)

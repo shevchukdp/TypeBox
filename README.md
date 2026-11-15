@@ -51,7 +51,11 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.11.0):
+Working today (v0.12.0):
+- 🔎 **Web-search quicklinks** — `[WebSearch] so=https://…%s`: `so hello world` opens the default
+  browser (built-in g/yt/gh); logged, history-friendly, amber anchor
+- ⌨️ **Alt+1…9 quick-select** — the drop-down numbers its rows; Alt+digit runs one instantly;
+  ↑/↓ + wheel scroll long lists, and a hover no longer hijacks **Enter**
 - ✅ **Fuzzy matching** — `[Type] Fuzzy=1` (default): Tab and the drop-down score subsequences,
   so `cl` finds `calc`; hit characters glow in the accent color, best score on top, `Fuzzy=0`
   restores the strict TypeAndRun prefix mode

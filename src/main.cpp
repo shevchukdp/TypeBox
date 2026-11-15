@@ -25,6 +25,7 @@
 #include <fstream>
 #include <cstring>
 #include <cwctype>
+#include <cmath>
 #include <algorithm>
 #include <functional>
 
@@ -170,6 +171,56 @@ static int ReadIniInt(const wchar_t* sec, const wchar_t* key, int def) {
 
 static bool ReadIniBool(const wchar_t* sec, const wchar_t* key, bool def) {
     return ReadIniInt(sec, key, def ? 1 : 0) != 0;
+}
+
+// ---------------------------------------------------------------- web search (v0.12)
+// Raycast-style quicklinks: [WebSearch] g=https://www.google.com/search?q=%s
+// Built-in g/yt/gh ship with the exe; user rows override them by name. The
+// keyword + query executes as EXC_URL (history/sounds follow the WWW rules),
+// and the anchor previews it in amber.
+static std::wstring Trim(const std::wstring& s);
+struct WebLink { std::wstring name, tmpl; };
+static std::vector<WebLink> g_webLinks;
+
+static std::wstring WebEncode(const std::wstring& q) {
+    std::wstring o;
+    for (wchar_t c : q) {
+        switch (c) {
+        case L' ': o += L'+';    break;
+        case L'%': o += L"%25";  break;
+        case L'&': o += L"%26";  break;
+        case L'#': o += L"%23";  break;
+        case L'+': o += L"%2B";  break;
+        default:   o += c;
+        }
+    }
+    return o;
+}
+
+static void LoadWebSearch() {
+    g_webLinks.clear();
+    if (ReadIniInt(L"WebSearch", L"Enable", 1) == 0) return;
+    auto add = [&](const std::wstring& n, const std::wstring& t) {
+        if (n.empty() || t.empty()) return;
+        bool known = _wcsnicmp(t.c_str(), L"http://", 7) == 0 ||
+                     _wcsnicmp(t.c_str(), L"https://", 8) == 0;
+        if (!known) return;                       // Enable=1 and comments are not links
+        for (auto& w : g_webLinks)
+            if (_wcsicmp(w.name.c_str(), n.c_str()) == 0) { w.tmpl = t; return; }
+        g_webLinks.push_back({ n, t });
+    };
+    add(L"g",  L"https://www.google.com/search?q=%s");
+    add(L"yt", L"https://www.youtube.com/results?search_query=%s");
+    add(L"gh", L"https://github.com/search?q=%s");
+    wchar_t buf[16384] = {};
+    DWORD n = GetPrivateProfileSectionW(L"WebSearch", buf, ARRAYSIZE(buf), g_iniPath.c_str());
+    for (DWORD i = 0; i < n; ) {
+        std::wstring row(buf + i);
+        i += (DWORD)row.size() + 1;
+        size_t eq = row.find(L'=');
+        if (eq == std::wstring::npos) continue;
+        add(Trim(row.substr(0, eq)), Trim(row.substr(eq + 1)));
+    }
 }
 
 static std::wstring Trim(const std::wstring& s) {
@@ -766,6 +817,7 @@ static void PlayTypeSound(int idx) {
 
 // ---------------------------------------------------------------- tray
 
+static std::wstring HotkeyText(const Hotkey& hk);   // defined with the settings dialog
 static void AddTrayIcon(HWND hWnd, bool balloon) {
     if (!g_set.trayIcon) return;
     g_nid.cbSize           = sizeof(g_nid);
@@ -774,7 +826,7 @@ static void AddTrayIcon(HWND hWnd, bool balloon) {
     g_nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
     g_nid.uCallbackMessage = kTrayMsg;
     g_nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
-    std::wstring tip = L"TypeBox " + WVersion();
+    std::wstring tip = L"TypeBox " + WVersion() + L" — " + HotkeyText(g_hotkey);
     lstrcpynW(g_nid.szTip, tip.c_str(), ARRAYSIZE(g_nid.szTip));
     if (balloon && g_set.balloonTips) {
         g_nid.uFlags |= NIF_INFO;
@@ -1075,6 +1127,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
     } else if (c == L"/reread") {
         LoadSettings();
         LoadAliases();
+        LoadWebSearch();
         ReloadHotkey(mainWnd);
     } else if (c == L"/load") {
         // (Re)scan Plugins\ and [Plugins]; call Load(HWND) on each.
@@ -1115,6 +1168,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             if (CopyFileW(src.c_str(), g_iniPath.c_str(), FALSE)) {
                 LoadSettings();
                 LoadAliases();
+                LoadWebSearch();
                 ReloadHotkey(mainWnd);
                 MessageBoxW(mainWnd,
                     L"Settings imported. Previous config kept as TypeBox.ini.bak",
@@ -1270,6 +1324,22 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         if (pt != EXC_NONE) return pt;
     }
 
+    // 2b) web-search quicklinks: "g some query" -> default browser ([WebSearch])
+    if (!g_webLinks.empty() && !rest.empty()) {
+        for (auto& wl : g_webLinks) {
+            if (_wcsicmp(word.c_str(), wl.name.c_str()) != 0) continue;
+            std::wstring url = wl.tmpl;
+            size_t pos = url.find(L"%s");
+            std::wstring q = WebEncode(rest);
+            if (pos != std::wstring::npos) url.replace(pos, 2, q); else url += q;
+            LogInfo(L"websearch: " + word + L" -> " + url);
+            if (!g_set.execWww) { LogInfo(L"websearch: blocked by [Exec] WWW=0"); return EXC_NONE; }
+            ShellExecuteW(mainWnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            PlayTypeSound(3);
+            return EXC_URL;
+        }
+    }
+
     // 3) URL
     std::wstring expanded = ExpandEnv(line);
     if (g_set.execWww && LooksLikeUrl(expanded)) {
@@ -1392,6 +1462,11 @@ static Anchor ClassifyAnchor(const std::wstring& lineRaw) {
                     { a.lamp = 1; a.labelId = STR_SO_PLUGIN; return a; }
         }
 
+    if (!g_webLinks.empty() && !RestWords(line).empty())   // quicklink -> amber
+        for (auto& wl : g_webLinks)
+            if (_wcsicmp(word.c_str(), wl.name.c_str()) == 0)
+                { a.lamp = 1; a.labelId = STR_AN_WEB; return a; }
+
     std::wstring expanded = ExpandEnv(line);
     if (LooksLikeUrl(expanded))
         { a.lamp = g_set.execWww   ? 1 : 2; a.labelId = g_set.execWww   ? STR_SO_URL  : STR_AN_OFF; return a; }
@@ -1427,6 +1502,11 @@ static void ApplyFont(HWND edit) {
         FIXED_PITCH | FF_MODERN,
         ConsoleFontSuggestion(g_set.fontName.c_str()));
     SendMessageW(edit, WM_SETFONT, (WPARAM)f, TRUE);
+    if (edit == g_edit && GetParent(edit)) {   // font changed -> redo layout
+        RECT rc; GetClientRect(GetParent(edit), &rc);
+        SendMessageW(GetParent(edit), WM_SIZE, 0,
+                     MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top));
+    }
 }
 
 static void SetTrayVisual();
@@ -1500,6 +1580,30 @@ static COLORREF MixColor(COLORREF a, COLORREF b, int pct) {   // pct% of b
     return RGB(mix(GetRValue(a), GetRValue(b)),
                mix(GetGValue(a), GetGValue(b)),
                mix(GetBValue(a), GetBValue(b)));
+}
+
+// WCAG contrast helpers (v0.12, UX review B10): secondary strip text and chip
+// labels used fixed Mix% values that fail on light themes — raise the mix
+// until the pair reaches ~4.5:1 instead of trusting the percentage.
+static double SrgbLuma(COLORREF c) {
+    auto lin = [](int v) {
+        double x = v / 255.0;
+        return x <= 0.04045 ? x / 12.92 : std::pow((x + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * lin(GetRValue(c)) + 0.7152 * lin(GetGValue(c)) +
+           0.0722 * lin(GetBValue(c));
+}
+static double ContrastRatio(COLORREF a, COLORREF b) {
+    double la = SrgbLuma(a), lb = SrgbLuma(b);
+    if (la < lb) { double t = la; la = lb; lb = t; }
+    return (la + 0.05) / (lb + 0.05);
+}
+static COLORREF ReadableMix(COLORREF bg, COLORREF fg, int startPct) {
+    int pct = startPct < 40 ? 40 : startPct;
+    for (; pct < 100; pct += 4)
+        if (ContrastRatio(bg, MixColor(bg, fg, pct)) >= 4.5)
+            return MixColor(bg, fg, pct);
+    return MixColor(bg, fg, pct);
 }
 
 static COLORREF g_effBg  = RGB(0x2B, 0x26, 0x22);
@@ -1629,9 +1733,10 @@ static void PaintStatusBar(HDC dc, RECT rc) {
     int x = rc.left + 7;
     for (int i = 0; i < 3; ++i) {
         bool on = (g_anchor.lamp == i);
-        HBRUSH b2 = CreateSolidBrush(on ? lit[i] : MixColor(g_effBg, lit[i], 16));
+        // unlit lamps must stay visible too (UX A2): 32% fill + 25% ring
+        HBRUSH b2 = CreateSolidBrush(on ? lit[i] : MixColor(g_effBg, lit[i], 32));
         HPEN   p2 = CreatePen(PS_SOLID, 1, MixColor(g_effBg, RGB(0xFF, 0xFF, 0xFF),
-                                                    on ? 45 : 10));
+                                                    on ? 45 : 25));
         HPEN o2 = (HPEN)SelectObject(dc, p2);
         HBRUSH o3 = (HBRUSH)SelectObject(dc, b2);
         Ellipse(dc, x, rc.top + 6, x + 8, rc.top + 14);
@@ -1657,7 +1762,7 @@ static void PaintStatusBar(HDC dc, RECT rc) {
     for (auto& p : g_plugins) { ++plg; if (p.loaded) ++plgOn; }
     std::wstring left = std::to_wstring(g_aliases.size()) + L" al   \u25CF" +
                         std::to_wstring(plgOn) + L"/" + std::to_wstring(plg);
-    SetTextColor(dc, MixColor(g_effBg, g_effFg, 62));
+    SetTextColor(dc, ReadableMix(g_effBg, g_effFg, 62));          // contrast guard
     TextOutW(dc, x, y, left.c_str(), (int)left.size());
     SIZE sz; GetTextExtentPoint32W(dc, left.c_str(), (int)left.size(), &sz);
     x += sz.cx + 12;
@@ -1667,14 +1772,15 @@ static void PaintStatusBar(HDC dc, RECT rc) {
     for (int pass = 0; pass < 2; ++pass) {
         const wchar_t* chip = pass == 0 ? mode : kThemes[ThemeFromName(g_set.theme)].name;
         SIZE cs; GetTextExtentPoint32W(dc, chip, (int)wcslen(chip), &cs);
-        HBRUSH cb = CreateSolidBrush(MixColor(g_effBg, g_accent, 18));
+        COLORREF chipBg = MixColor(g_effBg, g_accent, 18);
+        HBRUSH cb = CreateSolidBrush(chipBg);
         HPEN   cp = CreatePen(PS_SOLID, 1, MixColor(g_effBg, g_accent, 55));
         HPEN   o2 = (HPEN)SelectObject(dc, cp);
         HBRUSH o3 = (HBRUSH)SelectObject(dc, cb);
         RoundRect(dc, x, rc.top + 2, x + cs.cx + 10, rc.top + SB_H - 3, 7, 7);
         SelectObject(dc, o2); SelectObject(dc, o3);
         DeleteObject(cb); DeleteObject(cp);
-        SetTextColor(dc, MixColor(g_effBg, g_accent, 85));
+        SetTextColor(dc, ReadableMix(chipBg, g_accent, 85));      // contrast guard
         TextOutW(dc, x + 5, y, chip, (int)wcslen(chip));
         x += cs.cx + 18;
     }
@@ -1684,7 +1790,7 @@ static void PaintStatusBar(HDC dc, RECT rc) {
     std::wstring right = std::wstring(g_set.enableSounds ? L"\u266A " : L"\u00D7 ") +
                          std::wstring(kLangs[g_langIdx].code) + L"  " + clk;
     SIZE rs; GetTextExtentPoint32W(dc, right.c_str(), (int)right.size(), &rs);
-    SetTextColor(dc, MixColor(g_effBg, g_effFg, 62));
+    SetTextColor(dc, ReadableMix(g_effBg, g_effFg, 62));          // clock: contrast guard
     TextOutW(dc, rc.right - rs.cx - 8, y, right.c_str(), (int)right.size());
 
     SelectObject(dc, oldF);
@@ -1810,6 +1916,8 @@ static void TabComplete(HWND edit) {
                 for (const auto& a : g_aliases) add(a.name);
             if (g_set.etSysAlias)
                 for (const auto& s : g_sysAliases) add(s.name);
+            if (!g_webLinks.empty())
+                for (auto& wl : g_webLinks) add(wl.name);   // quicklinks (g/yt/gh)
             if (g_set.execPlugins)
                 for (auto& p : g_plugins)
                     if (p.GetCount && p.GetString)
@@ -1858,6 +1966,8 @@ static std::vector<std::wstring> g_ddItems;
 static std::vector<std::vector<size_t>> g_ddMarks;   // per-row matched offsets
 static const std::vector<size_t> kNoMarks;           // for rows without a pattern
 static int    g_ddSel = -1, g_ddRowH = 22;
+static int    g_ddTop = 0;          // first visible row when the list overflows
+static bool   g_ddSelKb = false;    // Enter runs only rows picked by keyboard
 static size_t g_ddB = 0, g_ddE = 0;                  // word slot inside the edit
 
 static bool DdVisible() { return g_ddWnd && IsWindowVisible(g_ddWnd); }
@@ -1865,12 +1975,31 @@ static bool DdVisible() { return g_ddWnd && IsWindowVisible(g_ddWnd); }
 static void DdSyncTitle() {   // cheap state probe for the test harness
     if (!g_ddWnd) return;
     SetWindowTextW(g_ddWnd, (std::wstring(L"TypeBoxDropDown|") +
-        std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel)).c_str());
+        std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel) +
+        L"|" + std::to_wstring(g_ddTop)).c_str());
+}
+
+static int DdVisibleRows() {
+    int vis = (int)g_ddItems.size();
+    if (vis > g_set.ddLines) vis = g_set.ddLines;
+    return vis < 0 ? 0 : vis;
+}
+
+static void DdKeepVisible() {       // arrows/wheel keep the selection on screen
+    int vis = DdVisibleRows();
+    if (vis <= 0) { g_ddTop = 0; return; }
+    if (g_ddSel >= 0 && g_ddSel < g_ddTop) g_ddTop = g_ddSel;
+    if (g_ddSel >= g_ddTop + vis) g_ddTop = g_ddSel - vis + 1;
+    int maxTop = (int)g_ddItems.size() - vis; if (maxTop < 0) maxTop = 0;
+    if (g_ddTop > maxTop) g_ddTop = maxTop;
+    if (g_ddTop < 0) g_ddTop = 0;
 }
 
 static void DdClose() {
     if (g_ddWnd) ShowWindow(g_ddWnd, SW_HIDE);
     g_ddSel = -1;
+    g_ddTop = 0;
+    g_ddSelKb = false;
     g_ddItems.clear();
     g_ddMarks.clear();
 }
@@ -1898,19 +2027,29 @@ static void PaintDropDown(HDC dc) {
     DdEnsureFont();
     HFONT oldF = (HFONT)SelectObject(dc, g_ddFont);
     SetBkMode(dc, TRANSPARENT);
-    for (int i = 0; i < (int)g_ddItems.size(); ++i) {
+    DdKeepVisible();
+    int vis = DdVisibleRows();
+    for (int i = 0; i < vis; ++i) {
+        int di = g_ddTop + i;
         RECT rr = { 2, i * g_ddRowH + 2, rc.right - 2, (i + 1) * g_ddRowH + 2 };
         if (rr.top >= rc.bottom) break;
-        if (i == g_ddSel) {
+        if (di == g_ddSel) {
             HBRUSH sb = CreateSolidBrush(MixColor(g_effBg, g_accent, 24));
             FillRect(dc, &rr, sb); DeleteObject(sb);
         }
-        const std::wstring& it = g_ddItems[i];
+        const std::wstring& it = g_ddItems[di];
         int px = rr.left + 6, py = rr.top + 3;
+        if (i < 9) {                                   // Alt+1..9 gutter (Flow/Listary)
+            wchar_t dg = (wchar_t)(L'1' + i);
+            SetTextColor(dc, MixColor(g_effBg, g_accent, 70));
+            TextOutW(dc, px, py, &dg, 1);
+            SIZE ds = { 0, 0 }; GetTextExtentPoint32W(dc, &dg, 1, &ds);
+            px += ds.cx + 6;
+        }
         COLORREF hot = MixColor(g_effBg, g_accent, 88);           // matched chars
-        COLORREF dim = MixColor(g_effBg, g_effFg, i == g_ddSel ? 100 : 72);
+        COLORREF dim = MixColor(g_effBg, g_effFg, di == g_ddSel ? 100 : 72);
         const std::vector<size_t>& mk =
-            (i < (int)g_ddMarks.size()) ? g_ddMarks[i] : kNoMarks;
+            (di < (int)g_ddMarks.size()) ? g_ddMarks[di] : kNoMarks;
         size_t h = 0;                                             // marks are ascending
         for (size_t ci = 0; ci < it.size(); ++ci) {
             bool on = h < mk.size() && mk[h] == ci;
@@ -1944,16 +2083,25 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         return TRUE;
     case WM_MOUSEMOVE: {
-        int idx = ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
+        int idx = g_ddTop + ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
         if (idx >= 0 && idx < (int)g_ddItems.size() && idx != g_ddSel) {
-            g_ddSel = idx; DdSyncTitle();
+            g_ddSel = idx; g_ddSelKb = false;     // hover alone must not arm Enter
+            DdSyncTitle();
             InvalidateRect(h, nullptr, FALSE);
         }
         return 0;
     }
     case WM_LBUTTONUP: {
-        int idx = ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
+        int idx = g_ddTop + ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
         if (idx >= 0 && idx < (int)g_ddItems.size()) { g_ddSel = idx; DdPick(true); }
+        return 0;
+    }
+    case WM_MOUSEWHEEL: {                          // scroll past the [DropDown] Lines cap
+        int steps = GET_WHEEL_DELTA_WPARAM(w) / WHEEL_DELTA;
+        g_ddTop -= steps;
+        DdKeepVisible();
+        if (g_ddSel >= 0) DdSyncTitle();
+        InvalidateRect(h, nullptr, FALSE);
         return 0;
     }
     case WM_DESTROY:
@@ -2023,6 +2171,8 @@ static void DdUpdate(HWND mainWnd) {
             for (auto& a : g_aliases) add(a.name);
         if (firstWord && g_set.etSysAlias)
             for (auto& s : g_sysAliases) add(s.name);
+        if (firstWord)
+            for (auto& wl : g_webLinks) add(wl.name);   // quicklinks like "g"
         if (firstWord && g_set.execPlugins)
             for (auto& p : g_plugins)
                 if (p.GetCount && p.GetString && PluginLoadAllowed(p))
@@ -2070,6 +2220,7 @@ static void DdUpdate(HWND mainWnd) {
     g_ddItems = std::move(items);
     g_ddMarks = std::move(marks);
     g_ddB = b; g_ddE = e; g_ddSel = -1;
+    g_ddTop = 0; g_ddSelKb = false;
 
     DdEnsureFont();
     int rows = (int)g_ddItems.size();
@@ -3060,6 +3211,7 @@ static void WriteDraftIni() {
 static void LiveApply(HWND mainWnd) {
     ReloadHotkey(mainWnd);                 // LoadSettings + RegisterHotKey
     LoadAliases();                         // LoadSettings covers sys-aliases/ignores
+    LoadWebSearch();
     // language: re-resolve pack + RTL before fonts (CJK/RTL suggestion)
     {
         bool wasRtl = (GetWindowLongW(mainWnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
@@ -3142,9 +3294,31 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
                                  UINT_PTR id, DWORD_PTR ref) {
     HWND mainWnd = (HWND)ref;
     (void)id;
+    // hand-drawn cue banner: EM_SETCUEBANNER needs the v6 common-controls
+    // manifest this .rc-less build carries no, and would not reach PrintWindow
+    // screenshots either (UX review B1: the four keys must teach themselves)
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+        LRESULT r = DefSubclassProc(hWnd, msg, wp, lp);
+        HDC dc = (msg == WM_PAINT) ? GetDC(hWnd) : (HDC)wp;
+        if (dc && GetWindowTextLengthW(hWnd) == 0) {
+            HFONT f = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+            HFONT old = f ? (HFONT)SelectObject(dc, f) : nullptr;
+            RECT rc; GetClientRect(hWnd, &rc);
+            TEXTMETRICW tm = {}; GetTextMetricsW(dc, &tm);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, MixColor(g_effBg, g_effFg, 45));
+            RECT tr = { rc.left + 3, (rc.top + rc.bottom - (int)tm.tmHeight) / 2,
+                        rc.right - 2, rc.bottom };
+            DrawTextW(dc, L(STR_CUE), -1, &tr, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE);
+            if (old) SelectObject(dc, old);
+        }
+        if (msg == WM_PAINT && dc) ReleaseDC(hWnd, dc);
+        return r;
+    }
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     switch (msg) {
     case WM_KEYDOWN:
+    case WM_SYSKEYDOWN:      // real Alt+digit arrives as WM_SYSKEYDOWN (Alt+1..9 rows)
         switch (wp) {
         case VK_RETURN: {
             // Shift+Enter kills the process started by the last alias (TypeAndRun parity).
@@ -3166,7 +3340,7 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
                 return 0;
             }
             if (shift) { LogInfo(L"Shift+Enter: no running alias process to kill"); return 0; }
-            if (DdVisible() && g_ddSel >= 0) { DdPick(true); return 0; }   // run selected row
+            if (DdVisible() && g_ddSel >= 0 && g_ddSelKb) { DdPick(true); return 0; }  // run selected row
             Submit(mainWnd);  return 0;
         }
         case VK_ESCAPE:
@@ -3178,6 +3352,7 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         case VK_UP:
             if (DdVisible() && !g_ddItems.empty()) {
                 g_ddSel = g_ddSel <= 0 ? (int)g_ddItems.size() - 1 : g_ddSel - 1;
+                g_ddSelKb = true; DdKeepVisible();
                 DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
                 return 0;
             }
@@ -3186,12 +3361,39 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         case VK_DOWN:
             if (DdVisible() && !g_ddItems.empty()) {
                 g_ddSel = (g_ddSel + 1) % (int)g_ddItems.size();
+                g_ddSelKb = true; DdKeepVisible();
                 DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
                 return 0;
             }
             if (g_histPos < g_history.size()) SetHistory(++g_histPos);
             else { g_histPos = g_history.size(); SetHistory(g_histPos); }
             return 0;
+        case VK_HOME:
+            if (DdVisible() && !g_ddItems.empty()) {
+                g_ddSel = 0; g_ddTop = 0; g_ddSelKb = true;
+                DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        case VK_END:
+            if (DdVisible() && !g_ddItems.empty()) {
+                g_ddSel = (int)g_ddItems.size() - 1; g_ddSelKb = true; DdKeepVisible();
+                DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
+                return 0;
+            }
+            break;
+        case L'A': case L'a':
+            if (ctrl) { SendMessageW(hWnd, EM_SETSEL, 0, -1); return 0; }   // Ctrl+A
+            break;
+        default:
+            if (((GetKeyState(VK_MENU) & 0x8000) || (lp & 0x100000)) &&   // Alt context bit
+                wp >= L'1' && wp <= L'9' &&
+                DdVisible() && !g_ddItems.empty()) {       // Alt+digit: run a visible row
+                int row = g_ddTop + (int)wp - (int)L'1';
+                if (row >= 0 && row < (int)g_ddItems.size()) { g_ddSel = row; DdPick(true); }
+                return 0;
+            }
+            break;
         case VK_BACK: // word-wise backspace (TypeAndRun AdvancedBackspace)
             if (ctrl) {
                 std::wstring t = GetEditText(hWnd);
@@ -3235,10 +3437,20 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SIZE: {
-        // keep the edit centered in the space ABOVE the 20px status strip
+        // keep the edit centered in the space ABOVE the 20px status strip;
+        // height follows the font (UX A4: a fixed 24 clipped the 18pt glyphs)
         int above = (int)HIWORD(lp) - SB_H;
         if (above < 16) above = 16;
-        MoveWindow(g_edit, 2, (above - 24) / 2, LOWORD(lp) - 4, 24, TRUE);
+        int eh = 24;
+        if (HFONT f = (HFONT)SendMessageW(g_edit, WM_GETFONT, 0, 0)) {
+            HDC dc = GetDC(hWnd);
+            HFONT old = (HFONT)SelectObject(dc, f);
+            TEXTMETRICW tm = {}; GetTextMetricsW(dc, &tm);
+            SelectObject(dc, old); ReleaseDC(hWnd, dc);
+            eh = (int)tm.tmHeight + 6;
+            if (eh > above) eh = above;
+        }
+        MoveWindow(g_edit, 2, (above - eh) / 2, LOWORD(lp) - 4, eh, TRUE);
         return 0;
     }
     case WM_TIMER:
@@ -3312,6 +3524,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
                 }
             }
             DdUpdate(hWnd);                    // keep the suggestion list in sync
+            if (g_visible && g_set.autoHide && g_set.autoHideValue > 0) {
+                KillTimer(hWnd, 1);            // typing must not get hidden mid-keystroke
+                SetTimer(hWnd, 1, (UINT)g_set.autoHideValue * 1000, nullptr);
+            }
         }
         if (LOWORD(wp) == 1)      g_visible ? HideBox(hWnd) : ShowBox(hWnd);
         else if (LOWORD(wp) == 2) ShellExecuteW(hWnd, L"open", g_iniPath.c_str(),
@@ -3418,6 +3634,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetLanguage(LangFromCode(g_set.langCode));   // L(STR_*) from here on
     SetProcessDefaultLayout(LangRtl() ? LAYOUT_RTL : 0);   // Arabic mirror (LTR = 0)
     LoadAliases();
+    LoadWebSearch();
     LoadHistory();
     DiscoverPlugins();
 
@@ -3475,6 +3692,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         LogInfo(L"dropdown: " + std::wstring(g_set.dropDown ?
                 L"on (" + std::to_wstring(g_set.ddLines) + L" rows)" : L"off"));
         LogInfo(L"fuzzy: " + std::wstring(g_set.fuzzy ? L"on" : L"off (prefix mode)"));
+        LogInfo(L"websearch: " + (g_webLinks.empty()
+                ? std::wstring(L"off")
+                : std::to_wstring(g_webLinks.size()) + L" keywords"));
     }
 
     AddTrayIcon(mainWnd, true);
