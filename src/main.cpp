@@ -93,6 +93,10 @@ struct Settings {
     // [Type] EasyType completion
     int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
     bool etInternal = true, etAlias = true, etHistory = true, etSysAlias = true;
+    // [DropDown] suggestion list (TypeAndRun DropDown parity)
+    bool dropDown = true;
+    int  ddLines = 8;          // visible rows before scrolling ends
+    bool ddOnEmpty = true;     // empty line shows the history (TypeAndRun behaviour)
     // [Color] scheme 0 (COLORREF integers, -1 = system default)
     int  consoleBg = -1, consoleFg = -1;
     // [History] [Undo]
@@ -513,6 +517,11 @@ static void LoadSettings() {
     g_set.theme    = Trim(ReadIniStr(L"Theme", L"Name", L"cozy-dark"));
 
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
+    g_set.dropDown   = ReadIniInt(L"DropDown", L"Enable", 1) != 0;
+    g_set.ddLines    = ReadIniInt(L"DropDown", L"Lines", 8);
+    if (g_set.ddLines < 1) g_set.ddLines = 1;
+    if (g_set.ddLines > 20) g_set.ddLines = 20;
+    g_set.ddOnEmpty  = ReadIniInt(L"DropDown", L"ShowHistoryOnEmpty", 1) != 0;
     g_set.etInternal = ReadIniBool(L"Type", L"UseInternalET", true);
     g_set.etAlias    = ReadIniBool(L"Type", L"UseAliasET", true);
     g_set.etHistory  = ReadIniBool(L"Type", L"UseHistoryET", true);
@@ -1418,6 +1427,8 @@ static void ApplyFont(HWND edit) {
 }
 
 static void SetTrayVisual();
+static void DdClose();
+static void DdUpdate(HWND mainWnd);
 
 static void ShowBox(HWND mainWnd) {
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
@@ -1444,6 +1455,7 @@ static void ShowBox(HWND mainWnd) {
     ResetET();
     g_anchor = Anchor{};             // lights off until the first keystroke
     SetTrayVisual();
+    DdUpdate(mainWnd);               // empty line -> history (parity)
     if (g_set.autoHide && g_set.autoHideValue > 0)
         SetTimer(mainWnd, 1, (UINT)g_set.autoHideValue * 1000, nullptr);
 }
@@ -1455,6 +1467,7 @@ static void HideBox(HWND mainWnd) {
     KillTimer(mainWnd, 1);
     ResetET();
     SetTrayVisual();
+    DdClose();
 }
 
 // ---------------------------------------------------------------- themes (cozy look)
@@ -1677,6 +1690,7 @@ static void PaintStatusBar(HDC dc, RECT rc) {
 static void Submit(HWND mainWnd) {
     std::wstring line = GetEditText(g_edit);
     if (line.empty()) return;
+    DdClose();
     g_lastRun = line;
     ExecType t = (ExecType)RunLine(line, mainWnd);
     if (t != EXC_NONE && HistoryAllows(t)) {
@@ -1777,6 +1791,220 @@ static void TabComplete(HWND edit) {
         SetWindowTextW(edit, nt.c_str());
         SendMessageW(edit, EM_SETSEL, (WPARAM)(b + repl.size()), (LPARAM)(b + repl.size()));
     }
+}
+
+// ---------------------------------------------------------------- drop-down (v0.10)
+// TypeAndRun's frmTypeDropDown parity: a themed suggestion list glued under
+// the console (it flips above when the screen runs out). Rows are the ET
+// candidates for the word at the caret — aliases, ~sysaliases, /commands,
+// plugin commands and history — or, when the line is empty, the history
+// itself ([DropDown] ShowHistoryOnEmpty). The window is owned + NOACTIVATE:
+// the caret never leaves the edit, keys stay in EditProc, and the mouse can
+// still hover and click rows.
+static const wchar_t* kDDClass = L"TypeBoxDropDown";
+static HWND                      g_ddWnd = nullptr;
+static HWND                      g_ddOwner = nullptr;
+static HFONT                     g_ddFont = nullptr;
+static std::vector<std::wstring> g_ddItems;
+static int    g_ddSel = -1, g_ddRowH = 22;
+static size_t g_ddB = 0, g_ddE = 0, g_ddMatch = 0;   // word slot inside the edit
+
+static bool DdVisible() { return g_ddWnd && IsWindowVisible(g_ddWnd); }
+
+static void DdSyncTitle() {   // cheap state probe for the test harness
+    if (!g_ddWnd) return;
+    SetWindowTextW(g_ddWnd, (std::wstring(L"TypeBoxDropDown|") +
+        std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel)).c_str());
+}
+
+static void DdClose() {
+    if (g_ddWnd) ShowWindow(g_ddWnd, SW_HIDE);
+    g_ddSel = -1;
+    g_ddItems.clear();
+}
+
+static void DdEnsureFont() {
+    if (g_ddFont) return;
+    g_ddFont = CreateFontW(-MulDiv(g_set.fontSize, 96, 72) - 1, 0, 0, 0,
+        g_set.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        FIXED_PITCH | FF_MODERN, ConsoleFontSuggestion(g_set.fontName.c_str()));
+    HDC dc = GetDC(nullptr);
+    HFONT old = (HFONT)SelectObject(dc, g_ddFont);
+    TEXTMETRICW tm = {};
+    GetTextMetricsW(dc, &tm);
+    SelectObject(dc, old); ReleaseDC(nullptr, dc);
+    g_ddRowH = (int)tm.tmHeight + 8;
+}
+
+static void PaintDropDown(HDC dc) {
+    RECT rc; GetClientRect(g_ddWnd, &rc);
+    HBRUSH b = CreateSolidBrush(MixColor(g_effBg, RGB(0, 0, 0), 10));
+    FillRect(dc, &rc, b); DeleteObject(b);
+    HBRUSH fb = CreateSolidBrush(MixColor(g_effBg, g_accent, 55));
+    FrameRect(dc, &rc, fb); DeleteObject(fb);
+    DdEnsureFont();
+    HFONT oldF = (HFONT)SelectObject(dc, g_ddFont);
+    SetBkMode(dc, TRANSPARENT);
+    for (int i = 0; i < (int)g_ddItems.size(); ++i) {
+        RECT rr = { 2, i * g_ddRowH + 2, rc.right - 2, (i + 1) * g_ddRowH + 2 };
+        if (rr.top >= rc.bottom) break;
+        if (i == g_ddSel) {
+            HBRUSH sb = CreateSolidBrush(MixColor(g_effBg, g_accent, 24));
+            FillRect(dc, &rr, sb); DeleteObject(sb);
+        }
+        const std::wstring& it = g_ddItems[i];
+        size_t m = g_ddMatch <= it.size() ? g_ddMatch : it.size();
+        int px = rr.left + 6, py = rr.top + 3;
+        SetTextColor(dc, MixColor(g_effBg, g_accent, 88));      // typed prefix
+        TextOutW(dc, px, py, it.c_str(), (int)m);
+        SIZE s1 = { 0, 0 };
+        if (m) GetTextExtentPoint32W(dc, it.c_str(), (int)m, &s1);
+        SetTextColor(dc, MixColor(g_effBg, g_effFg, i == g_ddSel ? 100 : 72));
+        TextOutW(dc, px + s1.cx, py, it.c_str() + m, (int)(it.size() - m));
+    }
+    SelectObject(dc, oldF);
+}
+
+static void DdPick(bool run);   // used by the mouse handler below
+
+static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+    case WM_ERASEBKGND:  return 1;                       // all painting in WM_PAINT
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(h, &ps);
+        PaintDropDown(dc);
+        EndPaint(h, &ps);
+        return 0;
+    }
+    case WM_PRINTCLIENT:                                  // PrintWindow/screenshots
+        if ((HDC)w) PaintDropDown((HDC)w);
+        return 0;
+    case WM_SETCURSOR:
+        SetCursor(LoadCursorW(nullptr, IDC_ARROW));
+        return TRUE;
+    case WM_MOUSEMOVE: {
+        int idx = ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
+        if (idx >= 0 && idx < (int)g_ddItems.size() && idx != g_ddSel) {
+            g_ddSel = idx; DdSyncTitle();
+            InvalidateRect(h, nullptr, FALSE);
+        }
+        return 0;
+    }
+    case WM_LBUTTONUP: {
+        int idx = ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
+        if (idx >= 0 && idx < (int)g_ddItems.size()) { g_ddSel = idx; DdPick(true); }
+        return 0;
+    }
+    case WM_DESTROY:
+        if (g_ddFont) { DeleteObject(g_ddFont); g_ddFont = nullptr; }
+        g_ddWnd = nullptr;
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+// Replace the caret word with the selected candidate; run=true submits too.
+static void DdPick(bool run) {
+    if (!g_edit || g_ddSel < 0 || g_ddSel >= (int)g_ddItems.size() || !g_ddOwner) return;
+    std::wstring item = g_ddItems[g_ddSel];
+    int len = GetWindowTextLengthW(g_edit);
+    std::wstring text(len, L'\0');
+    if (len) GetWindowTextW(g_edit, &text[0], len + 1);
+    size_t b = g_ddB <= text.size() ? g_ddB : text.size();
+    size_t e = g_ddE <= text.size() ? g_ddE : text.size();
+    if (e < b) e = b;
+    std::wstring nt = text.substr(0, b) + item + text.substr(e);
+    SetWindowTextW(g_edit, nt.c_str());
+    SendMessageW(g_edit, EM_SETSEL, (WPARAM)(b + item.size()), (LPARAM)(b + item.size()));
+    HWND owner = g_ddOwner;
+    DdClose();
+    if (run) Submit(owner);
+}
+
+// Rebuild and (re)position the list for the word at the caret.
+static void DdUpdate(HWND mainWnd) {
+    if (!g_set.dropDown || !g_visible || !g_edit) { DdClose(); return; }
+    int len = GetWindowTextLengthW(g_edit);
+    std::wstring text(len, L'\0');
+    if (len) GetWindowTextW(g_edit, &text[0], len + 1);
+    DWORD sel = (DWORD)SendMessageW(g_edit, EM_GETSEL, 0, 0);
+    size_t caret = LOWORD(sel) <= text.size() ? LOWORD(sel) : text.size();
+    size_t b = caret, e = caret;
+    while (b > 0 && text[b - 1] != L' ' && text[b - 1] != L'\t') --b;
+    while (e < text.size() && text[e] != L' ' && text[e] != L'\t') ++e;
+    std::wstring word = text.substr(b, e - b);
+
+    std::vector<std::wstring> items;
+    auto add = [&](const std::wstring& raw) {
+        std::wstring c = Trim(raw);                       // plugins may return "calc "
+        if (c.empty() || (int)items.size() >= 100) return;
+        if (!word.empty() && !StartsWithNoCase(c, word)) return;
+        for (auto& x : items)
+            if (_wcsicmp(x.c_str(), c.c_str()) == 0) return;
+        items.push_back(c);
+    };
+    if (word.empty()) {
+        if (g_set.ddOnEmpty)                        // empty console = history (parity)
+            for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
+    } else {
+        bool firstWord = (b == 0);
+        if (firstWord && g_set.etInternal)
+            for (auto c : kInternalCmds) add(c);
+        if (firstWord && g_set.etAlias)
+            for (auto& a : g_aliases) add(a.name);
+        if (firstWord && g_set.etSysAlias)
+            for (auto& s : g_sysAliases) add(s.name);
+        if (firstWord && g_set.execPlugins)
+            for (auto& p : g_plugins)
+                if (p.GetCount && p.GetString && PluginLoadAllowed(p))
+                    for (int i = 0; i < p.GetCount(); ++i) add(FromAnsi(p.GetString(i)));
+        if (g_set.etHistory && word[0] != L'/')
+            for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
+        if (g_set.execPlugins && word[0] != L'/')
+            for (auto& p : g_plugins)
+                if (p.GetCountET && p.GetStringET && PluginLoadAllowed(p)) {
+                    std::string a = ToAnsi(word);
+                    int cnt = p.GetCountET(a.c_str());
+                    for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
+                }
+    }
+    if (items.empty()) { DdClose(); return; }
+
+    if (!g_ddWnd) {
+        static bool reg = false;
+        HINSTANCE hInst = (HINSTANCE)(LONG_PTR)GetWindowLongPtrW(mainWnd, GWLP_HINSTANCE);
+        if (!reg) {
+            WNDCLASSW wc = {};
+            wc.lpfnWndProc = DropDownProc;
+            wc.hInstance = hInst;
+            wc.lpszClassName = kDDClass;
+            RegisterClassW(&wc);
+            reg = true;
+        }
+        g_ddWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            kDDClass, kDDClass, WS_POPUP,
+            0, 0, 10, 10, mainWnd, nullptr, hInst, nullptr);
+        if (!g_ddWnd) { LogInfo(L"drop-down: create failed"); g_set.dropDown = false; return; }
+    }
+    g_ddOwner = mainWnd;
+    g_ddItems = std::move(items);
+    g_ddB = b; g_ddE = e; g_ddMatch = word.size(); g_ddSel = -1;
+
+    DdEnsureFont();
+    int rows = (int)g_ddItems.size();
+    if (rows > g_set.ddLines) rows = g_set.ddLines;
+    int h = rows * g_ddRowH + 4;
+    RECT wr; GetWindowRect(mainWnd, &wr);
+    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    int x = wr.left, y = wr.bottom + 1;
+    if (y + h > wa.bottom) y = wr.top - h - 1;           // flip above (parity)
+    SetWindowPos(g_ddWnd, HWND_TOPMOST, x, y, wr.right - wr.left, h,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    DdSyncTitle();
+    InvalidateRect(g_ddWnd, nullptr, TRUE);
+    UpdateWindow(g_ddWnd);
 }
 
 static void ShowTrayMenu(HWND hWnd) {
@@ -2429,7 +2657,10 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_TYPE], L(STR_ET_INT),     16, y, &Settings::etInternal); y += 26;
     CkB(g_setPage[PG_TYPE], L(STR_ET_AL),      16, y, &Settings::etAlias);    y += 26;
     CkB(g_setPage[PG_TYPE], L(STR_ET_SYS),     16, y, &Settings::etSysAlias); y += 26;
-    CkB(g_setPage[PG_TYPE], L(STR_ET_HIST),    16, y, &Settings::etHistory);
+    CkB(g_setPage[PG_TYPE], L(STR_ET_HIST),    16, y, &Settings::etHistory); y += 30;
+    CkB(g_setPage[PG_TYPE], L(STR_DD_SHOW),    16, y, &Settings::dropDown);  y += 26;
+    NumB(g_setPage[PG_TYPE], L(STR_DD_ROWS),   16, y, &Settings::ddLines, 1, 20); y += 34;
+    CkB(g_setPage[PG_TYPE], L(STR_DD_EMPTY),   16, y, &Settings::ddOnEmpty);
 
     // --- History
     y = 12;
@@ -2674,6 +2905,9 @@ static void WriteDraftIni() {
     WB(L"Exec", L"Plugins",  s.execPlugins);
 
     WInt(L"Type", L"EasyType",     s.easyType);
+    WInt(L"DropDown", L"Enable",              s.dropDown ? 1 : 0);
+    WInt(L"DropDown", L"Lines",               s.ddLines);
+    WInt(L"DropDown", L"ShowHistoryOnEmpty",  s.ddOnEmpty ? 1 : 0);
     WB(L"Type", L"UseInternalET",  s.etInternal);
     WB(L"Type", L"UseAliasET",     s.etAlias);
     WB(L"Type", L"UseHistoryET",   s.etHistory);
@@ -2776,6 +3010,8 @@ static void LiveApply(HWND mainWnd) {
     g_trayErr = false;
     FreeTrayIcons();                       // badge follows the new accent
     SetTrayVisual();
+    DdClose();                             // font/colors may have changed
+    if (g_ddFont) { DeleteObject(g_ddFont); g_ddFont = nullptr; }
     LogInfo(L"theme: " + g_set.theme);
     if (g_set.trayIcon) { if (!g_nid.hWnd) AddTrayIcon(mainWnd, false); }
     else RemoveTrayIcon();
@@ -2849,14 +3085,29 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
                 return 0;
             }
             if (shift) { LogInfo(L"Shift+Enter: no running alias process to kill"); return 0; }
+            if (DdVisible() && g_ddSel >= 0) { DdPick(true); return 0; }   // run selected row
             Submit(mainWnd);  return 0;
         }
-        case VK_ESCAPE: HideBox(mainWnd); return 0;
-        case VK_TAB: TabComplete(hWnd);  return 0;
+        case VK_ESCAPE:
+            if (DdVisible()) { DdClose(); return 0; }   // Esc #1: drop the list
+            HideBox(mainWnd); return 0;
+        case VK_TAB:
+            if (DdVisible() && g_ddSel >= 0) { DdPick(false); return 0; }  // accept row
+            TabComplete(hWnd);  return 0;
         case VK_UP:
+            if (DdVisible() && !g_ddItems.empty()) {
+                g_ddSel = g_ddSel <= 0 ? (int)g_ddItems.size() - 1 : g_ddSel - 1;
+                DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
+                return 0;
+            }
             if (g_histPos > 0) SetHistory(--g_histPos);
             return 0;
         case VK_DOWN:
+            if (DdVisible() && !g_ddItems.empty()) {
+                g_ddSel = (g_ddSel + 1) % (int)g_ddItems.size();
+                DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
+                return 0;
+            }
             if (g_histPos < g_history.size()) SetHistory(++g_histPos);
             else { g_histPos = g_history.size(); SetHistory(g_histPos); }
             return 0;
@@ -2979,6 +3230,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
                     InvalidateRect(hWnd, &rc, TRUE);
                 }
             }
+            DdUpdate(hWnd);                    // keep the suggestion list in sync
         }
         if (LOWORD(wp) == 1)      g_visible ? HideBox(hWnd) : ShowBox(hWnd);
         else if (LOWORD(wp) == 2) ShellExecuteW(hWnd, L"open", g_iniPath.c_str(),
@@ -3139,6 +3391,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         LogInfo(L"language: " + std::wstring(kLangs[g_langIdx].code) +
                 L" (" + (g_set.langCode.empty() ? L"auto" : g_set.langCode) + L")");
         LogInfo(L"theme: " + g_set.theme);
+        LogInfo(L"dropdown: " + std::wstring(g_set.dropDown ?
+                L"on (" + std::to_wstring(g_set.ddLines) + L" rows)" : L"off"));
     }
 
     AddTrayIcon(mainWnd, true);
@@ -3165,12 +3419,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
             }
             if (IsDialogMessageW(g_setWnd, &msg)) continue;
         }
-        // Let Esc close the box even when the edit has focus.
-        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE &&
-            msg.hwnd == g_edit && g_visible) {
-            HideBox(mainWnd);
-            continue;
-        }
+        // Esc is handled in EditProc (dropdown first, then hide) - no pump hijack.
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

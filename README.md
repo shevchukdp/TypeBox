@@ -12,9 +12,9 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 
 ## Screenshots
 
-| The console (hotkey → type → Enter) | Settings → Environment: own PATH & variables |
-|---|---|
-| ![console](docs/screenshots/console.png) | ![env](docs/screenshots/settings-environment.png) |
+| The console (hotkey → type → Enter) | Drop-down suggestions (v0.10) | Settings → Environment: own PATH & variables |
+|---|---|---|
+| ![console](docs/screenshots/console.png) | ![dd](docs/screenshots/dropdown.png) | ![env](docs/screenshots/settings-environment.png) |
 
 | Appearance | Font | Hotkey capture |
 |---|---|---|
@@ -51,7 +51,11 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.9.1):
+Working today (v0.10.0):
+- ✅ **Drop-down suggestions** — TypeAndRun's `frmTypeDropDown` reborn, themed by `[Theme]`:
+  ET candidates for the word at the caret (aliases · `~sysalias` · `/commands` · plugins) or the
+  history on an empty line; ↑/↓ · Tab accept · Enter run · Esc close · mouse click;
+  `[DropDown] Enable/Lines/ShowHistoryOnEmpty`, EasyType page controls
 - ✅ **Cozy themes + visual anchors** — 7 warm presets (`[Theme]`, Theme page, live
   preview), GDI-drawn tray badge (accent rim, state dot), console status strip
   (counts · chips · clock) and a traffic light previewing Enter: 🟢 your alias/~/cmd,

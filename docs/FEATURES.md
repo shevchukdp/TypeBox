@@ -27,7 +27,8 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 | Sounds | enable + 9 per-type WAV fields (`fraSounds`) | ✅ |
 | Plugins | list + info (GetInfo) + Load-on-start/SaveHistory + Rescan/Unload/About/Options (`fraPlugins`) | ✅ |
 | Environment | own PATH folders + %variables% editor (TypeBox addition, OS-style) | ✅ |
-| Hint / DropDown / Registry / dead-alias checker | — | 📋 Phase 2 |
+| Hint / Registry / dead-alias checker | — | 📋 Phase 2 |
+| DropDown suggestions popup | `[DropDown]` | ✅ 0.10.0 |
 | Language 20 UI languages + RTL + portable packs | `[UI] Language`, `lang\<code>.ini` | ✅ 0.9.0 |
 
 Scratch-copy editing (Cancel discards), OK/Apply → per-key INI write (comments
@@ -97,7 +98,13 @@ Browser, FileManager, Shell, ShellClose (`/c %s`), ShellNoClose (`/k %s`) — �
 (`[Shell] Command/Args`) · 📋 Browser/FileManager overrides
 
 ## Hint & DropDown popups  `[Hint]` `[DropDown]`
-ShowHint live-completion popup; DropDown LineNum; Transparent; BorderSize; DestroyForm — 📋
+TypeAndRun: ShowHint live-completion popup; DropDown LineNum, Transparent, BorderSize, DestroyForm.
+TypeBox 0.10.0: **DropDown** — themed suggestion list under (or above) the console with the ET
+sources of the caret word (aliases, ~sysaliases, /commands, plugin commands) and the history when
+the line is empty; `[DropDown] Enable / Lines / ShowHistoryOnEmpty`, keyboard
+(↑/↓ select, Tab accept, Enter run, Esc close) and mouse (hover + click) driven; colors follow the
+theme, so the old DropDownColor/DropDownText/BorderSize trio is intentionally replaced by the
+scheme ([Theme]). Hint popup — 📋
 (tied to EasyType, Phase 2)
 
 ## Color themes  `[Color]`

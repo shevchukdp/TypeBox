@@ -54,6 +54,7 @@ enum StrId {
     STR_LA_HINT,
     STR_PG_THEME, STR_TH_SCHEME, STR_TH_HINT,
     STR_AN_PATH, STR_AN_UNKNOWN, STR_AN_OFF,
+    STR_DD_SHOW, STR_DD_ROWS, STR_DD_EMPTY,
     STR_LAST
 };
 
@@ -90,7 +91,8 @@ static const char* const kKeyNames[STR_LAST] = {
     "al_wn_normal", "al_wn_max", "al_wn_min", "al_wn_hidden",
     "la_hint",
     "pg_theme", "th_scheme", "th_hint",
-    "an_path", "an_unknown", "an_off"
+    "an_path", "an_unknown", "an_off",
+    "dd_show", "dd_rows", "dd_empty"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -172,7 +174,8 @@ L"Normal", L"Maximized", L"Minimized", L"Hidden",
 L"lang\\<code>.ini adds portable overrides (key=value, UTF-8).",
 L"Theme", L"Color scheme",
 L"Warm presets for the console and tray icon; explicit [Color] values win.",
-L"from PATH", L"unknown command", L"disabled by [Exec]" };
+L"from PATH", L"unknown command", L"disabled by [Exec]",
+L"Show suggestions drop-down", L"Visible rows", L"History when the line is empty" };
 
 // ---------------------------------------------------------------- Russian (full)
 static const Pack kRu = {
@@ -227,7 +230,8 @@ L"Значение", L"(Авто)", L"Обычное", L"Развёрнутое"
 L"lang\\<code>.ini добавляет портативные переводы (key=value, UTF-8).",
 L"Тема", L"Цветовая схема",
 L"Тёплые пресеты консоли и трей-иконки; явные значения [Color] важнее.",
-L"из PATH", L"неизвестная команда", L"запрещено в [Exec]" };
+L"из PATH", L"неизвестная команда", L"запрещено в [Exec]",
+L"Показывать список подсказок", L"Видимых строк", L"История при пустой строке" };
 
 // ---------------------------------------------------------------- Ukrainian (full)
 static const Pack kUk = {

@@ -3,6 +3,35 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.10.0] - 2026-11-15
+
+### Added
+- **Drop-down suggestions** — TypeAndRun's `frmTypeDropDown` reborn: a themed suggestion list
+  snaps under the console (flips above at the screen edge) while you type. Rows are the ET
+  candidates for the word at the caret — aliases, `~sysaliases`, known `/commands`, plugin
+  commands and history — or, on an empty line, the history itself (`ShowHistoryOnEmpty`).
+  - Keyboard: **↑/↓** select, **Tab** accepts the row into the line, **Enter** runs the selected
+    row, the first **Esc** closes just the list (the second hides the console).
+  - Mouse: hover highlights, click accepts and runs.
+  - The typed prefix is painted in the theme accent on every row; the whole list is drawn in the
+    `[Theme]` colors — the old per-popup `DropDownColor/DropDownText/BorderSize` trio is
+    replaced by the scheme.
+  - `[DropDown] Enable=1 · Lines=8 · ShowHistoryOnEmpty=1` in the portable INI; the **EasyType**
+    settings page gained *Show suggestions drop-down*, *Visible rows*, *History when the line is
+    empty*. Startup log: `dropdown: on (8 rows)`.
+- Status strip/anchors unaffected: the traffic light keeps classifying while the list is open.
+
+### Fixed
+- **Esc is handled once, in the edit** — the message loop no longer hijacks it first, so with a
+  list open Esc closes the list instead of hiding the whole console.
+
+### Verified
+- `test-v0100` (14 checks): startup `dropdown:` log, list for `ca` shows the alias/plugin match
+  (deduped), ↓ selects, Tab accepts (`maintext=calc`), Enter runs and fills `History.dat`,
+  reopen shows history, Esc closes list then hides console, `Enable=0` disables everything,
+  EasyType page carries the new controls, `--test-settings` OK. `test-v090` (17) and
+  `test-v091` (12) stay green.
+
 ## [0.9.1] - 2026-11-15
 
 ### Added

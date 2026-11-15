@@ -57,9 +57,25 @@ Toggles (`0`/`1`) mirroring TypeAndRun: `Internal`, `Aliases`, `WWW`, `EMail`,
 | `EasyType` | `0` off · `1` easy · `2` linux-style (Tab completes, repeat Tab cycles) | `2` |
 | `UseInternalET` / `UseAliasET` / `UseHistoryET` / `UseSysAliasET` | completion sources | `1` |
 
+### `[DropDown]` — suggestions list (TypeBox 0.10.0, TypeAndRun DropDown parity)
+A themed list snaps under the console (flips above at the screen edge): candidates for the word
+at the caret (aliases, `~sysaliases`, `/commands`, plugin commands, history) — or the history
+when the line is empty. **↑/↓** select · **Tab** accept · **Enter** run the row · first **Esc**
+closes the list · mouse hover + click work too. Colors follow `[Theme]` (the old per-popup
+DropDownColor trio is replaced by the scheme).
+
+| Key | Meaning | Default |
+|---|---|---|
+| `Enable` | show the drop-down at all | `1` |
+| `Lines` | visible rows (1..20) before the rest is clipped | `8` |
+| `ShowHistoryOnEmpty` | empty line lists the history (TypeAndRun behaviour) | `1` |
+
+Settings → **EasyType** page: *Show suggestions drop-down*, *Visible rows*, *History when the
+line is empty* (log at start: `dropdown: on (8 rows)`).
+
 ### `[Color]` (scheme 0 — console)
 COLORREF integers (`0x00BBGGRR` as decimal); `-1` = system default:
-`ConsoleBG`, `ConsoleFG`. (Hint/DropDown colors and schemes 1–2 land with EasyType popups.)
+`ConsoleBG`, `ConsoleFG`. (The drop-down and status strip follow `[Theme]`, see above.)
 
 ### `[Font]`
 `Name` (default `Courier New`), `Size` (`18`), `Bold` (`1`),
