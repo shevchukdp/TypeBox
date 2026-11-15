@@ -33,7 +33,11 @@ target_link_libraries(calc PRIVATE user32)
 set_target_properties(calc PROPERTIES PREFIX "")
 
 if(MSVC)
-    target_compile_options(TypeBox PRIVATE /W4)
+    # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without
+    # this flag MSVC decodes literals in the system ANSI codepage — the released
+    # exe showed Cyrillic as mojibake while ASCII gates stayed green.
+    target_compile_options(TypeBox PRIVATE /W4 /utf-8)
+    target_compile_options(calc  PRIVATE /utf-8)
 else()
     target_compile_options(TypeBox PRIVATE -Wall -Wextra)
     # Static runtime: portable exe, no libgcc/libstdc++ DLLs needed (ConEmu-grade portability).

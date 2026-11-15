@@ -3,6 +3,25 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.13.1] - 2026-11-15
+
+![russian UI](docs/screenshots/settings-language-ru.png)
+*Russian (and every non-ASCII language) now renders correctly in the **released** exe —
+this screenshot is taken from the downloaded CI build, not a local one.*
+
+### Fixed
+- 🐛 **Non-ASCII strings were mojibake in CI builds** (`Ð°Ð²Ñ‚Ð¾Ñ€` instead of `Автор`).
+  MSVC compiled `src/i18n.h` (all 20 language packs) in the system ANSI codepage because
+  CMake never passed `/utf-8`. Local MinGW builds were fine, which is why every ASCII-only
+  gate stayed green while the shipped exe garbled 19 of 20 languages.
+- CMake now passes `/utf-8` to MSVC for the host and the example plugin.
+
+### Verified
+- New CI step **i18n render gate**: launches the MSVC build with `Language=ru`, opens the
+  settings dialog and enumerates window text — the build fails unless `Применить` and
+  `Внешний вид` actually render. This class of bug can no longer ship.
+- `test-v0130` re-run 12/12 on this build.
+
 ## [0.13.0] - 2026-11-15
 
 ![hotkey page](docs/screenshots/settings-hotkey.png)
