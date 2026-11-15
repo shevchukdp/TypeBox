@@ -75,6 +75,17 @@ Internal commands wrap the portable file:
 - `/import <path>` — restores it (current config kept as `TypeBox.ini.bak`),
   then reloads settings, aliases and hotkey.
 
+### `[Plugins]`
+```ini
+[Plugins]
+Calculator = Plugins\calc.dll
+```
+All `*.dll` in the portable `Plugins\` folder are picked up automatically;
+`[Plugins]` entries add extra paths (relative to the exe). The execution chain
+queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
+`[Exec] Plugins=0` disables the whole stage. See
+[PLUGIN_API.md](PLUGIN_API.md) and [`examples/plugin_calc`](../examples/plugin_calc/calc.c).
+
 ### `[Sounds]`
 `EnableSounds=1` plus per-execution-type files (TypeAndRun parity):
 `ExecuteInternalSound`, `ExecuteAliasSound`, `ExecuteSysAliasSound`, `ExecuteURLSound`,

@@ -66,7 +66,7 @@ struct Settings {
     int  autoHideValue = 30;
     // [Exec]
     bool execInternal = true, execAliases = true, execWww = true,
-         execEmail = true, execFiles = true, execShell = true;
+         execEmail = true, execFiles = true, execShell = true, execPlugins = true;
     // [Font]
     std::wstring fontName = L"Courier New";
     int  fontSize = 18, fontBold = 1;
@@ -82,6 +82,12 @@ struct Settings {
          savePath = true, savePlugins = true, saveUnknown = true;
     // [Sounds]
     bool enableSounds = true;
+};
+
+// Execution result types (map to [History]/[Sounds] keys, like TypeAndRun).
+enum ExecType {
+    EXC_NONE = 0, EXC_INTERNAL, EXC_ALIAS, EXC_SYSALIAS, EXC_URL,
+    EXC_EMAIL, EXC_FILE, EXC_FOLDER, EXC_PLUGIN, EXC_SHELL
 };
 
 static Hotkey                    g_hotkey;
@@ -277,6 +283,7 @@ static void LoadSettings() {
     g_set.execEmail    = ReadIniBool(L"Exec", L"EMail",    true);
     g_set.execFiles    = ReadIniBool(L"Exec", L"Files",    true);
     g_set.execShell    = ReadIniBool(L"Exec", L"Shell",    true);
+    g_set.execPlugins  = ReadIniBool(L"Exec", L"Plugins",  true);
 
     g_set.fontName = ReadIniStr(L"Font", L"Name", L"Courier New");
     g_set.fontSize = ReadIniInt(L"Font", L"Size", 18);
@@ -418,6 +425,177 @@ static void RemoveTrayIcon() {
     if (g_nid.hWnd) Shell_NotifyIconW(NIM_DELETE, &g_nid);
 }
 
+// ---------------------------------------------------------------- plugins
+//
+// TypeAndRun-compatible native DLL ABI (see docs/PLUGIN_API.md):
+//   Load(HWND) Unload GetInfo GetCount GetString GetCountET GetStringET RunString
+//   GetPluginMenu/About/Options/FastConfig/HookKey — optional
+// ANSI (CP_ACP) strings for 1:1 compatibility with the 2001-2004 plugins.
+
+struct TInfo {
+    int size;
+    const char* name;
+    const char* version;
+    const char* description;
+    const char* author;
+    const char* copyright;
+    const char* homepage;
+};
+
+struct TExec {
+    int size;
+    int run;
+    const char* con_text;
+    int con_sel_start;
+    int con_sel_length;
+};
+
+typedef void      (__cdecl* PLoad)(HWND);
+typedef void      (__cdecl* PUnload)();
+typedef TInfo     (__cdecl* PGetInfo)();
+typedef int       (__cdecl* PGetCount)();
+typedef const char* (__cdecl* PGetString)(int);
+typedef int       (__cdecl* PGetCountET)(const char*);
+typedef const char* (__cdecl* PGetStringET)(int);
+typedef TExec     (__cdecl* PRunString)(const char*);
+typedef HMENU     (__cdecl* PGetPluginMenu)();
+typedef void      (__cdecl* PAbout)();
+typedef void      (__cdecl* POptions)();
+typedef void      (__cdecl* PFastConfig)();
+typedef int       (__cdecl* PHookKey)(HWND, WPARAM);
+
+struct Plugin {
+    HMODULE        hmod = nullptr;
+    std::wstring   file;
+    bool           loaded = false;   // Load(HWND) called
+    bool           inHistory = false;
+    PLoad          Load          = nullptr;
+    PUnload        Unload        = nullptr;
+    PGetInfo       GetInfo       = nullptr;
+    PGetCount      GetCount      = nullptr;
+    PGetString     GetString     = nullptr;
+    PGetCountET    GetCountET    = nullptr;
+    PGetStringET   GetStringET   = nullptr;
+    PRunString     RunString     = nullptr;
+    PGetPluginMenu GetPluginMenu = nullptr;
+    PAbout         About         = nullptr;
+    POptions       Options       = nullptr;
+    PFastConfig    FastConfig    = nullptr;
+    PHookKey       HookKey       = nullptr;
+};
+
+static std::vector<Plugin> g_plugins;
+
+static std::string ToAnsi(const std::wstring& w) {
+    int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s(n, '\0');
+    WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), &s[0], n, nullptr, nullptr);
+    return s;
+}
+
+static std::wstring FromAnsi(const char* a) {
+    if (!a) return L"";
+    int n = MultiByteToWideChar(CP_ACP, 0, a, -1, nullptr, 0);
+    std::wstring w(n ? n - 1 : 0, L'\0');
+    MultiByteToWideChar(CP_ACP, 0, a, -1, &w[0], n);
+    return w;
+}
+
+template <typename T>
+static T GetProc(HMODULE h, const char* name) {
+    return reinterpret_cast<T>(reinterpret_cast<uintptr_t>(GetProcAddress(h, name)));
+}
+
+static void BindPlugin(Plugin& p) {
+    p.Load          = GetProc<PLoad>(p.hmod, "Load");
+    p.Unload        = GetProc<PUnload>(p.hmod, "Unload");
+    p.GetInfo       = GetProc<PGetInfo>(p.hmod, "GetInfo");
+    p.GetCount      = GetProc<PGetCount>(p.hmod, "GetCount");
+    p.GetString     = GetProc<PGetString>(p.hmod, "GetString");
+    p.GetCountET    = GetProc<PGetCountET>(p.hmod, "GetCountET");
+    p.GetStringET   = GetProc<PGetStringET>(p.hmod, "GetStringET");
+    p.RunString     = GetProc<PRunString>(p.hmod, "RunString");
+    p.GetPluginMenu = GetProc<PGetPluginMenu>(p.hmod, "GetPluginMenu");
+    p.About         = GetProc<PAbout>(p.hmod, "About");
+    p.Options       = GetProc<POptions>(p.hmod, "Options");
+    p.FastConfig    = GetProc<PFastConfig>(p.hmod, "FastConfig");
+    p.HookKey       = GetProc<PHookKey>(p.hmod, "HookKey");
+}
+
+// Scan the portable Plugins\ folder for *.dll. [Plugins] "Name"="path" entries
+// and Plugins.ini (Path= / Load= / SaveHistory=) are honored too.
+static void DiscoverPlugins() {
+    for (auto& p : g_plugins)
+        if (p.hmod && p.loaded && p.Unload) p.Unload();
+    for (auto& p : g_plugins)
+        if (p.hmod) FreeLibrary(p.hmod);
+    g_plugins.clear();
+
+    auto tryLoad = [&](const std::wstring& file) {
+        HMODULE h = LoadLibraryW(file.c_str());
+        if (!h) return;
+        Plugin p;
+        p.file = file;
+        p.hmod = h;
+        BindPlugin(p);
+        if (!p.RunString && !p.GetInfo) { FreeLibrary(h); return; } // not a TypeBox plugin
+        g_plugins.push_back(p);
+    };
+
+    WIN32_FIND_DATAW fd;
+    std::wstring pattern = ExeDir() + L"Plugins\\*.dll";
+    HANDLE hq = FindFirstFileW(pattern.c_str(), &fd);
+    if (hq != INVALID_HANDLE_VALUE) {
+        do { tryLoad(ExeDir() + L"Plugins\\" + fd.cFileName); } while (FindNextFileW(hq, &fd));
+        FindClose(hq);
+    }
+
+    std::vector<wchar_t> buf(64 * 1024);
+    DWORD n = GetPrivateProfileSectionW(L"Plugins", buf.data(), (DWORD)buf.size(), g_iniPath.c_str());
+    for (wchar_t* q = buf.data(); q < buf.data() + n; ) {
+        std::wstring line(q);
+        q += line.size() + 1;
+        if (line.empty() || line[0] == L';' || line[0] == L'[') continue;
+        size_t eq = line.find(L'=');
+        if (eq == std::wstring::npos) continue;
+        std::wstring path = Trim(line.substr(eq + 1));
+        if (path.empty()) continue;
+        if (PathIsRelativeW(path.c_str())) path = ExeDir() + path;
+        tryLoad(path);
+    }
+}
+
+static void CallPluginsLoad(HWND mainWnd) {
+    for (auto& p : g_plugins)
+        if (p.Load && !p.loaded) { p.Load(mainWnd); p.loaded = true; }
+}
+
+static void CallPluginsUnload() {
+    for (auto& p : g_plugins)
+        if (p.Unload && p.loaded) { p.Unload(); p.loaded = false; }
+}
+
+// Ask plugins to handle the line (first plugin that returns run != 0 wins).
+static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
+    std::string ansi = ToAnsi(line);
+    for (auto& p : g_plugins) {
+        if (!p.RunString) continue;
+        if (!p.loaded && p.Load) { p.Load(mainWnd); p.loaded = true; }
+        TExec ex = p.RunString(ansi.c_str());
+        if (ex.size == (int)sizeof(TExec) && ex.run) {
+            std::wstring text = FromAnsi(ex.con_text);
+            if (!text.empty()) {
+                SetWindowTextW(g_edit, text.c_str());
+                SendMessageW(g_edit, EM_SETSEL, ex.con_sel_start,
+                             ex.con_sel_start + (ex.con_sel_length < 0 ? 0 : ex.con_sel_length));
+            }
+            PlayTypeSound(L"ExecutePluginSound", L"Sounds\\plugin.wav");
+            return EXC_PLUGIN;
+        }
+    }
+    return EXC_NONE;
+}
+
 // ---------------------------------------------------------------- forward decls
 
 static void ShowBox(HWND mainWnd);
@@ -481,13 +659,18 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         LoadSettings();
         LoadAliases();
         ReloadHotkey(mainWnd);
-    } else if (c == L"/load") { // plugin loading — Phase 2 (docs/PLUGIN_API.md)
-        MessageBoxW(mainWnd,
-            L"Plugin loading arrives in Phase 2 (TypeAndRun-compatible DLL ABI).\n"
-            L"See docs/PLUGIN_API.md",
-            L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/load") {
+        // (Re)scan Plugins\ and [Plugins]; call Load(HWND) on each.
+        size_t before = g_plugins.size();
+        CallPluginsUnload();
+        DiscoverPlugins();
+        CallPluginsLoad(mainWnd);
+        std::wstring msg = L"Plugins loaded: " + std::to_wstring(g_plugins.size());
+        if (g_plugins.empty() && before == 0)
+            msg += L"\n(dlls in the portable Plugins\\ folder or [Plugins] entries are picked up)";
+        MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/unload") {
-        // Phase 2: unload plugin DLLs here. Nothing to do yet.
+        CallPluginsUnload();
     } else if (c == L"/export") {
         // Export settings: copy the portable ini to the given file.
         std::wstring dest = RestWords(line);
@@ -543,12 +726,6 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
 // Mirrors the TypeAndRun ParseConsole chain (Static.pas):
 // internal → alias → URL → email → file/folder → shell, each toggleable in [Exec].
 
-// Execution result types (map to [History]/[Sounds] keys, like TypeAndRun).
-enum ExecType {
-    EXC_NONE = 0, EXC_INTERNAL, EXC_ALIAS, EXC_SYSALIAS, EXC_URL,
-    EXC_EMAIL, EXC_FILE, EXC_FOLDER, EXC_PLUGIN, EXC_SHELL
-};
-
 static bool HistoryAllows(ExecType t) {
     switch (t) {
     case EXC_INTERNAL: return g_set.saveInternal;
@@ -592,7 +769,13 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         }
     }
 
-    // 2) URL
+    // 2) plugins (TypeAndRun ABI: RunString -> TExec)
+    if (g_set.execPlugins) {
+        ExecType pt = RunPlugins(line, mainWnd);
+        if (pt != EXC_NONE) return pt;
+    }
+
+    // 3) URL
     std::wstring expanded = ExpandEnv(line);
     if (g_set.execWww && LooksLikeUrl(expanded)) {
         std::wstring url = expanded;
@@ -757,9 +940,21 @@ static void TabComplete(HWND edit) {
             }
             if (g_set.etAlias)
                 for (const auto& a : g_aliases) add(a.name);
+            if (g_set.execPlugins)
+                for (auto& p : g_plugins)
+                    if (p.GetCount && p.GetString)
+                        for (int i = 0; i < p.GetCount(); ++i)
+                            add(FromAnsi(p.GetString(i)));
         }
         if (g_set.etHistory && word.find(L'/') != 0)
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
+        if (g_set.execPlugins && word.find(L'/') != 0)
+            for (auto& p : g_plugins)
+                if (p.GetCountET && p.GetStringET) {
+                    std::string a = ToAnsi(word);
+                    int cnt = p.GetCountET(a.c_str());
+                    for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
+                }
         g_etPos = 0;
     }
 
@@ -903,6 +1098,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         UnregisterHotKey(hWnd, kHotkeyId);
         RemoveTrayIcon();
+        CallPluginsUnload();
+        for (auto& p : g_plugins)
+            if (p.hmod) FreeLibrary(p.hmod);
+        g_plugins.clear();
         SaveHistory();
         PostQuitMessage(0);
         return 0;
@@ -949,6 +1148,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     LoadSettings();
     LoadAliases();
     LoadHistory();
+    DiscoverPlugins();
     if (g_set.consoleBg >= 0)
         g_bgBrush = CreateSolidBrush((COLORREF)g_set.consoleBg);
 
@@ -965,6 +1165,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     if (!mainWnd) return 1;
 
     ApplyFont(g_edit);
+    CallPluginsLoad(mainWnd);
 
     if (!RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key)) {
         MessageBoxW(mainWnd,

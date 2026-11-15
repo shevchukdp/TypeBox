@@ -59,7 +59,9 @@ jobs:
           $zip = "TypeBox-$ver-windows-x64.zip"
           $stage = "stage"
           New-Item -ItemType Directory -Path "$stage/TypeBox/docs" -Force | Out-Null
+          New-Item -ItemType Directory -Path "$stage/TypeBox/Plugins" -Force | Out-Null
           Copy-Item build/TypeBox.exe "$stage/TypeBox/"
+          if (Test-Path build/calc.dll) { Copy-Item build/calc.dll "$stage/TypeBox/Plugins/" }
           Copy-Item TypeBox.ini      "$stage/TypeBox/"
           Copy-Item README.md        "$stage/TypeBox/"
           Copy-Item LICENSE          "$stage/TypeBox/"

@@ -3,6 +3,28 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.4.0] - 2026-11-15
+
+### Added
+- **Plugin host with TypeAndRun-compatible ABI** (`docs/PLUGIN_API.md`):
+  `Load(HWND) / Unload / GetInfo / GetCount / GetString / GetCountET / GetStringET /
+  RunString → TExec`, optional `GetPluginMenu / About / Options / FastConfig / HookKey`.
+  ANSI (CP_ACP) strings for 1:1 compatibility with 2001–2004 plugins.
+  Plugins are discovered from the portable `Plugins\` folder and `[Plugins]` ini entries;
+  `/load` rescans at runtime, `/unload` deactivates them.
+- **Execution chain consults plugins** (after aliases, before URL): the first plugin
+  returning `TExec.run != 0` consumes the input; `con_text` is placed into the console
+  with selection — exactly like TypeAndRun.
+- **Plugin completion sources** for `Tab` (static `GetString` list + dynamic `GetCountET`).
+- `[Exec] Plugins` toggle (default on).
+- **`examples/plugin_calc/calc.c`** — calculator plugin (`calc 2+3*4`) in the original ABI,
+  buildable with both MSVC and MinGW; doubles as a template for porting legacy
+  `tar_math`-style plugins.
+
+### Verified
+- End-to-end ABI smoke test: host discovers a DLL in `Plugins\`, calls `Load`, routes a
+  line through `RunString`, applies `TExec` — against MinGW g++ 13.2 (`-Wall -Wextra`, clean).
+
 ## [0.3.0] - 2026-11-15
 
 ### Added

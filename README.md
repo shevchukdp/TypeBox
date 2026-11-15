@@ -26,26 +26,28 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 | Config format | **INI** | INI | JSON (`%LOCALAPPDATA%`) | JSON |
 | Portable (folder moves with config) | ✅ | ✅ | ❌ | ❌ |
 | Settings import / export | ✅ | manual | partial (JSON, since 0.64) | ❌ |
-| Plugins | ✅ (planned, native DLL ABI of TypeAndRun) | ✅ | ✅ | ✅ |
+| Plugins | ✅ (native DLL ABI compatible with TypeAndRun) | ✅ | ✅ | ✅ |
 | Console / bash mode | ✅ (planned) | partly | ❌ | ❌ |
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
 ## Features
 
-Working today (v0.3.0):
+Working today (v0.4.0):
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)
 - ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware, AutoHide)
 - ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`),
   legacy pipe form `action|dir|state`, URLs, `mailto:`, files/folders, shell (`cmd.exe /c`)
 - ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo`
-- ✅ **EasyType completion** — `Tab` completes from commands/aliases/history, cycles on repeat
+- ✅ **Plugin host — TypeAndRun ABI-compatible** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`):
+  drop DLLs into the portable `Plugins\` folder; example with calculator in
+  [`examples/plugin_calc`](examples/plugin_calc/calc.c) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md)
+- ✅ **EasyType completion** — `Tab` completes from commands/aliases/plugins/history, cycles on repeat
 - ✅ Tray icon + balloon tips · sounds per execution type · undo (`Ctrl+Z`)
 - ✅ Persistent history (`↑/↓`, portable `History.dat`, per-type toggles) · single instance + `WM_COPYDATA` IPC
 - ✅ INI config next to the exe — portable
 
 Planned (see [docs/PLAN.md](docs/PLAN.md)):
-- Plugin ABI from TypeAndRun (`Load/Unload/GetInfo/GetCount/GetString/RunString` → `TExec`) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md)
 - EasyType hint/dropdown popups + full 3-scheme colors
 - Info display (calculator, web results, files, system status — like PowerToys Run modules)
 - Drop-down terminal / bash mode (Guake/Yakuake/Drop style)

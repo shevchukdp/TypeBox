@@ -1,5 +1,8 @@
 # TypeBox plugin ABI
 
+Implemented in the host since **v0.4.0** (`src/main.cpp`, see also the working example
+[`examples/plugin_calc/calc.c`](../examples/plugin_calc/calc.c)).
+
 Carried over from **TypeAndRun** (see `Plugins.pas` in galancev/typeandrun) so that
 existing plugins keep working after recompilation. Plugins are native DLLs exported
 with the C calling convention (`cdecl`).

@@ -100,9 +100,12 @@ params (`ParseCmdLine`) to prefill/execute — ✅
 (`/load` `/unload` are stubs until the Phase 2 plugin host)
 
 ## Plugins (ABI-compatible with TypeAndRun)
-`Load(HWND) Unload GetInfo GetCount GetString GetCountET GetStringET RunString→TExec`;
-`Plugins.ini` per-plugin: `Path`, `Load`, `SaveHistory`; load/unload at runtime — 📋
-See [PLUGIN_API.md](PLUGIN_API.md).
+`Load(HWND) Unload GetInfo GetCount GetString GetCountET GetStringET RunString→TExec` — ✅
+(+ optional `GetPluginMenu/About/Options/FastConfig/HookKey` bound); discovery from
+portable `Plugins\` + `[Plugins]` entries — ✅; load/unload at runtime (`/load`, `/unload`) — ✅;
+plugin participation in Tab completion — ✅ · `Plugins.ini` per-plugin `SaveHistory` — 📋
+See [PLUGIN_API.md](PLUGIN_API.md) and the working example
+[`examples/plugin_calc`](../examples/plugin_calc/calc.c).
 
 ## --- AND MORE (beyond TypeAndRun) ---
 | Addition | Why |
