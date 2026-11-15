@@ -155,3 +155,13 @@ proof badge in `/about` (< 0.1 % claim with measured number).
 
 GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-vs-winhttp policy call.
 
+- **v0.14.0 — plugins + console context menu (user request).** units/codec/vol shipped;
+  Submit keeps the console open for plugin answers; `plugin: … handled` log lines;
+  right-click menu on the console (TypeAndRun-style, 20 languages).
+
+## v0.15.0 — Theme studio (user request: "create your own themes")
+
+| # | Feature | Size |
+|---|---|---|
+| 78 | `themes\<name>.theme.ini` portable presets: bg/fg/accent/border colors (ChooseColorW pickers), border thickness px, alpha, font family/size/bold, console W/H — Save as…/Delete on the Theme page; combo lists built-ins + customs; Apply pushes font/alpha/geometry to INI, colors live in the theme file with `[Color]` explicit-wins kept | L |
+
