@@ -1705,7 +1705,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_FONT], L"Bold", 16, y, &Settings::fontBold);                       y += 26;
     CkB(g_setPage[PG_FONT], L"Apply English layout on open", 16, y, &Settings::applyEnglish); y += 30;
     MkButton(g_setPage[PG_FONT], L"Choose...", 16, y, 110);
-    Bind([g_fontPreview]{
+    Bind([]{
         static HFONT prev = nullptr;
         if (prev) { DeleteObject(prev); prev = nullptr; }
         HFONT pf = CreateFontW(-MulDiv(g_draft.fontSize, 96, 72), 0, 0, 0,
@@ -1725,8 +1725,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_hkLabel = MkLabel(g_setPage[PG_HOTKEY], L"Current hotkey:", 16, y, 430); y += 30;
     MkLabel(g_setPage[PG_HOTKEY], L"VK code (advanced):", 16, y + 2, 120);
     g_hkVk = MkEdit(g_setPage[PG_HOTKEY], L"", 140, y, 70, true);
-    Bind([g_hkVk]{ wchar_t b[16]; wsprintfW(b, L"%u", g_draftHk.key);
-                   SetWindowTextW(g_hkVk, b); }, []{});
+    Bind([]{ wchar_t b[16]; wsprintfW(b, L"%u", g_draftHk.key);
+             SetWindowTextW(g_hkVk, b); }, []{});
 
     // --- Execution
     y = 12;
