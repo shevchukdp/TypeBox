@@ -608,9 +608,19 @@ static std::wstring FromAnsi(const char* a) {
     return w;
 }
 
+static FARPROC GetSym(HMODULE h, const char* name) {
+    FARPROC p = GetProcAddress(h, name);
+    if (!p) { // tolerate 32-bit cdecl "_Name" exports of legacy plugins
+        char buf[260];
+        wsprintfA(buf, "_%s", name);
+        p = GetProcAddress(h, buf);
+    }
+    return p;
+}
+
 template <typename T>
 static T GetProc(HMODULE h, const char* name) {
-    return reinterpret_cast<T>(reinterpret_cast<uintptr_t>(GetProcAddress(h, name)));
+    return reinterpret_cast<T>(reinterpret_cast<uintptr_t>(GetSym(h, name)));
 }
 
 static void BindPlugin(Plugin& p) {

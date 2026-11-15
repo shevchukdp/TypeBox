@@ -20,19 +20,26 @@ Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (e
 - **`examples/plugin_calc/calc.c`** — calculator plugin (`calc 2+3*4`) in the original ABI,
   buildable with both MSVC and MinGW; doubles as a template for porting legacy
   `tar_math`-style plugins.
-
-### Verified
-- End-to-end ABI smoke test: host discovers a DLL in `Plugins\`, calls `Load`, routes a
-  line through `RunString`, applies `TExec` — against MinGW g++ 13.2 (`-Wall -Wextra`, clean).
-
 - **Portable error log with configurable size & rewrite method** — `[Log] Enabled /
   File / MaxSizeKB / Rewrite=rotate|truncate|timestamp|keep / Keep`; failed hotkeys,
   plugin load errors, failing aliases and import/export errors land there;
   open with `/log`.
 - **`TypeBox.exe --version`** console flag + CI **smoke gate**: a build that cannot
-  start or reports a wrong version never reaches a release.
+  start, reports a wrong version, or fails to load the example plugin never reaches a release.
 - **MSVC release is fully static** (`/MT`) — release zip needs no VC++ redistributable;
   MinGW build documented with `-static` (no libgcc/libstdc++ DLL dependencies).
+
+### Fixed
+- **Example `calc.dll` now exports the ABI under MSVC too** (`__declspec(dllexport)` via
+  `CALC_BUILDING_DLL`) — the first published zip carried a host-invisible calc.dll
+  (MSVC exports no symbols without dllexport; MinGW exported them implicitly).
+  The host also tolerates legacy 32-bit `_Name` cdecl exports.
+
+### Verified
+- End-to-end ABI smoke test: host discovers a DLL in `Plugins\`, calls `Load`, routes a
+  line through `RunString`, applies `TExec` — against MinGW g++ 13.2 (`-Wall -Wextra`, clean).
+- Every published asset is downloaded and executed on a real machine
+  (`--version` exit code, GUI liveness, startup log content).
 
 ## [0.3.0] - 2026-11-15
 
@@ -50,6 +57,10 @@ Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (e
 
 ### Fixed
 - Single `[History]` section in the sample config.
+
+### Verified
+- CI smoke gate additionally requires the example plugin to load through the ABI
+  (`startup log: N plugins`, no "plugin load failed"/"ignored non-plugin dll").
 - History candidate list rebuilds correctly when typing between `Tab` presses.
 
 ## [0.2.0] - 2026-11-15

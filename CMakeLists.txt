@@ -28,6 +28,7 @@ target_link_libraries(TypeBox PRIVATE
 
 # Example plugin (TypeAndRun ABI) — ships in the release zip under Plugins\.
 add_library(calc SHARED examples/plugin_calc/calc.c)
+target_compile_definitions(calc PRIVATE CALC_BUILDING_DLL)
 target_link_libraries(calc PRIVATE user32)
 set_target_properties(calc PROPERTIES PREFIX "")
 

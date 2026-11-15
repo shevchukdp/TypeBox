@@ -15,6 +15,14 @@
 #include <ctype.h>
 #include <math.h>
 
+/* MSVC needs explicit dllexport; MinGW also exports plain cdecl symbols, and
+ * the host additionally tolerates "_Name" variants (32-bit cdecl). */
+#ifdef CALC_BUILDING_DLL
+#define PLUGIN_API __declspec(dllexport)
+#else
+#define PLUGIN_API
+#endif
+
 typedef struct {
     int size;
     const char* name;
@@ -90,10 +98,10 @@ static double expr(Parser* p) {
 
 static char g_result[256];
 
-void __cdecl Load(HWND mainWnd) { (void)mainWnd; }
-void __cdecl Unload(void) {}
+PLUGIN_API void __cdecl Load(HWND mainWnd) { (void)mainWnd; }
+PLUGIN_API void __cdecl Unload(void) {}
 
-TInfo __cdecl GetInfo(void) {
+PLUGIN_API TInfo __cdecl GetInfo(void) {
     TInfo i;
     i.size = sizeof(TInfo);
     i.name = "Calculator";
@@ -105,17 +113,17 @@ TInfo __cdecl GetInfo(void) {
     return i;
 }
 
-int __cdecl GetCount(void) { return 1; }
+PLUGIN_API int __cdecl GetCount(void) { return 1; }
 
-const char* __cdecl GetString(int n) { return n == 0 ? "calc" : NULL; }
+PLUGIN_API const char* __cdecl GetString(int n) { return n == 0 ? "calc" : NULL; }
 
-int __cdecl GetCountET(const char* input) {
+PLUGIN_API int __cdecl GetCountET(const char* input) {
     return (input && _strnicmp(input, "ca", 2) == 0) ? 1 : 0;
 }
 
-const char* __cdecl GetStringET(int n) { return n == 0 ? "calc " : NULL; }
+PLUGIN_API const char* __cdecl GetStringET(int n) { return n == 0 ? "calc " : NULL; }
 
-TExec __cdecl RunString(const char* str) {
+PLUGIN_API TExec __cdecl RunString(const char* str) {
     TExec ex;
     ex.size = sizeof(TExec);
     ex.run = 0;

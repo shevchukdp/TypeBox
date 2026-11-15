@@ -53,6 +53,8 @@ jobs:
           & cmd /c "build\TypeBox.exe --version >nul 2>&1"
           if ($LASTEXITCODE -ne 0) { Write-Error "exe --version exited $LASTEXITCODE"; exit 1 }
           # GUI must stay alive (missing-DLL builds die immediately with 0xC0000135)
+          New-Item -ItemType Directory -Path build/Plugins -Force | Out-Null
+          if (Test-Path build/calc.dll) { Copy-Item build/calc.dll build/Plugins/ -Force }
           $p = Start-Process build/TypeBox.exe -PassThru
           Start-Sleep -Seconds 3
           if ($null -eq (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
@@ -67,7 +69,16 @@ jobs:
             Write-Error "startup log missing/does not report version $ver"
             exit 1
           }
-          Write-Host "Smoke OK: TypeBox $ver verified via --version + startup log"
+          # the example plugin must load through the TypeAndRun ABI (catches MSVC export issues)
+          if ($log -match "ignored non-plugin|plugin load failed") {
+            Write-Error "example plugin calc.dll failed to load`n$log"
+            exit 1
+          }
+          if ($log -notmatch "started; \d+ aliases, [1-9]\d* plugins") {
+            Write-Error "example plugin not discovered by host`n$log"
+            exit 1
+          }
+          Write-Host "Smoke OK: TypeBox $ver + calc plugin verified via startup log"
 
       - name: Package
         shell: pwsh
