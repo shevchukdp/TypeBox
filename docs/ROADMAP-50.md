@@ -126,3 +126,32 @@ Own extra ideas beyond both reports: **#66** INI profile switcher (`TypeBox --pr
 Explorer), **#69** export/import as a single Base64 blob line for chat-transfer, **#70** idle-CPU
 proof badge in `/about` (< 0.1 % claim with measured number).
 
+
+
+---
+
+## Shipped
+
+- **v0.13.0 — hotkey freedom (user priority).** Any key assignable (single keys, media, Esc,
+  F13–F24, numpad, OEM); RegisterHotKey + low-level hook fallback with exact-modifier
+  matching; MOD_NOREPEAT; human key names (VolUp, Num7, WebFav…); Esc is a key, not a
+  cancel; font picker combo; live theme/font previews; About credits the author.
+  Also shipped with it: docs/PLUGIN_GALLERY.md (10 specced plugins) + docs/IDEAS-RESEARCH-2.md
+  (ideas #101–200, wave 2).
+- **v0.13.1 — release-encoding hotfix.** MSVC lacked /utf-8: 19 of 20 language packs shipped
+  as mojibake in released exes. CMake fixed + permanent in-process CI gate --check-i18n.
+
+## Next releases (merge queue after v0.13)
+
+| Own# | Source | Feature | Size |
+|---|---|---|---|
+| #71 | GALLERY Top-5 | v0.14.0 = first real plugins from PLUGIN_GALLERY: **units + codec + vol** (zero-dep C, ~600 LOC, host untouched) | M |
+| #72 | RI2 #168 | ClickFix/paste-run payload guard (highlight suspicious Base64/one-liners before Enter) — "the only safe Run box" | M |
+| #73 | RI2 #159 | Scripts-folder auto-register (every script in [Scripts] Dir becomes an alias) | S |
+| #74 | RI2 #103 | Everything bridge (ES_LIST_SOCKET IPC when everything.exe runs, else graceful) | M |
+| #75 | #1–#4 queue | Frecency Usage.dat, TypeBox.local.ini overlay, danger-confirm gate, history-prefix Up | M |
+| #76 | RI2 #184 | UIA provider so Narrator/NVDA can read the hand-drawn drop-down | L |
+| #77 | RI2 #102 | CJK phonetic search (pinyin/kana fuzzy on the same FuzzyScore spine) | L |
+
+GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-vs-winhttp policy call.
+
