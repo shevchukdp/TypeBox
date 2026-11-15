@@ -1,8 +1,14 @@
 # TypeBox
 
+[![build](https://github.com/shevchukdp/TypeBox/actions/workflows/build.yml/badge.svg)](https://github.com/shevchukdp/TypeBox/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/shevchukdp/TypeBox?include_prereleases)](https://github.com/shevchukdp/TypeBox/releases)
+[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
+
 **Universal hotkey console + bash + launcher for Windows.** Press a shortcut, type, hit Enter — TypeBox runs what you mean: apps, aliases, commands, URLs, files, plugins.
 
 One **portable folder** with an **INI file** you can carry on a USB stick, keep in Git, or **export/import** between machines — the feature modern launchers forgot.
+
+**Download:** [latest release](https://github.com/shevchukdp/TypeBox/releases) — unzip, run `TypeBox.exe`, hotkey `Ctrl+Shift+F2`.
 
 > ### Roots & inspiration
 > **TypeBox grows out of [TypeAndRun](https://github.com/galancev/typeandrun)** by Evgeniy Galantsev (2001–2004, GPL-3.0) — the **direct ancestor** whose idea, command/alias engine and INI config schema this project continues.
@@ -27,20 +33,22 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-MVP (Phase 1, scaffold in `src/`):
+Working today (v0.2.0):
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)
-- ✅ Console-like popup (single-line edit, top-most, center screen)
-- ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`), URLs, `mailto:`, files/folders, shell (`cmd.exe /c`)
-- ✅ Internal commands (`/help`, `/hide`, `/config`, `/exit`)
+- ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware)
+- ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`),
+  legacy pipe form `action|dir|state`, URLs, `mailto:`, files/folders, shell (`cmd.exe /c`)
+- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`)
+- ✅ Tray icon + balloon tips · sounds per execution type · undo (`Ctrl+Z`)
+- ✅ Persistent history (`↑/↓`, portable `History.dat`) · single instance + `WM_COPYDATA` IPC
 - ✅ INI config next to the exe — portable
-- 🚧 History navigation (↑/↓)
 
 Planned (see [docs/PLAN.md](docs/PLAN.md)):
 - Plugin ABI from TypeAndRun (`Load/Unload/GetInfo/GetCount/GetString/RunString` → `TExec`) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md)
+- EasyType completion + live hint/dropdown popups + per-theme colors
 - Info display (calculator, web results, files, system status — like PowerToys Run modules)
 - Drop-down terminal / bash mode (Guake/Yakuake/Drop style)
 - Import/export settings (copy the INI, plus a UI action), migration from old `TypeAndRun.ini`
-- Sounds, undo, tray icon, balloon hints, per-theme colors
 
 ## Everything TypeAndRun had — and more
 
@@ -66,15 +74,21 @@ The schema is compatible with the legacy `TypeAndRun.ini` (sections `[HotKey]`, 
 
 ## Building
 
-MSVC:
-```
-cl /EHsc /std:c++17 /DUNICODE /D_UNICODE src\main.cpp /Fe:TypeBox.exe ^
-   /link user32.lib shell32.lib shlwapi.lib gdi32.lib comctl32.lib
-```
-CMake:
+CMake (MSVC or MinGW):
 ```
 cmake -S . -B build && cmake --build build --config Release
 ```
+MSVC directly:
+```
+cl /EHsc /std:c++17 /DUNICODE /D_UNICODE /DTYPEBOX_VERSION=0.0.0-dev src\main.cpp /Fe:TypeBox.exe ^
+   /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib shlwapi.lib gdi32.lib comctl32.lib winmm.lib
+```
+MinGW-w64 directly:
+```
+g++ -std=c++17 -DUNICODE -D_UNICODE -DTYPEBOX_VERSION=0.0.0-dev -O2 src/main.cpp -o TypeBox.exe ^
+    -municode -mwindows -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lwinmm
+```
+The version comes from the `VERSION` file (CI refuses a tag that doesn't match it).
 
 ## License
 

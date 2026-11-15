@@ -24,17 +24,47 @@ Nothing is written to the registry or `%APPDATA%`.
 notepad = notepad.exe %s
 gh      = https://github.com/search?q=%s
 cmd     = cmd.exe /k %s
+; legacy pipe form: action|param|dir|state|priori|comment
+myide   = "C:\tools\ide.exe"|"%1"|C:\tools|3||open in my IDE
 ```
 - First token of the typed line selects the alias; the rest is available as `%s` and
   `%1..%n` (same semantics as TypeAndRun).
 - `VAR` expansion: `%WINDIR%`, `%TYPEBOXDIR%` (folder of the exe), any env var.
+- A legacy `Config.ini` next to the exe is also read (`[Aliases]`, pipe form) —
+  drop it in to import old TypeAndRun alias tables.
+- `state`: SW_ number (`1` normal, `3` maximized, `2` minimized).
 
 ### `[Exec]`
 Toggles (`0`/`1`) mirroring TypeAndRun: `Internal`, `Aliases`, `WWW`, `EMail`,
 `Files`, `Shell`.
 
+### `[Show]`
+| Key | Meaning | Default |
+|---|---|---|
+| `Width` / `Height` | popup size | `720` / `40` |
+| `X` / `Y` | fixed position (`-1` = auto) | `-1` |
+| `CenterScreenX` / `CenterScreenY` | centering | `1` / `1` |
+| `HideOnDeactivate` | hide when focus lost | `1` |
+| `ShowConsoleOnStart` | show popup at launch | `1` |
+| `TrayIcon` / `BalloonTips` | tray presence / notifications | `1` / `1` |
+| `Transparent` | window alpha `0..255` | `255` |
+
+### `[Font]`
+`Name` (default `Courier New`), `Size` (`18`), `Bold` (`1`).
+
+### `[History]` / `[Undo]`
+`[History] Max=200`. History persists to portable **`History.dat`** (UTF-8, one command
+per line) next to the exe. `[Undo] UseUndo=1` → `Ctrl+Z` restores the last executed command.
+
+### `[Sounds]`
+`EnableSounds=1` plus per-execution-type files (TypeAndRun parity):
+`ExecuteInternalSound`, `ExecuteAliasSound`, `ExecuteSysAliasSound`, `ExecuteURLSound`,
+`ExecuteEmailSound`, `ExecuteFileSound`, `ExecuteFolderSound`, `ExecutePluginSound`,
+`ExecuteShellSound`. Relative paths resolve against the portable `Sounds\` folder;
+`none` disables one sound.
+
 ### Other sections
-`[Show]` (position/size/top-most), `[History] Max`, `[Sounds]`, `[Config]`, `[Hint]`,
+`[Shell] Command / Args` (default `cmd.exe` `/c`), `[Config]`, `[Hint]`,
 `[DropDown]`, `[Color]` — inherited from the legacy schema (see `TypeAndRun.ini`
 in galancev/typeandrun) and activated as features land.
 

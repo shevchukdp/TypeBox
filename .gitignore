@@ -5,4 +5,7 @@ out/
 *.pdb
 *.exe
 TypeBox.exe
+History.dat
+mingw.7z
+mingw/
 .cache/
