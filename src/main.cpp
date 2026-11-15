@@ -62,15 +62,24 @@ struct Settings {
     bool hideOnDeactivate = true, trayIcon = true, balloonTips = true;
     bool showOnStart = true;
     int  transparent = 255;    // 0..255 alpha
+    bool autoHide = false;     // hide after AutoHideValue seconds of idleness
+    int  autoHideValue = 30;
     // [Exec]
     bool execInternal = true, execAliases = true, execWww = true,
          execEmail = true, execFiles = true, execShell = true;
     // [Font]
     std::wstring fontName = L"Courier New";
     int  fontSize = 18, fontBold = 1;
+    // [Type] EasyType completion
+    int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
+    bool etInternal = true, etAlias = true, etHistory = true;
+    // [Color] scheme 0 (COLORREF integers, -1 = system default)
+    int  consoleBg = -1, consoleFg = -1;
     // [History] [Undo]
     int  historyMax = 200;
     bool useUndo = true;
+    bool saveInternal = true, saveAlias = true, saveWww = true, saveEmail = true,
+         savePath = true, savePlugins = true, saveUnknown = true;
     // [Sounds]
     bool enableSounds = true;
 };
@@ -85,6 +94,11 @@ static size_t                    g_histPos = 0;
 static std::vector<Alias>        g_aliases;
 static NOTIFYICONDATAW           g_nid     = {};
 static std::wstring              g_lastRun; // for Undo
+// EasyType completion state
+static std::vector<std::wstring> g_etList;
+static size_t                    g_etPos    = 0;
+static std::wstring              g_etPrefix;
+static HBRUSH                    g_bgBrush  = nullptr;
 
 // ---------------------------------------------------------------- utilities
 
@@ -254,6 +268,8 @@ static void LoadSettings() {
     g_set.balloonTips       = ReadIniBool(L"Show", L"BalloonTips", true);
     g_set.showOnStart       = ReadIniBool(L"Show", L"ShowConsoleOnStart", true);
     g_set.transparent       = ReadIniInt(L"Show", L"Transparent", 255);
+    g_set.autoHide          = ReadIniBool(L"Show", L"AutoHide", false);
+    g_set.autoHideValue     = ReadIniInt(L"Show", L"AutoHideValue", 30);
 
     g_set.execInternal = ReadIniBool(L"Exec", L"Internal", true);
     g_set.execAliases  = ReadIniBool(L"Exec", L"Aliases",  true);
@@ -266,7 +282,22 @@ static void LoadSettings() {
     g_set.fontSize = ReadIniInt(L"Font", L"Size", 18);
     g_set.fontBold = ReadIniInt(L"Font", L"Bold", 1);
 
+    g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
+    g_set.etInternal = ReadIniBool(L"Type", L"UseInternalET", true);
+    g_set.etAlias    = ReadIniBool(L"Type", L"UseAliasET", true);
+    g_set.etHistory  = ReadIniBool(L"Type", L"UseHistoryET", true);
+
+    g_set.consoleBg = ReadIniInt(L"Color", L"ConsoleBG", -1);
+    g_set.consoleFg = ReadIniInt(L"Color", L"ConsoleFG", -1);
+
     g_set.historyMax = ReadIniInt(L"History", L"Max", 200);
+    g_set.saveInternal = ReadIniBool(L"History", L"Internal", true);
+    g_set.saveAlias    = ReadIniBool(L"History", L"Alias", true);
+    g_set.saveWww      = ReadIniBool(L"History", L"WWW", true);
+    g_set.saveEmail    = ReadIniBool(L"History", L"EMail", true);
+    g_set.savePath     = ReadIniBool(L"History", L"Path", true);
+    g_set.savePlugins  = ReadIniBool(L"History", L"Plugins", true);
+    g_set.saveUnknown  = ReadIniBool(L"History", L"Unknown", true);
     g_set.useUndo    = ReadIniBool(L"Undo", L"UseUndo", true);
     g_set.enableSounds = ReadIniBool(L"Sounds", L"EnableSounds", true);
 
@@ -391,8 +422,9 @@ static void RemoveTrayIcon() {
 
 static void ShowBox(HWND mainWnd);
 static void HideBox(HWND mainWnd);
-static bool RunLine(const std::wstring& line, HWND mainWnd);
+static int  RunLine(const std::wstring& line, HWND mainWnd);
 static void ReloadHotkey(HWND mainWnd);
+static void ResetET();
 
 // ---------------------------------------------------------------- internal commands
 //
@@ -408,7 +440,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Up/Down browse history, Esc hides, Ctrl+Z restores the last command.\n\n"
             L"Internal commands:\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
-            L"/inidir /inifiles /load /reread /settings /show /unload";
+            L"/inidir /inifiles /load /reread /settings /show /unload\n"
+            L"TypeBox additions: /export <file>  /import <file>  /undo";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
@@ -455,6 +488,47 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/unload") {
         // Phase 2: unload plugin DLLs here. Nothing to do yet.
+    } else if (c == L"/export") {
+        // Export settings: copy the portable ini to the given file.
+        std::wstring dest = RestWords(line);
+        if (dest.empty()) {
+            MessageBoxW(mainWnd, L"Usage: /export <path-to-file>",
+                        L"TypeBox — export", MB_OK | MB_ICONINFORMATION);
+        } else if (CopyFileW(g_iniPath.c_str(), dest.c_str(), FALSE)) {
+            wchar_t msg[512];
+            wsprintfW(msg, L"Settings exported to:\n%s", dest.c_str());
+            MessageBoxW(mainWnd, msg, L"TypeBox — export", MB_OK | MB_ICONINFORMATION);
+        } else {
+            MessageBoxW(mainWnd, L"TypeBox: export failed (check the path).",
+                        L"TypeBox — export", MB_OK | MB_ICONERROR);
+        }
+    } else if (c == L"/import") {
+        // Import settings: restore an exported file (current ini is kept as .bak).
+        std::wstring src = RestWords(line);
+        if (src.empty() || !PathFileExistsW(src.c_str())) {
+            MessageBoxW(mainWnd, L"Usage: /import <path-to-file>\n(file not found)",
+                        L"TypeBox — import", MB_OK | MB_ICONINFORMATION);
+        } else {
+            std::wstring bak = g_iniPath + L".bak";
+            CopyFileW(g_iniPath.c_str(), bak.c_str(), FALSE);
+            if (CopyFileW(src.c_str(), g_iniPath.c_str(), FALSE)) {
+                LoadSettings();
+                LoadAliases();
+                ReloadHotkey(mainWnd);
+                MessageBoxW(mainWnd,
+                    L"Settings imported. Previous config kept as TypeBox.ini.bak",
+                    L"TypeBox — import", MB_OK | MB_ICONINFORMATION);
+            } else {
+                MessageBoxW(mainWnd, L"TypeBox: import failed.",
+                            L"TypeBox — import", MB_OK | MB_ICONERROR);
+            }
+        }
+    } else if (c == L"/undo") {
+        if (g_set.useUndo && !g_lastRun.empty()) {
+            ShowBox(mainWnd);
+            SetWindowTextW(g_edit, g_lastRun.c_str());
+            SendMessageW(g_edit, EM_SETSEL, -1, 0);
+        }
     } else if (c == L"/hide") {
         HideBox(mainWnd);
     } else if (c == L"/show") {
@@ -469,13 +543,33 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
 // Mirrors the TypeAndRun ParseConsole chain (Static.pas):
 // internal → alias → URL → email → file/folder → shell, each toggleable in [Exec].
 
-static bool RunLine(const std::wstring& line, HWND mainWnd) {
-    if (line.empty()) return false;
+// Execution result types (map to [History]/[Sounds] keys, like TypeAndRun).
+enum ExecType {
+    EXC_NONE = 0, EXC_INTERNAL, EXC_ALIAS, EXC_SYSALIAS, EXC_URL,
+    EXC_EMAIL, EXC_FILE, EXC_FOLDER, EXC_PLUGIN, EXC_SHELL
+};
+
+static bool HistoryAllows(ExecType t) {
+    switch (t) {
+    case EXC_INTERNAL: return g_set.saveInternal;
+    case EXC_ALIAS:    return g_set.saveAlias;
+    case EXC_SYSALIAS: return g_set.saveAlias;
+    case EXC_URL:      return g_set.saveWww;
+    case EXC_EMAIL:    return g_set.saveEmail;
+    case EXC_FILE:
+    case EXC_FOLDER:   return g_set.savePath;
+    case EXC_PLUGIN:   return g_set.savePlugins;
+    default:           return g_set.saveUnknown;
+    }
+}
+
+static int RunLine(const std::wstring& line, HWND mainWnd) {
+    if (line.empty()) return EXC_NONE;
 
     if (line[0] == L'/' && g_set.execInternal) {
         PlayTypeSound(L"ExecuteInternalSound", L"Sounds\\internal.wav");
         RunInternal(line, mainWnd);
-        return true;
+        return EXC_INTERNAL;
     }
 
     std::wstring word = FirstWord(line);
@@ -494,7 +588,7 @@ static bool RunLine(const std::wstring& line, HWND mainWnd) {
                 // fall through to shell for shell built-ins
             }
             PlayTypeSound(L"ExecuteAliasSound", L"Sounds\\alias.wav");
-            return true;
+            return EXC_ALIAS;
         }
     }
 
@@ -505,7 +599,7 @@ static bool RunLine(const std::wstring& line, HWND mainWnd) {
         if (_wcsnicmp(url.c_str(), L"www.", 4) == 0) url = L"http://" + url;
         ShellExecuteW(mainWnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         PlayTypeSound(L"ExecuteURLSound", L"Sounds\\url.wav");
-        return true;
+        return EXC_URL;
     }
 
     // 3) email
@@ -516,19 +610,18 @@ static bool RunLine(const std::wstring& line, HWND mainWnd) {
         ShellExecuteW(mainWnd, L"open", (L"mailto:" + mail).c_str(),
                       nullptr, nullptr, SW_SHOWNORMAL);
         PlayTypeSound(L"ExecuteEmailSound", L"Sounds\\email.wav");
-        return true;
+        return EXC_EMAIL;
     }
 
     // 4) file or folder
     if (g_set.execFiles) {
         DWORD attr = GetFileAttributesW(expanded.c_str());
         if (attr != INVALID_FILE_ATTRIBUTES) {
+            bool dir = (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
             ShellExecuteW(mainWnd, L"open", expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            PlayTypeSound((attr & FILE_ATTRIBUTE_DIRECTORY)
-                          ? L"ExecuteFolderSound" : L"ExecuteFileSound",
-                          (attr & FILE_ATTRIBUTE_DIRECTORY)
-                          ? L"Sounds\\folder.wav" : L"Sounds\\file.wav");
-            return true;
+            PlayTypeSound(dir ? L"ExecuteFolderSound" : L"ExecuteFileSound",
+                          dir ? L"Sounds\\folder.wav" : L"Sounds\\file.wav");
+            return dir ? EXC_FOLDER : EXC_FILE;
         }
     }
 
@@ -539,10 +632,10 @@ static bool RunLine(const std::wstring& line, HWND mainWnd) {
         ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
                       (shellArgs + L" " + expanded).c_str(), nullptr, SW_SHOWNORMAL);
         PlayTypeSound(L"ExecuteShellSound", L"Sounds\\shell.wav");
-        return true;
+        return EXC_SHELL;
     }
 
-    return false;
+    return EXC_NONE;
 }
 
 // ---------------------------------------------------------------- UI
@@ -575,23 +668,30 @@ static void ShowBox(HWND mainWnd) {
     SendMessageW(g_edit, EM_SETSEL, 0, -1);
     g_visible = true;
     g_histPos = g_history.size();
+    ResetET();
+    if (g_set.autoHide && g_set.autoHideValue > 0)
+        SetTimer(mainWnd, 1, (UINT)g_set.autoHideValue * 1000, nullptr);
 }
 
 static void HideBox(HWND mainWnd) {
     ShowWindow(mainWnd, SW_HIDE);
     SetWindowTextW(g_edit, L"");
     g_visible = false;
+    KillTimer(mainWnd, 1);
+    ResetET();
 }
 
 static void Submit(HWND mainWnd) {
     std::wstring line = GetEditText(g_edit);
     if (line.empty()) return;
     g_lastRun = line;
-    g_history.push_back(line);
-    if ((int)g_history.size() > g_set.historyMax)
-        g_history.erase(g_history.begin());
-    SaveHistory();
-    RunLine(line, mainWnd);
+    ExecType t = (ExecType)RunLine(line, mainWnd);
+    if (t != EXC_NONE && HistoryAllows(t)) {
+        g_history.push_back(line);
+        if ((int)g_history.size() > g_set.historyMax)
+            g_history.erase(g_history.begin());
+        SaveHistory();
+    }
     SetWindowTextW(g_edit, L"");
     HideBox(mainWnd);
 }
@@ -600,6 +700,76 @@ static void SetHistory(size_t idx) {
     if (idx < g_history.size()) SetWindowTextW(g_edit, g_history[idx].c_str());
     else                        SetWindowTextW(g_edit, L"");
     SendMessageW(g_edit, EM_SETSEL, -1, 0); // caret to end
+    ResetET();
+}
+
+// ---------------------------------------------------------------- EasyType
+//
+// TypeAndRun's [Type] completion: Tab completes the word at the caret from
+// internal commands, aliases and history; repeated Tab cycles the matches.
+
+static void ResetET() {
+    g_etList.clear();
+    g_etPos = 0;
+    g_etPrefix.clear();
+}
+
+static bool StartsWithNoCase(const std::wstring& s, const std::wstring& prefix) {
+    if (s.size() < prefix.size()) return false;
+    return _wcsnicmp(s.c_str(), prefix.c_str(), prefix.size()) == 0;
+}
+
+static void TabComplete(HWND edit) {
+    if (g_set.easyType == 0) return;
+    std::wstring text = GetEditText(edit);
+    // GetEditText trims; use raw text for accurate caret mapping
+    int len = GetWindowTextLengthW(edit);
+    text.resize(len);
+    GetWindowTextW(edit, &text[0], len + 1);
+
+    DWORD sel = (DWORD)SendMessageW(edit, EM_GETSEL, 0, 0);
+    size_t caret = LOWORD(sel);
+    if (caret > text.size()) caret = text.size();
+
+    size_t b = caret, e = caret;
+    while (b > 0 && text[b-1] != L' ' && text[b-1] != L'\t') --b;
+    while (e < text.size() && text[e] != L' ' && text[e] != L'\t') ++e;
+    std::wstring word = text.substr(b, e - b);
+
+    if (g_etList.empty() || !StartsWithNoCase(word, g_etPrefix)) {
+        // (re)build the candidate list for this prefix
+        ResetET();
+        g_etPrefix = word;
+        auto add = [&](const std::wstring& cand) {
+            if (!StartsWithNoCase(cand, word) || cand.empty()) return;
+            for (const auto& c : g_etList)
+                if (_wcsicmp(c.c_str(), cand.c_str()) == 0) return;
+            g_etList.push_back(cand);
+        };
+        bool firstWord = (b == 0);
+        if (firstWord) {
+            if (g_set.etInternal) {
+                for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
+                     L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
+                     L"/inidir", L"/inifiles", L"/load", L"/reread", L"/settings",
+                     L"/show", L"/unload", L"/undo" })
+                    add(cmd);
+            }
+            if (g_set.etAlias)
+                for (const auto& a : g_aliases) add(a.name);
+        }
+        if (g_set.etHistory && word.find(L'/') != 0)
+            for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
+        g_etPos = 0;
+    }
+
+    if (!g_etList.empty()) {
+        std::wstring repl = g_etList[g_etPos % g_etList.size()];
+        ++g_etPos;
+        std::wstring nt = text.substr(0, b) + repl + text.substr(e);
+        SetWindowTextW(edit, nt.c_str());
+        SendMessageW(edit, EM_SETSEL, (WPARAM)(b + repl.size()), (LPARAM)(b + repl.size()));
+    }
 }
 
 static void ShowTrayMenu(HWND hWnd) {
@@ -624,6 +794,7 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         switch (wp) {
         case VK_RETURN: Submit(mainWnd);  return 0;
         case VK_ESCAPE: HideBox(mainWnd); return 0;
+        case VK_TAB: TabComplete(hWnd);  return 0;
         case VK_UP:
             if (g_histPos > 0) SetHistory(--g_histPos);
             return 0;
@@ -653,6 +824,7 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         }
         break;
     }
+    if (msg == WM_KEYDOWN && wp != VK_TAB) ResetET(); // typing rebuilds candidates
     return DefSubclassProc(hWnd, msg, wp, lp);
 }
 
@@ -674,6 +846,24 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE:
         MoveWindow(g_edit, 2, (HIWORD(lp) - 24) / 2, LOWORD(lp) - 4, 24, TRUE);
         return 0;
+    case WM_TIMER:
+        if (wp == 1 && g_visible) HideBox(hWnd); // [Show] AutoHide
+        return 0;
+    case WM_ERASEBKGND:
+        if (g_bgBrush) {
+            RECT rc; GetClientRect(hWnd, &rc);
+            FillRect((HDC)wp, &rc, g_bgBrush);
+            return 1;
+        }
+        break;
+    case WM_CTLCOLOREDIT:
+        if (g_bgBrush) {
+            HDC dc = (HDC)wp;
+            if (g_set.consoleBg >= 0) SetBkColor(dc, (COLORREF)g_set.consoleBg);
+            if (g_set.consoleFg >= 0) SetTextColor(dc, (COLORREF)g_set.consoleFg);
+            return (LRESULT)g_bgBrush;
+        }
+        break;
     case WM_HOTKEY:
         if (wp == kHotkeyId) g_visible ? HideBox(hWnd) : ShowBox(hWnd);
         return 0;
@@ -759,6 +949,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     LoadSettings();
     LoadAliases();
     LoadHistory();
+    if (g_set.consoleBg >= 0)
+        g_bgBrush = CreateSolidBrush((COLORREF)g_set.consoleBg);
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc   = WndProc;

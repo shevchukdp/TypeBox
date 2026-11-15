@@ -33,22 +33,22 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.2.0):
+Working today (v0.3.0):
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)
-- ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware)
+- ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware, AutoHide)
 - ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`),
   legacy pipe form `action|dir|state`, URLs, `mailto:`, files/folders, shell (`cmd.exe /c`)
-- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`)
+- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo`
+- ✅ **EasyType completion** — `Tab` completes from commands/aliases/history, cycles on repeat
 - ✅ Tray icon + balloon tips · sounds per execution type · undo (`Ctrl+Z`)
-- ✅ Persistent history (`↑/↓`, portable `History.dat`) · single instance + `WM_COPYDATA` IPC
+- ✅ Persistent history (`↑/↓`, portable `History.dat`, per-type toggles) · single instance + `WM_COPYDATA` IPC
 - ✅ INI config next to the exe — portable
 
 Planned (see [docs/PLAN.md](docs/PLAN.md)):
 - Plugin ABI from TypeAndRun (`Load/Unload/GetInfo/GetCount/GetString/RunString` → `TExec`) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md)
-- EasyType completion + live hint/dropdown popups + per-theme colors
+- EasyType hint/dropdown popups + full 3-scheme colors
 - Info display (calculator, web results, files, system status — like PowerToys Run modules)
 - Drop-down terminal / bash mode (Guake/Yakuake/Drop style)
-- Import/export settings (copy the INI, plus a UI action), migration from old `TypeAndRun.ini`
 
 ## Everything TypeAndRun had — and more
 

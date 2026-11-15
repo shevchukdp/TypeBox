@@ -3,6 +3,24 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.3.0] - 2026-11-15
+
+### Added
+- **EasyType completion** (`[Type]`) — `Tab` completes the word at the caret from
+  internal commands, aliases and history; repeated `Tab` cycles matches.
+  Sources toggleable: `UseInternalET` / `UseAliasET` / `UseHistoryET`.
+- **`/export <path>` and `/import <path>`** — one-command settings portability
+  (import backs the current config up as `TypeBox.ini.bak` and live-reloads it).
+- **`/undo`** command in addition to `Ctrl+Z`.
+- **AutoHide** — `[Show] AutoHide=1`, `AutoHideValue=<seconds>` hides an idle console.
+- **Console colors** — `[Color] ConsoleBG / ConsoleFG` (COLORREF integers).
+- **Per-type history toggles** — `[History] Internal/Alias/WWW/EMail/Path/Plugins/Unknown`
+  (TypeAndRun parity).
+
+### Fixed
+- Single `[History]` section in the sample config.
+- History candidate list rebuilds correctly when typing between `Tab` presses.
+
 ## [0.2.0] - 2026-11-15
 
 First functional build. CI compiles with MSVC on every push; tagged releases ship a

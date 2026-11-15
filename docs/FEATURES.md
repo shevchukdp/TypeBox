@@ -21,7 +21,7 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 | Transparent (per-pixel alpha), BorderSize | ✅ transparent · 📋 border |
 | DestroyForm (recreate on show to avoid focus bugs) | 📋 |
 | TrayIcon, BalloonTips | ✅ (context menu: show · config · exit) |
-| AutoHide + AutoHideValue (seconds) | 📋 |
+| AutoHide + AutoHideValue (seconds) | ✅ |
 | Priority (process class of TypeBox itself) | 📋 |
 | PutMouseIntoConsole | 📋 |
 | Auto-hide on deactivate | ✅ |
@@ -38,9 +38,10 @@ Name, Size, Bold — ✅. Italic, StrikeOut, UnderLine, Align (L/C/R), AutoSize,
 ApplyEnglish (force EN layout on input), LockEnglish. → 📋
 
 ## EasyType / completion  `[Type]`
-EasyType modes: Off / Easy / Linux-style; completion sources: Internal, Alias, SysAlias,
-Path, Plugins, History; CaseSensitivity; Space; EnableET; AdvancedBackspace (word-wise ✅);
-AdvancedSpace; DeleteDuplicates; colored console per mode. → 📋 (history ↑/↓ ✅)
+EasyType modes: Off / Easy / Linux-style — ✅ `Tab` completes the word at the caret from
+internal commands + aliases + history, repeated `Tab` cycles matches (`[Type] EasyType`,
+`UseInternalET/UseAliasET/UseHistoryET`); AdvancedBackspace (word-wise ✅).
+CaseSensitivity; AdvancedSpace; DeleteDuplicates; colored hint per mode → 📋 (popup, Phase 2)
 
 ## Execution  `[Exec]`
 Internal commands · Aliases · SystemAliases · WWW · EMail · Folders · Files · Plugins ·
@@ -60,9 +61,9 @@ Files/Shell with `[Exec]` toggles · 📋 SystemAliases, Plugins, DefaultAction
 Name/Action/Path tables from config (system commands like `~lock`, `~logoff`, `~cdeject`) — 📋
 
 ## History  `[History]`
-MaxHistory — ✅; persistence to portable `History.dat` (UTF-8) — ✅; ↑/↓ scroll — ✅.
-Per-type save toggles (Internal/Alias/SysAlias/WWW/EMail/Path/Plugins/Unknown/CommandLine/Message
-+ params variants), InvertScroll — 📋
+MaxHistory — ✅; persistence to portable `History.dat` (UTF-8) — ✅; ↑/↓ scroll — ✅;
+per-type save toggles (Internal/Alias/SysAlias/WWW/EMail/Path/Plugins/Unknown) — ✅ ·
+InvertScroll — 📋
 
 ## Undo
 `[Undo] UseUndo` — `Ctrl+Z` restores the last executed command — ✅ (caret at end)
@@ -76,7 +77,8 @@ ShowHint live-completion popup; DropDown LineNum; Transparent; BorderSize; Destr
 (tied to EasyType, Phase 2)
 
 ## Color themes  `[Color]`
-3 schemes (No-ET / EasyType / Linux) × {console bg/fg/border, hint bg/fg/border, dropdown bg/fg/border} — 📋
+Scheme 0 console `ConsoleBG`/`ConsoleFG` — ✅ · 3 schemes (No-ET / EasyType / Linux) ×
+{console bg/fg/border, hint bg/fg/border, dropdown bg/fg/border} — 📋 (hint/dropdown with Phase 2)
 
 ## Sounds  `[Sounds]`
 EnableSounds + 9 per-execution-type sounds (internal/alias/sysalias/url/email/folder/file/plugin/shell)

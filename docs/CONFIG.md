@@ -48,13 +48,32 @@ Toggles (`0`/`1`) mirroring TypeAndRun: `Internal`, `Aliases`, `WWW`, `EMail`,
 | `ShowConsoleOnStart` | show popup at launch | `1` |
 | `TrayIcon` / `BalloonTips` | tray presence / notifications | `1` / `1` |
 | `Transparent` | window alpha `0..255` | `255` |
+| `AutoHide` / `AutoHideValue` | auto-hide after N idle seconds | `0` / `30` |
+
+### `[Type]` (EasyType completion)
+| Key | Meaning | Default |
+|---|---|---|
+| `EasyType` | `0` off · `1` easy · `2` linux-style (Tab completes, repeat Tab cycles) | `2` |
+| `UseInternalET` / `UseAliasET` / `UseHistoryET` | completion sources | `1` |
+
+### `[Color]` (scheme 0 — console)
+COLORREF integers (`0x00BBGGRR` as decimal); `-1` = system default:
+`ConsoleBG`, `ConsoleFG`. (Hint/DropDown colors and schemes 1–2 land with EasyType popups.)
 
 ### `[Font]`
 `Name` (default `Courier New`), `Size` (`18`), `Bold` (`1`).
 
 ### `[History]` / `[Undo]`
-`[History] Max=200`. History persists to portable **`History.dat`** (UTF-8, one command
-per line) next to the exe. `[Undo] UseUndo=1` → `Ctrl+Z` restores the last executed command.
+`[History] Max=200` plus per-type save toggles (TypeAndRun parity):
+`Internal`, `Alias`, `WWW`, `EMail`, `Path`, `Plugins`, `Unknown` (`0`/`1`).
+History persists to portable **`History.dat`** (UTF-8, one command per line) next to the
+exe. `[Undo] UseUndo=1` → `Ctrl+Z` or `/undo` restores the last executed command.
+
+### Import / export
+Internal commands wrap the portable file:
+- `/export <path>` — saves `TypeBox.ini` to `<path>` (take it anywhere).
+- `/import <path>` — restores it (current config kept as `TypeBox.ini.bak`),
+  then reloads settings, aliases and hotkey.
 
 ### `[Sounds]`
 `EnableSounds=1` plus per-execution-type files (TypeAndRun parity):
