@@ -24,6 +24,10 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 |---|---|
 | ![al](docs/screenshots/settings-aliases.png) | ![p](docs/screenshots/settings-plugins.png) |
 
+| Settings → Language (20 UI languages) | The same page, Russian UI |
+|---|---|
+| ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
+
 > ### Roots & inspiration
 > **TypeBox grows out of [TypeAndRun](https://github.com/galancev/typeandrun)** by Evgeniy Galantsev (2001–2004, GPL-3.0) — the **direct ancestor** whose idea, command/alias engine and INI config schema this project continues.
 > The UX and feature set draw inspiration from:

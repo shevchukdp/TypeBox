@@ -2230,8 +2230,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
             L"Español · Português · Italiano · 中文 · 日本語 · 한국어 ·\n"
             L"العربية · Türkçe · Polski · Tiếng Việt · हिन्दी ·\n"
             L"Bahasa Indonesia · Kiswahili · Afrikaans · አማርኛ",
-            SS_LEFT, 16, 76, 430, 72);
-    MkLabel(g_setPage[PG_LANG], L(STR_LA_HINT), 16, 152, 430);
+            SS_LEFT, 16, 76, 430, 90);
+    MkLabel(g_setPage[PG_LANG], L(STR_LA_HINT), 16, 172, 430);
 
     MkButton(g_setWnd, L(STR_OK),     380, 380, 75);
     MkButton(g_setWnd, L(STR_APPLY),  461, 380, 75);
