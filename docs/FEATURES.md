@@ -65,6 +65,8 @@ LockEnglish. → 📋
 EasyType modes: Off / Easy / Linux-style — ✅ `Tab` completes the word at the caret from
 internal commands + aliases + history + sys aliases (`UseSysAliasET`), repeated `Tab` cycles matches
 (`[Type] EasyType`, `UseInternalET/UseAliasET/UseHistoryET`); AdvancedBackspace (word-wise ✅).
+Fuzzy matching (`[Type] Fuzzy=1`, TypeBox 0.11.0): Tab and the drop-down rank subsequence hits
+(prefix > word-start > consecutive); `Fuzzy=0` keeps the strict prefix behaviour.
 CaseSensitivity; AdvancedSpace; DeleteDuplicates; colored hint per mode → 📋 (popup, Phase 2)
 
 ## Execution  `[Exec]`

@@ -25,6 +25,7 @@
 #include <fstream>
 #include <cstring>
 #include <cwctype>
+#include <algorithm>
 #include <functional>
 
 #ifndef TYPEBOX_VERSION
@@ -93,6 +94,7 @@ struct Settings {
     // [Type] EasyType completion
     int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
     bool etInternal = true, etAlias = true, etHistory = true, etSysAlias = true;
+    bool fuzzy = true;         // [Type] Fuzzy: subsequence scoring (0 = TypeAndRun prefix mode)
     // [DropDown] suggestion list (TypeAndRun DropDown parity)
     bool dropDown = true;
     int  ddLines = 8;          // visible rows before scrolling ends
@@ -517,6 +519,7 @@ static void LoadSettings() {
     g_set.theme    = Trim(ReadIniStr(L"Theme", L"Name", L"cozy-dark"));
 
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
+    g_set.fuzzy      = ReadIniInt(L"Type", L"Fuzzy", 1) != 0;
     g_set.dropDown   = ReadIniInt(L"DropDown", L"Enable", 1) != 0;
     g_set.ddLines    = ReadIniInt(L"DropDown", L"Lines", 8);
     if (g_set.ddLines < 1) g_set.ddLines = 1;
@@ -1726,6 +1729,41 @@ static bool StartsWithNoCase(const std::wstring& s, const std::wstring& prefix) 
     return _wcsnicmp(s.c_str(), prefix.c_str(), prefix.size()) == 0;
 }
 
+// Fuzzy subsequence scoring (v0.11, [Type] Fuzzy). Returns >0 when every
+// pattern char appears in the text in order; `out` receives the matched
+// offsets so the drop-down can accent exactly the hit characters. Bonuses:
+// straight-prefix run, word-start hits, consecutive runs; penalties: gaps
+// between hits and overall verbosity. 0 means "no match". With Fuzzy=0 the
+// callers keep TypeAndRun's prefix behaviour (StartsWithNoCase).
+static int FuzzyScore(const std::wstring& text, const std::wstring& pat,
+                      std::vector<size_t>* out = nullptr) {
+    if (pat.empty()) return 1;                       // empty pattern matches all
+    if (text.size() < pat.size()) return 0;
+    std::vector<size_t> hits;
+    int score = 0;
+    size_t p = 0;
+    for (size_t i = 0; i < text.size() && p < pat.size(); ++i) {
+        if (towlower(text[i]) != towlower(pat[p])) continue;
+        int add = 1;
+        if (i == 0) add += 10;                                       // straight prefix
+        else {
+            wchar_t c = text[i - 1];
+            if (c == L' ' || c == L'-' || c == L'_' || c == L'.' ||
+                c == L'\\' || c == L'/') add += 8;                   // word start
+        }
+        if (p && hits[p - 1] + 1 == i) add += 5;                     // consecutive run
+        else if (p) score -= (int)(i - hits[p - 1] - 1);             // gap penalty
+        score += add;
+        hits.push_back(i);
+        ++p;
+    }
+    if (p < pat.size()) return 0;                                    // not a subsequence
+    score -= (int)(text.size() - pat.size()) / 4;                    // prefer shorter
+    if (score < 1) score = 1;
+    if (out) *out = hits;
+    return score;
+}
+
 static void TabComplete(HWND edit) {
     if (g_set.easyType == 0) return;
     std::wstring text = GetEditText(edit);
@@ -1743,12 +1781,18 @@ static void TabComplete(HWND edit) {
     while (e < text.size() && text[e] != L' ' && text[e] != L'\t') ++e;
     std::wstring word = text.substr(b, e - b);
 
-    if (g_etList.empty() || !StartsWithNoCase(word, g_etPrefix)) {
+    bool listFresh = g_set.fuzzy ? (word == g_etPrefix)
+                                 : StartsWithNoCase(word, g_etPrefix);
+    if (g_etList.empty() || !listFresh) {
         // (re)build the candidate list for this prefix
         ResetET();
         g_etPrefix = word;
         auto add = [&](const std::wstring& cand) {
-            if (!StartsWithNoCase(cand, word) || cand.empty()) return;
+            if (cand.empty()) return;
+            if (!word.empty()) {
+                if (g_set.fuzzy) { if (FuzzyScore(cand, word) <= 0) return; }
+                else if (!StartsWithNoCase(cand, word)) return;
+            }
             for (const auto& c : g_etList)
                 if (_wcsicmp(c.c_str(), cand.c_str()) == 0) return;
             g_etList.push_back(cand);
@@ -1782,6 +1826,11 @@ static void TabComplete(HWND edit) {
                     for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
                 }
         g_etPos = 0;
+        if (g_set.fuzzy && !word.empty())          // best fuzzy match completes first
+            std::stable_sort(g_etList.begin(), g_etList.end(),
+                [&](const std::wstring& a, const std::wstring& b) {
+                    return FuzzyScore(a, word) > FuzzyScore(b, word);
+                });
     }
 
     if (!g_etList.empty()) {
@@ -1806,8 +1855,10 @@ static HWND                      g_ddWnd = nullptr;
 static HWND                      g_ddOwner = nullptr;
 static HFONT                     g_ddFont = nullptr;
 static std::vector<std::wstring> g_ddItems;
+static std::vector<std::vector<size_t>> g_ddMarks;   // per-row matched offsets
+static const std::vector<size_t> kNoMarks;           // for rows without a pattern
 static int    g_ddSel = -1, g_ddRowH = 22;
-static size_t g_ddB = 0, g_ddE = 0, g_ddMatch = 0;   // word slot inside the edit
+static size_t g_ddB = 0, g_ddE = 0;                  // word slot inside the edit
 
 static bool DdVisible() { return g_ddWnd && IsWindowVisible(g_ddWnd); }
 
@@ -1821,6 +1872,7 @@ static void DdClose() {
     if (g_ddWnd) ShowWindow(g_ddWnd, SW_HIDE);
     g_ddSel = -1;
     g_ddItems.clear();
+    g_ddMarks.clear();
 }
 
 static void DdEnsureFont() {
@@ -1854,14 +1906,21 @@ static void PaintDropDown(HDC dc) {
             FillRect(dc, &rr, sb); DeleteObject(sb);
         }
         const std::wstring& it = g_ddItems[i];
-        size_t m = g_ddMatch <= it.size() ? g_ddMatch : it.size();
         int px = rr.left + 6, py = rr.top + 3;
-        SetTextColor(dc, MixColor(g_effBg, g_accent, 88));      // typed prefix
-        TextOutW(dc, px, py, it.c_str(), (int)m);
-        SIZE s1 = { 0, 0 };
-        if (m) GetTextExtentPoint32W(dc, it.c_str(), (int)m, &s1);
-        SetTextColor(dc, MixColor(g_effBg, g_effFg, i == g_ddSel ? 100 : 72));
-        TextOutW(dc, px + s1.cx, py, it.c_str() + m, (int)(it.size() - m));
+        COLORREF hot = MixColor(g_effBg, g_accent, 88);           // matched chars
+        COLORREF dim = MixColor(g_effBg, g_effFg, i == g_ddSel ? 100 : 72);
+        const std::vector<size_t>& mk =
+            (i < (int)g_ddMarks.size()) ? g_ddMarks[i] : kNoMarks;
+        size_t h = 0;                                             // marks are ascending
+        for (size_t ci = 0; ci < it.size(); ++ci) {
+            bool on = h < mk.size() && mk[h] == ci;
+            if (on) ++h;
+            SetTextColor(dc, on ? hot : dim);
+            TextOutW(dc, px, py, it.c_str() + ci, 1);
+            SIZE s = { 0, 0 };
+            GetTextExtentPoint32W(dc, it.c_str() + ci, 1, &s);
+            px += s.cx;
+        }
     }
     SelectObject(dc, oldF);
 }
@@ -1937,13 +1996,21 @@ static void DdUpdate(HWND mainWnd) {
     std::wstring word = text.substr(b, e - b);
 
     std::vector<std::wstring> items;
+    std::vector<std::vector<size_t>> marks;
+    std::vector<int> score;
     auto add = [&](const std::wstring& raw) {
         std::wstring c = Trim(raw);                       // plugins may return "calc "
         if (c.empty() || (int)items.size() >= 100) return;
-        if (!word.empty() && !StartsWithNoCase(c, word)) return;
+        std::vector<size_t> mk;
+        int sc = 1;                                       // empty word: keep source order
+        if (!word.empty()) {
+            if (g_set.fuzzy) { sc = FuzzyScore(c, word, &mk); if (sc <= 0) return; }
+            else if (!StartsWithNoCase(c, word)) return;
+            else for (size_t i = 0; i < word.size(); ++i) mk.push_back(i);
+        }
         for (auto& x : items)
             if (_wcsicmp(x.c_str(), c.c_str()) == 0) return;
-        items.push_back(c);
+        items.push_back(c); marks.push_back(std::move(mk)); score.push_back(sc);
     };
     if (word.empty()) {
         if (g_set.ddOnEmpty)                        // empty console = history (parity)
@@ -1971,6 +2038,17 @@ static void DdUpdate(HWND mainWnd) {
                 }
     }
     if (items.empty()) { DdClose(); return; }
+    if (g_set.fuzzy && !word.empty()) {          // best match on top, ties keep source order
+        std::vector<size_t> ord(items.size());
+        for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
+        std::stable_sort(ord.begin(), ord.end(),
+            [&](size_t a, size_t b) { return score[a] > score[b]; });
+        std::vector<std::wstring> sItems;
+        std::vector<std::vector<size_t>> sMarks;
+        sItems.reserve(items.size()); sMarks.reserve(items.size());
+        for (size_t i : ord) { sItems.push_back(items[i]); sMarks.push_back(marks[i]); }
+        items = std::move(sItems); marks = std::move(sMarks);
+    }
 
     if (!g_ddWnd) {
         static bool reg = false;
@@ -1990,7 +2068,8 @@ static void DdUpdate(HWND mainWnd) {
     }
     g_ddOwner = mainWnd;
     g_ddItems = std::move(items);
-    g_ddB = b; g_ddE = e; g_ddMatch = word.size(); g_ddSel = -1;
+    g_ddMarks = std::move(marks);
+    g_ddB = b; g_ddE = e; g_ddSel = -1;
 
     DdEnsureFont();
     int rows = (int)g_ddItems.size();
@@ -2660,7 +2739,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_TYPE], L(STR_ET_HIST),    16, y, &Settings::etHistory); y += 30;
     CkB(g_setPage[PG_TYPE], L(STR_DD_SHOW),    16, y, &Settings::dropDown);  y += 26;
     NumB(g_setPage[PG_TYPE], L(STR_DD_ROWS),   16, y, &Settings::ddLines, 1, 20); y += 34;
-    CkB(g_setPage[PG_TYPE], L(STR_DD_EMPTY),   16, y, &Settings::ddOnEmpty);
+    CkB(g_setPage[PG_TYPE], L(STR_DD_EMPTY),   16, y, &Settings::ddOnEmpty); y += 26;
+    CkB(g_setPage[PG_TYPE], L(STR_FT_FUZZY),   16, y, &Settings::fuzzy);
 
     // --- History
     y = 12;
@@ -2905,6 +2985,7 @@ static void WriteDraftIni() {
     WB(L"Exec", L"Plugins",  s.execPlugins);
 
     WInt(L"Type", L"EasyType",     s.easyType);
+    WInt(L"Type", L"Fuzzy",        s.fuzzy ? 1 : 0);
     WInt(L"DropDown", L"Enable",              s.dropDown ? 1 : 0);
     WInt(L"DropDown", L"Lines",               s.ddLines);
     WInt(L"DropDown", L"ShowHistoryOnEmpty",  s.ddOnEmpty ? 1 : 0);
@@ -3393,6 +3474,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         LogInfo(L"theme: " + g_set.theme);
         LogInfo(L"dropdown: " + std::wstring(g_set.dropDown ?
                 L"on (" + std::to_wstring(g_set.ddLines) + L" rows)" : L"off"));
+        LogInfo(L"fuzzy: " + std::wstring(g_set.fuzzy ? L"on" : L"off (prefix mode)"));
     }
 
     AddTrayIcon(mainWnd, true);

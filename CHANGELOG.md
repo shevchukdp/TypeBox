@@ -3,6 +3,24 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.11.0] - 2026-11-15
+
+![fuzzy suggestions](docs/screenshots/dropdown.png)
+*`[Type] Fuzzy`: typed **“cl”** — no row starts with it, yet `calc` and `calibrate sensors`
+surface because **c**…**l** appear in order; the hit characters glow in the accent color and the
+best score sits on top.*
+
+- 🎯 **Fuzzy matching** — on by default in Tab-completion and the drop-down. Subsequence
+  scoring: straight prefix `+10`, word-start hit `+8`, consecutive run `+5`, gap `−1`, shorter
+  rows preferred, ties keep source order.
+- 🎨 Matched characters are accented per row (non-contiguous hits included); the old contiguous
+  prefix highlight stays in prefix mode.
+- ⚙️ `[Type] Fuzzy=1` in the portable INI (**0** = strict TypeAndRun prefix mode), *Fuzzy
+  matching* checkbox on **Settings → EasyType**, startup log `fuzzy: on`.
+- ✔ `test-v0110` 13/13: `cl` lists `calc`+`calibrate sensors`, ↓+Tab accepts the top row,
+  `Fuzzy=0` completes nothing for `cl` while `ca` still works; `test-v0100` 14/14, `test-v091`
+  12/12, `test-v090` 17/17 stay green.
+
 ## [0.10.0] - 2026-11-15
 
 ### Added

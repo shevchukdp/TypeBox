@@ -51,7 +51,10 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.10.0):
+Working today (v0.11.0):
+- ✅ **Fuzzy matching** — `[Type] Fuzzy=1` (default): Tab and the drop-down score subsequences,
+  so `cl` finds `calc`; hit characters glow in the accent color, best score on top, `Fuzzy=0`
+  restores the strict TypeAndRun prefix mode
 - ✅ **Drop-down suggestions** — TypeAndRun's `frmTypeDropDown` reborn, themed by `[Theme]`:
   ET candidates for the word at the caret (aliases · `~sysalias` · `/commands` · plugins) or the
   history on an empty line; ↑/↓ · Tab accept · Enter run · Esc close · mouse click;

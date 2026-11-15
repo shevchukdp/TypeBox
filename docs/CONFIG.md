@@ -56,6 +56,7 @@ Toggles (`0`/`1`) mirroring TypeAndRun: `Internal`, `Aliases`, `WWW`, `EMail`,
 |---|---|---|
 | `EasyType` | `0` off · `1` easy · `2` linux-style (Tab completes, repeat Tab cycles) | `2` |
 | `UseInternalET` / `UseAliasET` / `UseHistoryET` / `UseSysAliasET` | completion sources | `1` |
+| `Fuzzy` | `1` subsequence scoring — `cl` finds `calc` (Tab + drop-down, hits accented); `0` = TypeAndRun prefix mode (TypeBox 0.11.0) | `1` |
 
 ### `[DropDown]` — suggestions list (TypeBox 0.10.0, TypeAndRun DropDown parity)
 A themed list snaps under the console (flips above at the screen edge): candidates for the word
