@@ -3,6 +3,51 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.14.0] - 2026-11-15
+
+![console context menu](docs/screenshots/context-menu.png)
+*Right-click the console — just like the original TypeAndRun. Edit operations up top
+(gray = not applicable), then Settings/Aliases/Plugins/Theme/Language, config reload, About,
+Hide, Exit. Fully localized in all 20 languages (Russian menu below).*
+
+![plugin result](docs/screenshots/console-plugin.png)
+*`conv 10 km mi` — the first gallery plugin answers right inside the console: the result
+stays on screen, selected, ready to Ctrl+C (the console no longer vanishes on plugin answers).*
+
+![plugin suggestions](docs/screenshots/dropdown-plugins.png)
+*Typed `conv` and the units plugin feeds the drop-down its own example rows — Tab accepts.*
+
+### Added
+- 🔌 **Three real plugins** from [docs/PLUGIN_GALLERY.md](PLUGIN_GALLERY.md) — the first wave
+  of the Top-5, zero dependencies, they ship in the zip's `Plugins\` folder:
+  - **units** — `conv 10 km mi`, `conv 98.6 f c`, `conv 100 gb mb` (length/mass/speed/data/time
+    + temperature), and base converter `hex 255` → `FF`, `bin 0xFF`, `dec 0xFF`, `oct 777`.
+  - **codec** — `b64enc/b64dec`, `urlenc/urldec`, `hexenc/hexdec`; invalid input answers with
+    a clear error row instead of garbage.
+  - **vol** — `vol +` / `vol -` / `vol mute` / `vol 3` via simulated media keys.
+  All three propose example rows in the drop-down (plugin `GetCountET`), answer in the console
+  AND put the raw value on the clipboard.
+- 🖱️ **Console context menu** (the user asked; the original TypeAndRun had one): right-click
+  the console → Undo/Cut/Copy/Paste/Select All (state-aware) · Settings/Aliases/Plugins/
+  Theme/Language · Reload config · Open config folder · About · Help · Hide · Exit.
+  Localized in 20 languages via a new `kCtxItems` table in `src/i18n.h`.
+- 📌 **Plugin results now stay on screen**: Enter on a plugin line keeps the console open
+  with the answer selected (it used to be cleared+hidden by `Submit`, so plugin output was
+  only ever visible as a MessageBox/clipboard). Esc/hotkey still hide.
+- 📝 Host logs each consumed line: `plugin: units handled: conv 10 km mi` — debuggable
+  plugin routing at last.
+
+### Config
+- `[Units] Popup=0|1`, `CopyResult=0|1` · `[Codec] Popup`, `CopyResult` · `[Vol] Step`, `Beeps`
+  (see [CONFIG.md](CONFIG.md)).
+
+### Verified
+- `test-v0140` **20/20**: 4 plugins discovered+enabled, conv/hex/b64enc/hexdec/vol verified via
+  BOTH the edit box and the clipboard, plugin-handled log lines, units ET rows, and the new
+  context menu (opens, Settings item opens the dialog, Paste item pastes, Hide item hides).
+- Regressions stay green: v0130 12/12, v0120 11/11, v0110 13/13, v0100 14/14, v091 12/12,
+  v090 16/16.
+
 ## [0.13.1] - 2026-11-15
 
 ![russian UI](docs/screenshots/settings-language-ru.png)

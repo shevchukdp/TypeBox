@@ -92,8 +92,13 @@ Working today (v0.12.0):
 - ✅ **Ignores.ini (BadApp)** — stay hidden over listed apps (process/class, wildcards)
 - ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo` `/log` `/sys`
 - ✅ **Plugin host — TypeAndRun ABI-compatible** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`):
-  drop DLLs into the portable `Plugins\` folder; example with calculator in
-  [`examples/plugin_calc`](examples/plugin_calc/calc.c) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md)
+  drop DLLs into the portable `Plugins\` folder; ships ready-to-use **units** (`conv 10 km mi`,
+  `hex 255`→`FF`), **codec** (`b64enc`, `urlenc`, `hexdec`) and **vol** (`vol + / mute / 3`), plus the
+  calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md),
+  specs in [docs/PLUGIN_GALLERY.md](docs/PLUGIN_GALLERY.md)
+- 🖱️ **Console context menu** (like the original TypeAndRun) — right-click the console:
+  Undo/Cut/Copy/Paste/Select All · Settings · Aliases · Plugins · Theme · Language ·
+  Reload config · Open config folder · About · Help · Hide · Exit — all 20 languages
 - ✅ **EasyType completion** — `Tab` completes from commands/aliases/sys-aliases/plugins/history, cycles on repeat
 - ✅ Tray icon + balloon tips · sounds per execution type · undo (`Ctrl+Z`)
 - ✅ Persistent history (`↑/↓`, portable `History.dat`, per-type toggles) · single instance + `WM_COPYDATA` IPC

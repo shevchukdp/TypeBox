@@ -32,6 +32,15 @@ target_compile_definitions(calc PRIVATE CALC_BUILDING_DLL)
 target_link_libraries(calc PRIVATE user32)
 set_target_properties(calc PROPERTIES PREFIX "")
 
+# First three plugins from docs/PLUGIN_GALLERY.md (v0.14.0 wave).
+foreach(P units codec vol)
+    string(TOUPPER ${P} PU)
+    add_library(${P} SHARED examples/plugin_${P}/${P}.c)
+    target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
+    target_link_libraries(${P} PRIVATE user32)
+    set_target_properties(${P} PROPERTIES PREFIX "")
+endforeach()
+
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without
     # this flag MSVC decodes literals in the system ANSI codepage — the released

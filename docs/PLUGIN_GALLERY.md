@@ -114,7 +114,8 @@ The per-plugin tables below give the remaining `name` / `version` /
 
 ---
 
-## 1. units — unit & base converter (`units.dll`)
+## 1. units - unit & base converter (`units.dll`)
+> **Status: shipped in v0.14.0** — implemented as `examples/plugin_units/units.c`.
 
 | Field | Value |
 |---|---|
@@ -171,7 +172,8 @@ stay in the console, clipboard copy optional); nothing required.
 
 ---
 
-## 2. codec — base64 / URL / hex codec (`codec.dll`)
+## 2. codec - base64 / URL / hex codec (`codec.dll`)
+> **Status: shipped in v0.14.0** — implemented as `examples/plugin_codec/codec.c`.
 
 | Field | Value |
 |---|---|
@@ -223,7 +225,8 @@ pattern as units (§1). No threads, no windows.
 
 ---
 
-## 3. vol — volume control (`vol.dll`)
+## 3. vol - volume control (`vol.dll`)
+> **Status: shipped in v0.14.0** — implemented as `examples/plugin_vol/vol.c`.
 
 | Field | Value |
 |---|---|

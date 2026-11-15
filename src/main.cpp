@@ -1040,6 +1040,7 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
                              ex.con_sel_start + (ex.con_sel_length < 0 ? 0 : ex.con_sel_length));
             }
             g_lastPluginName = PluginKey(p);
+            LogInfo(L"plugin: " + g_lastPluginName + L" handled: " + line);
             PlayTypeSound(7);
             return EXC_PLUGIN;
         }
@@ -1811,6 +1812,11 @@ static void Submit(HWND mainWnd) {
             g_history.erase(g_history.begin());
         SaveHistory();
     }
+    // v0.14: plugin output lives in the edit (RunPlugins just filled it with
+    // con_text + selection). Keep the console open so the result can be read
+    // and copied - the original TypeAndRun behaved exactly like this. Esc or
+    // the hotkey still hides; the next keystroke replaces the result.
+    if (t == EXC_PLUGIN) return;
     SetWindowTextW(g_edit, L"");
     HideBox(mainWnd);
 }
@@ -2249,6 +2255,52 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 3, L(STR_TRAY_EXIT));
     SetForegroundWindow(hWnd); // so the menu dismisses on click-away
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
+    DestroyMenu(menu);
+}
+
+// ------------------------------------------------------- console context menu
+// The original TypeAndRun popped a menu on the console itself (settings, etc).
+// v0.14 brings it back and adds the standard edit operations. Items dispatch
+// by ID in WM_COMMAND (they arrive even if TrackPopupMenu is still pumping).
+enum { IDCT_UNDO = 9101, IDCT_CUT, IDCT_COPY, IDCT_PASTE, IDCT_SELALL,
+       IDCT_SETTINGS, IDCT_ALIASES, IDCT_PLUGINS, IDCT_THEME, IDCT_LANG,
+       IDCT_RELOAD, IDCT_INIDIR, IDCT_ABOUT, IDCT_HELP, IDCT_HIDE, IDCT_EXIT };
+
+static void ShowConsoleMenu(HWND hWnd, POINT pt) {
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, IDCT_UNDO,    L(STR_CTX_UNDO));
+    AppendMenuW(menu, MF_STRING, IDCT_CUT,     L(STR_CTX_CUT));
+    AppendMenuW(menu, MF_STRING, IDCT_COPY,    L(STR_CTX_COPY));
+    AppendMenuW(menu, MF_STRING, IDCT_PASTE,   L(STR_CTX_PASTE));
+    AppendMenuW(menu, MF_STRING, IDCT_SELALL,  L(STR_CTX_SELALL));
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, IDCT_SETTINGS, L(STR_CTX_SETTINGS));
+    AppendMenuW(menu, MF_STRING, IDCT_ALIASES,  L(STR_CTX_ALIASES));
+    AppendMenuW(menu, MF_STRING, IDCT_PLUGINS,  L(STR_CTX_PLUGINS));
+    AppendMenuW(menu, MF_STRING, IDCT_THEME,    L(STR_CTX_THEME));
+    AppendMenuW(menu, MF_STRING, IDCT_LANG,     L(STR_CTX_LANG));
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, IDCT_RELOAD,   L(STR_CTX_RELOAD));
+    AppendMenuW(menu, MF_STRING, IDCT_INIDIR,   L(STR_CTX_INIDIR));
+    AppendMenuW(menu, MF_STRING, IDCT_ABOUT,    L(STR_CTX_ABOUT));
+    AppendMenuW(menu, MF_STRING, IDCT_HELP,     L(STR_CTX_HELP));
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, IDCT_HIDE,     L(STR_CTX_HIDE));
+    AppendMenuW(menu, MF_STRING, IDCT_EXIT,     L(STR_CTX_EXIT));
+    // enable/disable the edit block against the current state
+    DWORD start = 0, end = 0;
+    SendMessageW(g_edit, EM_GETSEL, (WPARAM)&start, (LPARAM)&end);
+    bool hasSel = end > start;
+    EnableMenuItem(menu, IDCT_UNDO,   MF_BYCOMMAND |
+        (SendMessageW(g_edit, EM_CANUNDO, 0, 0) ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, IDCT_CUT,    MF_BYCOMMAND | (hasSel ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, IDCT_COPY,   MF_BYCOMMAND | (hasSel ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, IDCT_PASTE,  MF_BYCOMMAND |
+        (IsClipboardFormatAvailable(CF_TEXT) ? MF_ENABLED : MF_GRAYED));
+    EnableMenuItem(menu, IDCT_SELALL, MF_BYCOMMAND |
+        (GetWindowTextLengthW(g_edit) ? MF_ENABLED : MF_GRAYED));
+    SetForegroundWindow(hWnd);   // click-away dismisses, like the tray menu
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
     DestroyMenu(menu);
 }
@@ -3698,6 +3750,17 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (LOWORD(wp) == WA_INACTIVE && g_visible && g_set.hideOnDeactivate)
             HideBox(hWnd);
         return 0;
+    case WM_CONTEXTMENU: {
+        // v0.14: right-click anywhere on the console (EDIT forwards it here)
+        // opens the TypeAndRun-style popup: edit ops + settings/plugins/about.
+        if (!g_visible) return 0;
+        POINT pt;
+        if ((int)(short)LOWORD(lp) == -1 && (int)(short)HIWORD(lp) == -1)
+            GetCursorPos(&pt);                       // keyboard Menu key
+        else { pt.x = (int)(short)LOWORD(lp); pt.y = (int)(short)HIWORD(lp); }
+        ShowConsoleMenu(hWnd, pt);
+        return 0;
+    }
     case kTrayMsg: {
         UINT ev = LOWORD(lp);
         if (ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK)
@@ -3729,6 +3792,29 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
                                                 nullptr, nullptr, SW_SHOWNORMAL);
         else if (LOWORD(wp) == 3) DestroyWindow(hWnd);
         else if (LOWORD(wp) == 4) OpenSettings(hWnd, PG_APPEAR);
+        else if (LOWORD(wp) >= IDCT_UNDO && LOWORD(wp) <= IDCT_EXIT) {
+            // console context menu actions (v0.14)
+            switch ((int)LOWORD(wp)) {
+            case IDCT_UNDO:     SendMessageW(g_edit, EM_UNDO, 0, 0);        break;
+            case IDCT_CUT:      SendMessageW(g_edit, WM_CLEAR, 0, 0);       break;
+            case IDCT_COPY:     SendMessageW(g_edit, WM_COPY, 0, 0);        break;
+            case IDCT_PASTE:    SendMessageW(g_edit, WM_PASTE, 0, 0);       break;
+            case IDCT_SELALL:   SendMessageW(g_edit, EM_SETSEL, 0, -1);     break;
+            case IDCT_SETTINGS: OpenSettings(hWnd, PG_APPEAR);              break;
+            case IDCT_ALIASES:  OpenSettings(hWnd, PG_ALIASES);             break;
+            case IDCT_PLUGINS:  OpenSettings(hWnd, PG_PLUGINS);             break;
+            case IDCT_THEME:    OpenSettings(hWnd, PG_THEME);               break;
+            case IDCT_LANG:     OpenSettings(hWnd, PG_LANG);                break;
+            case IDCT_RELOAD:   RunInternal(L"/reread", hWnd);              break;
+            case IDCT_INIDIR:   RunInternal(L"/inidir", hWnd);              break;
+            case IDCT_ABOUT:    RunInternal(L"/about", hWnd);               break;
+            case IDCT_HELP:     RunInternal(L"/help", hWnd);                break;
+            case IDCT_HIDE:     HideBox(hWnd);                              break;
+            case IDCT_EXIT:     DestroyWindow(hWnd);                        break;
+            }
+            if (g_visible && g_edit) SetFocus(g_edit);
+            return 0;
+        }
         return 0;
     case WM_COPYDATA: {
         // Second instance forwards its command line for execution.

@@ -54,7 +54,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Error "exe --version exited $LASTEXITCODE"; exit 1 }
           # GUI must stay alive (missing-DLL builds die immediately with 0xC0000135)
           New-Item -ItemType Directory -Path build/Plugins -Force | Out-Null
-          if (Test-Path build/calc.dll) { Copy-Item build/calc.dll build/Plugins/ -Force }
+          Get-ChildItem build/*.dll | ForEach-Object { Copy-Item $_.FullName build/Plugins/ -Force }
           $p = Start-Process build/TypeBox.exe -PassThru
           Start-Sleep -Seconds 3
           if ($null -eq (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
@@ -130,7 +130,7 @@ jobs:
           New-Item -ItemType Directory -Path "$stage/TypeBox/docs" -Force | Out-Null
           New-Item -ItemType Directory -Path "$stage/TypeBox/Plugins" -Force | Out-Null
           Copy-Item build/TypeBox.exe "$stage/TypeBox/"
-          if (Test-Path build/calc.dll) { Copy-Item build/calc.dll "$stage/TypeBox/Plugins/" }
+          Get-ChildItem build/*.dll | ForEach-Object { Copy-Item $_.FullName "$stage/TypeBox/Plugins/" -Force }
           Copy-Item TypeBox.ini      "$stage/TypeBox/"
           Copy-Item README.md        "$stage/TypeBox/"
           Copy-Item LICENSE          "$stage/TypeBox/"

@@ -56,6 +56,12 @@ enum StrId {
     STR_AN_PATH, STR_AN_UNKNOWN, STR_AN_OFF,
     STR_DD_SHOW, STR_DD_ROWS, STR_DD_EMPTY, STR_FT_FUZZY,
     STR_CUE, STR_AN_WEB,
+    // v0.14: right-click menu on the console itself (TypeAndRun had one too).
+    // Translations live in kCtxItems below, English is the fallback.
+    STR_CTX_UNDO, STR_CTX_CUT, STR_CTX_COPY, STR_CTX_PASTE, STR_CTX_SELALL,
+    STR_CTX_SETTINGS, STR_CTX_ALIASES, STR_CTX_PLUGINS, STR_CTX_THEME, STR_CTX_LANG,
+    STR_CTX_RELOAD, STR_CTX_INIDIR, STR_CTX_ABOUT, STR_CTX_HELP, STR_CTX_HIDE,
+    STR_CTX_EXIT,
     STR_LAST
 };
 
@@ -93,7 +99,10 @@ static const char* const kKeyNames[STR_LAST] = {
     "la_hint",
     "pg_theme", "th_scheme", "th_hint",
     "an_path", "an_unknown", "an_off",
-    "dd_show", "dd_rows", "dd_empty", "ft_fuzzy", "cue", "an_web"
+    "dd_show", "dd_rows", "dd_empty", "ft_fuzzy", "cue", "an_web",
+    "ctx_undo", "ctx_cut", "ctx_copy", "ctx_paste", "ctx_selall",
+    "ctx_settings", "ctx_aliases", "ctx_plugins", "ctx_theme", "ctx_lang",
+    "ctx_reload", "ctx_inidir", "ctx_about", "ctx_help", "ctx_hide", "ctx_exit"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -908,6 +917,83 @@ static const Pack* const kPacks[LANG_COUNT] = {
     &kEn, &kRu, &kUk, &kDe, &kFr, &kEs, &kPt, &kIt,
     &kZh, &kJa, &kKo, &kAr, &kTr, &kPl, &kVi, &kHi, &kId, &kSw, &kAf, &kAm };
 
+// ------------------------------------------------------ console context menu strings
+// Kept as one compact table instead of 20 pack-tail appends (v0.14). Order of
+// columns == STR_CTX_UNDO .. STR_CTX_EXIT. C (=L"") falls back to English,
+// exactly like the sparse tails of the smaller packs.
+static const wchar_t* const kCtxItems[LANG_COUNT][16] = {
+/* en */ { L"Undo", L"Cut", L"Copy", L"Paste", L"Select All",
+           L"Settings...", L"Aliases...", L"Plugins...", L"Theme...", L"Language...",
+           L"Reload config", L"Open config folder", L"About...", L"Help...",
+           L"Hide", L"Exit" },
+/* ru */ { L"Отменить", L"Вырезать", L"Копировать", L"Вставить", L"Выделить всё",
+           L"Настройки…", L"Псевдонимы…", L"Плагины…", L"Тема…", L"Язык…",
+           L"Перечитать конфиг", L"Открыть папку конфига", L"О программе…",
+           L"Справка…", L"Скрыть", L"Выход" },
+/* uk */ { L"Скасувати", L"Вирізати", L"Копіювати", L"Вставити", L"Виділити все",
+           L"Параметри…", L"Псевдоніми…", L"Плагіни…", L"Тема…", L"Мова…",
+           L"Перечитати конфіг", L"Відкрити теку конфіга", L"Про програму…",
+           L"Довідка…", L"Приховати", L"Вихід" },
+/* de */ { L"Rückgängig", L"Ausschneiden", L"Kopieren", L"Einfügen", L"Alles markieren",
+           L"Einstellungen…", L"Aliase…", L"Plugins…", L"Design…", L"Sprache…",
+           L"Konfig neu laden", L"Konfig-Ordner öffnen", L"Über…", L"Hilfe…",
+           L"Ausblenden", L"Beenden" },
+/* fr */ { L"Annuler", L"Couper", L"Copier", L"Coller", L"Tout sélectionner",
+           L"Paramètres…", L"Alias…", L"Plugins…", L"Thème…", L"Langue…",
+           L"Recharger la config", L"Ouvrir le dossier config", L"À propos…",
+           L"Aide…", L"Masquer", L"Quitter" },
+/* es */ { L"Deshacer", L"Cortar", L"Copiar", L"Pegar", L"Seleccionar todo",
+           L"Opciones…", L"Aliases…", L"Complementos…", L"Tema…", L"Idioma…",
+           L"Recargar la config", L"Abrir carpeta de config", L"Acerca de…",
+           L"Ayuda…", L"Ocultar", L"Salir" },
+/* pt */ { L"Desfazer", L"Recortar", L"Copiar", L"Colar", L"Selecionar tudo",
+           L"Configurações…", L"Atalhos…", L"Plugins…", L"Tema…", L"Idioma…",
+           L"Recarregar a config", L"Abrir pasta da config", L"Sobre…", L"Ajuda…",
+           L"Ocultar", L"Sair" },
+/* it */ { L"Annulla", L"Taglia", L"Copia", L"Incolla", L"Seleziona tutto",
+           L"Impostazioni…", L"Alias…", L"Plugin…", L"Tema…", L"Lingua…",
+           L"Ricarica la config", L"Apri cartella config", L"Informazioni…",
+           L"Guida…", L"Nascondi", L"Esci" },
+/* zh */ { L"撤销", L"剪切", L"复制", L"粘贴", L"全选",
+           L"设置…", L"别名…", L"插件…", L"主题…", L"语言…",
+           L"重新载入配置", L"打开配置文件夹", L"关于…", L"帮助…", L"隐藏", L"退出" },
+/* ja */ { L"元に戻す", L"切り取り", L"コピー", L"貼り付け", L"すべて選択",
+           L"設定…", L"エイリアス…", L"プラグイン…", L"テーマ…", L"言語…",
+           L"設定を再読み込み", L"設定フォルダーを開く", L"バージョン情報…",
+           L"ヘルプ…", L"隠す", L"終了" },
+/* ko */ { L"실행 취소", L"잘라내기", L"복사", L"붙여넣기", L"전체 선택",
+           L"설정…", L"별칭…", L"플러그인…", L"테마…", L"언어…",
+           L"설정 다시 읽기", L"설정 폴더 열기", L"정보…", L"도움말…",
+           L"숨기기", L"종료" },
+/* ar */ { L"تراجع", L"قص", L"نسخ", L"لصق", L"تحديد الكل",
+           L"إعدادات…", L"أسماء مستعارة…", L"إضافات…", L"سمة…", L"لغة…",
+           L"إعادة تحميل الإعدادات", L"فتح مجلد الإعدادات", L"حول البرنامج…",
+           L"مساعدة…", L"إخفاء", L"خروج" },
+/* tr */ { L"Geri Al", L"Kes", L"Kopyala", L"Yapıştır", L"Tümünü Seç",
+           L"Ayarlar…", L"Takma Adlar…", L"Eklentiler…", L"Tema…", L"Dil…",
+           L"Yapılandırmayı yenile", L"Yapılandırma klasörünü aç", L"Hakkında…",
+           L"Yardım…", L"Gizle", L"Çık" },
+/* pl */ { L"Cofnij", L"Wytn", L"Kopiuj", L"Wklej", L"Zaznacz wszystko",
+           L"Ustawienia…", L"Aliasy…", L"Wtyczki…", L"Motyw…", L"Język…",
+           L"Przeładuj konfigurację", L"Otwórz folder konfiguracji",
+           L"O programie…", L"Pomoc…", L"Ukryj", L"Wyjdź" },
+/* vi */ { L"Hoàn tác", L"Cắt", L"Sao chép", L"Dán", L"Chọn tất cả",
+           L"Cài đặt…", L"Bí danh…", L"Plugin…", L"Chủ đề…", L"Ngôn ngữ…",
+           L"Nạp lại cấu hình", L"Mở thư mục cấu hình", L"Giới thiệu…",
+           L"Trợ giúp…", L"Ẩn", L"Thoát" },
+/* hi */ { L"पूर्ववत करें", L"काटें", L"कॉपी करें", L"पेस्ट करें", L"सब चुनें",
+           L"सेटिंग्स…", L"उपनाम…", L"प्लगइन…", L"थीम…", L"भाषा…",
+           L"कॉन्फ़िग फिर लोड करें", L"कॉन्फ़िग फ़ोल्डर खोलें", L"परिचय…",
+           L"सहायता…", L"छिपाएँ", L"बाहर निकलें" },
+/* id */ { L"Urungkan", L"Potong", L"Salin", L"Tempel", L"Pilih Semua",
+           L"Pengaturan…", L"Alias…", L"Plugin…", L"Tema…", L"Bahasa…",
+           L"Muat ulang konfigurasi", L"Buka folder konfigurasi", L"Tentang…",
+           L"Bantuan…", L"Sembunyikan", L"Keluar" },
+/* sw */ { C, C, C, C, C, C, C, C, C, C, C, C, C, C, C, C },
+/* af */ { C, C, C, C, C, C, C, C, C, C, C, C, C, C, C, C },
+/* am */ { C, C, C, C, C, C, C, C, C, C, C, C, C, C, C, C },
+};
+
 // ---------------------------------------------------------------- runtime state
 static int g_langIdx = LANG_EN;
 static std::map<std::wstring, std::wstring> g_i18nUser;   // key -> override
@@ -992,11 +1078,18 @@ static void SetLanguage(int idx) {
 
 static const wchar_t* L(int id) {
     if (id < 0 || id >= STR_LAST) return L"?";
-    // 1) portable user override  2) current pack  3) English
+    // 1) portable user override  2) current pack  3) ctx table  4) English
     auto it = g_i18nUser.find(std::wstring(I18nFromUtf8(kKeyNames[id])));
     if (it != g_i18nUser.end() && !it->second.empty()) return it->second.c_str();
     const wchar_t* s = kPacks[g_langIdx]->items[id];
     if (s && *s) return s;
+    if (id >= STR_CTX_UNDO && id <= STR_CTX_EXIT) {
+        const wchar_t* x = kCtxItems[g_langIdx][id - STR_CTX_UNDO];
+        if (x && *x) return x;
+        x = kCtxItems[LANG_EN][id - STR_CTX_UNDO];   // packs carry no ctx tail
+        if (x && *x) return x;
+        return L"?";
+    }
     return kEn.items[id];
 }
 

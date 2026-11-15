@@ -146,6 +146,19 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 `[Exec] Plugins=0` disables the whole stage. See
 [PLUGIN_API.md](PLUGIN_API.md) and [`examples/plugin_calc`](../examples/plugin_calc/calc.c).
 
+**Bundled since v0.14.0** (specs: [PLUGIN_GALLERY.md](PLUGIN_GALLERY.md)):
+
+| Plugin | Commands | Own settings |
+|---|---|---|
+| `units` | `conv 10 km mi` · `hex 255` → `FF` · `bin 0xFF` · `dec 0xFF` · `oct 777` | `[Units] Popup=1 CopyResult=1` |
+| `codec` | `b64enc/b64dec` · `urlenc/urldec` · `hexenc/hexdec` | `[Codec] Popup=1 CopyResult=1` |
+| `vol` | `vol +` · `vol -` · `vol mute` · `vol 3` | `[Vol] Step=1 Beeps=0` |
+
+`Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
+`CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per
+`+`/`-` (1..5), `Beeps=1` confirms with a beep. Answers stay selected in the console
+so Ctrl+C copies the formatted line; the clipboard gets the raw value.
+
 ### `[PluginState]` — per-plugin switches (TypeBox extension)
 Written by the **Plugins** page of the settings dialog, read at startup. Keys are the
 dll base name (no extension):
