@@ -104,8 +104,15 @@ jobs:
           else { $ini = $ini -replace '(?m)^Language\s*=.*$', 'Language=ru' }
           Set-Content "$dir/TypeBox.ini" $ini -Encoding UTF8
           Remove-Item "$dir/i18n-check.txt" -EA SilentlyContinue
-          & cmd /c "$dir\TypeBox.exe --check-i18n >nul 2>&1"
-          if (-not (Test-Path "$dir/i18n-check.txt")) { Write-Error "--check-i18n produced no file"; exit 1 }
+          $exePath = (Resolve-Path "$dir/TypeBox.exe").Path
+          Start-Process -FilePath $exePath -ArgumentList '--check-i18n' -WorkingDirectory $dir -Wait
+          Write-Host "check-i18n exit=$LASTEXITCODE"
+          if (-not (Test-Path "$dir/i18n-check.txt")) {
+            Write-Host "dir listing: $((Get-ChildItem $dir | ForEach-Object { $_.Name }) -join ', ')"
+            $found = Get-ChildItem . -Filter i18n-check.txt -Recurse -EA SilentlyContinue | Select-Object -First 3
+            Write-Host "fallback found: $($found.FullName -join ', ')"
+            Write-Error "--check-i18n produced no file"; exit 1
+          }
           $texts = Get-Content "$dir/i18n-check.txt" -Raw -Encoding UTF8
           Write-Host "i18n dump: $($texts.Substring(0, [Math]::Min(200, $texts.Length)))"
           if ($texts -notmatch 'lang=ru')     { Write-Error "language from INI not applied"; exit 1 }

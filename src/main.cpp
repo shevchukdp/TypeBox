@@ -3809,12 +3809,19 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 + std::wstring(L(STR_PG_THEME)) + L"\r\n"
                 + std::wstring(L(STR_HK_HINT));
             std::string bytes = ToUtf8(out);
-            HANDLE hf = CreateFileW((ExeDir() + L"i18n-check.txt").c_str(), GENERIC_WRITE, 0,
-                                    nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (hf != INVALID_HANDLE_VALUE) {
+            auto tryWrite = [&bytes](const std::wstring& p) -> bool {
+                HANDLE hf = CreateFileW(p.c_str(), GENERIC_WRITE, 0,
+                                        nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (hf == INVALID_HANDLE_VALUE) return false;
                 DWORD wr = 0;
                 WriteFile(hf, bytes.c_str(), (DWORD)bytes.size(), &wr, nullptr);
                 CloseHandle(hf);
+                return wr == bytes.size();
+            };
+            if (!tryWrite(ExeDir() + L"i18n-check.txt")) {   // fallback: caller's CWD
+                wchar_t cwd[MAX_PATH] = {};
+                GetCurrentDirectoryW(MAX_PATH, cwd);
+                tryWrite(std::wstring(cwd) + L"\\i18n-check.txt");
             }
             return 0;
         }
