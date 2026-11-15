@@ -3785,13 +3785,39 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         int argc = 0;
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         bool wantVersion = false;
+        bool wantCheckI18n = false;
         for (int i = 1; i < argc; ++i)
             if (_wcsicmp(argv[i], L"--version") == 0 || _wcsicmp(argv[i], L"/version") == 0)
                 wantVersion = true;
-        for (int i = 1; i < argc; ++i)
+        for (int i = 1; i < argc; ++i) {
             if (_wcsicmp(argv[i], L"--test-settings") == 0)
                 g_testSettings = true;
+            if (_wcsicmp(argv[i], L"--check-i18n") == 0)
+                wantCheckI18n = true;
+        }
         if (argv) LocalFree(argv);
+        // CI gate (v0.13.1): dump the CURRENT language pack's compiled literals to
+        // i18n-check.txt next to the exe. In-process on purpose: it proves the
+        // compiler (MSVC /utf-8) kept the 20 language packs intact, without any
+        // GUI window, IPC or message loop that a headless runner could starve.
+        if (wantCheckI18n) {
+            g_iniPath = ExeDir() + L"TypeBox.ini";
+            SetLanguage(LangFromCode(Trim(ReadIniStr(L"UI", L"Language", L"auto"))));
+            std::wstring out = std::wstring(L"lang=") + kLangs[g_langIdx].code + L"\r\n"
+                + std::wstring(L(STR_APPLY)) + L"\r\n"
+                + std::wstring(L(STR_PG_APPEARANCE)) + L"\r\n"
+                + std::wstring(L(STR_PG_THEME)) + L"\r\n"
+                + std::wstring(L(STR_HK_HINT));
+            std::string bytes = ToUtf8(out);
+            HANDLE hf = CreateFileW((ExeDir() + L"i18n-check.txt").c_str(), GENERIC_WRITE, 0,
+                                    nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (hf != INVALID_HANDLE_VALUE) {
+                DWORD wr = 0;
+                WriteFile(hf, bytes.c_str(), (DWORD)bytes.size(), &wr, nullptr);
+                CloseHandle(hf);
+            }
+            return 0;
+        }
         if (wantVersion) {
             if (AttachConsole(ATTACH_PARENT_PROCESS)) {
                 std::string s = ToUtf8(L"TypeBox " + WVersion() + L"\n");

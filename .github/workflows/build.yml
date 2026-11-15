@@ -94,6 +94,8 @@ jobs:
         run: |
           # Regression guard: without /utf-8 the 20 language packs in i18n.h decode as
           # ANSI mojibake in released exes while every ASCII gate stays green.
+          # --check-i18n dumps the COMPILED literals of the INI's language to a file:
+          # in-process, no window, no IPC — deterministic on a headless runner.
           $dir = "build/i18ncheck"
           New-Item -ItemType Directory -Path $dir -Force | Out-Null
           Copy-Item build/TypeBox.exe $dir/
@@ -101,39 +103,16 @@ jobs:
           if ($ini -notmatch '(?m)^\[UI\]') { $ini += "`r`n[UI]`r`nLanguage=ru`r`n" }
           else { $ini = $ini -replace '(?m)^Language\s*=.*$', 'Language=ru' }
           Set-Content "$dir/TypeBox.ini" $ini -Encoding UTF8
-          $p = Start-Process "$dir/TypeBox.exe" -PassThru
-          Start-Sleep -Seconds 2
-          Add-Type @"
-          using System; using System.Text; using System.Runtime.InteropServices;
-          public class W {
-            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern IntPtr FindWindowW(string c, string n);
-            public delegate bool EnumProc(IntPtr h, IntPtr l);
-            [DllImport("user32.dll")] public static extern bool EnumChildWindows(IntPtr h, EnumProc cb, IntPtr l);
-            [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowTextW(IntPtr h, StringBuilder s, int n);
-          }
-          "@
-          Start-Process "$dir/TypeBox.exe" -ArgumentList '/settings' | Out-Null
-          Start-Sleep -Seconds 2
-          $dlg = [W]::FindWindowW("TypeBoxSettings", $null)
-          if ($dlg -eq [IntPtr]::Zero) {
-            Get-Process TypeBox -EA SilentlyContinue | Stop-Process -Force
-            Write-Error "settings dialog did not open"; exit 1
-          }
-          $texts = New-Object System.Collections.Generic.List[string]
-          $cb = [W+EnumProc] {
-            param($h, $l)
-            $sb = New-Object System.Text.StringBuilder 512
-            [void][W]::GetWindowTextW($h, $sb, 512)
-            $t = $sb.ToString(); if ($t) { $texts.Add($t) }
-            $true
-          }
-          [void][W]::EnumChildWindows($dlg, $cb, [IntPtr]::Zero)
-          Get-Process TypeBox -EA SilentlyContinue | Stop-Process -Force
-          $joined = $texts -join "|"
-          Write-Host "settings texts: $($joined.Substring(0, [Math]::Min(300, $joined.Length)))"
-          if ($joined -notmatch 'Применить') { Write-Error "RU Apply button missing -> /utf-8 regression"; exit 1 }
-          if ($joined -notmatch 'Внешний вид') { Write-Error "RU page list missing -> /utf-8 regression"; exit 1 }
-          Write-Host "i18n render gate OK (RU strings render from the MSVC build)"
+          Remove-Item "$dir/i18n-check.txt" -EA SilentlyContinue
+          & cmd /c "$dir\TypeBox.exe --check-i18n >nul 2>&1"
+          if (-not (Test-Path "$dir/i18n-check.txt")) { Write-Error "--check-i18n produced no file"; exit 1 }
+          $texts = Get-Content "$dir/i18n-check.txt" -Raw -Encoding UTF8
+          Write-Host "i18n dump: $($texts.Substring(0, [Math]::Min(200, $texts.Length)))"
+          if ($texts -notmatch 'lang=ru')     { Write-Error "language from INI not applied"; exit 1 }
+          if ($texts -notmatch 'Применить')   { Write-Error "RU Apply mojibake -> /utf-8 regression"; exit 1 }
+          if ($texts -notmatch 'Внешний вид') { Write-Error "RU page name mojibake -> /utf-8 regression"; exit 1 }
+          if ($texts -notmatch 'Тема')        { Write-Error "RU theme page name mojibake -> /utf-8 regression"; exit 1 }
+          Write-Host "i18n gate OK: compiled RU literals intact"
 
       - name: Package
         shell: pwsh
