@@ -49,19 +49,22 @@ Toggles (`0`/`1`) mirroring TypeAndRun: `Internal`, `Aliases`, `WWW`, `EMail`,
 | `TrayIcon` / `BalloonTips` | tray presence / notifications | `1` / `1` |
 | `Transparent` | window alpha `0..255` | `255` |
 | `AutoHide` / `AutoHideValue` | auto-hide after N idle seconds | `0` / `30` |
+| `Priority` | process class: `idle` · `normal` · `high` · `realtime` | `normal` |
 
 ### `[Type]` (EasyType completion)
 | Key | Meaning | Default |
 |---|---|---|
 | `EasyType` | `0` off · `1` easy · `2` linux-style (Tab completes, repeat Tab cycles) | `2` |
-| `UseInternalET` / `UseAliasET` / `UseHistoryET` | completion sources | `1` |
+| `UseInternalET` / `UseAliasET` / `UseHistoryET` / `UseSysAliasET` | completion sources | `1` |
 
 ### `[Color]` (scheme 0 — console)
 COLORREF integers (`0x00BBGGRR` as decimal); `-1` = system default:
 `ConsoleBG`, `ConsoleFG`. (Hint/DropDown colors and schemes 1–2 land with EasyType popups.)
 
 ### `[Font]`
-`Name` (default `Courier New`), `Size` (`18`), `Bold` (`1`).
+`Name` (default `Courier New`), `Size` (`18`), `Bold` (`1`),
+`ApplyEnglish=1` — switch the keyboard layout to US-English while the console opens
+(TypeAndRun parity, avoids typing commands in the wrong layout).
 
 ### `[History]` / `[Undo]`
 `[History] Max=200` plus per-type save toggles (TypeAndRun parity):
@@ -105,6 +108,18 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 `ExecuteEmailSound`, `ExecuteFileSound`, `ExecuteFolderSound`, `ExecutePluginSound`,
 `ExecuteShellSound`. Relative paths resolve against the portable `Sounds\` folder;
 `none` disables one sound.
+
+### `[SysAliases]` — system commands (TypeAndRun parity)
+`~name = action` lines, e.g. `~notes = notepad.exe`. An empty/absent section loads
+the built-in table: `~lock` · `~logoff` · `~sleep` · `~screensave` · `~reboot`.
+They are Tab-completed (toggle `[Type] UseSysAliasET`), can use `%s`/`%1..%n`,
+are gated by `[Exec] SysAlias` (alias toggle) and the last one can be killed with
+**Shift+Enter** like a normal alias.
+
+### `Ignores.ini` — stay hidden over apps (BadApp parity)
+Separate portable file next to the exe (not in TypeBox.ini): one pattern per line,
+process **file name** or **window class**, wildcards `*` `?`, `;`/`#` comments.
+While the foreground window matches, the hotkey keeps the console hidden.
 
 ### Other sections
 `[Shell] Command / Args` (default `cmd.exe` `/c`), `[Config]`, `[Hint]`,

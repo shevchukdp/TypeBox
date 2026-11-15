@@ -33,16 +33,19 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.4.0):
+Working today (v0.5.0):
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)
 - ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware, AutoHide)
 - ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`),
   legacy pipe form `action|dir|state`, URLs, `mailto:`, files/folders, shell (`cmd.exe /c`)
-- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo`
+- ✅ **System aliases** (`[SysAliases]`): `~lock · ~logoff · ~sleep · ~screensave · ~reboot`
+  defaults, user table overridable; **Shift+Enter** kills the last alias process
+- ✅ **Ignores.ini (BadApp)** — stay hidden over listed apps (process/class, wildcards)
+- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo` `/log` `/sys`
 - ✅ **Plugin host — TypeAndRun ABI-compatible** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`):
   drop DLLs into the portable `Plugins\` folder; example with calculator in
   [`examples/plugin_calc`](examples/plugin_calc/calc.c) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md)
-- ✅ **EasyType completion** — `Tab` completes from commands/aliases/plugins/history, cycles on repeat
+- ✅ **EasyType completion** — `Tab` completes from commands/aliases/sys-aliases/plugins/history, cycles on repeat
 - ✅ Tray icon + balloon tips · sounds per execution type · undo (`Ctrl+Z`)
 - ✅ Persistent history (`↑/↓`, portable `History.dat`, per-type toggles) · single instance + `WM_COPYDATA` IPC
 - ✅ INI config next to the exe — portable

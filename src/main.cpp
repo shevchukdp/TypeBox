@@ -56,6 +56,12 @@ struct Alias {
     int          state = SW_SHOWNORMAL; // window state (pipe form field 4)
 };
 
+// TypeAndRun system aliases: ~lock, ~logoff, ... (name starts with '~')
+struct SysAlias {
+    std::wstring name;
+    std::wstring action;
+};
+
 struct Settings {
     // [Show]
     int  width = 720, height = 40, x = -1, y = -1;
@@ -71,9 +77,12 @@ struct Settings {
     // [Font]
     std::wstring fontName = L"Courier New";
     int  fontSize = 18, fontBold = 1;
+    bool applyEnglish = false;   // force US-English layout when the console opens
+    // [Show] Priority of the TypeBox process: idle|normal|high|realtime
+    std::wstring priority = L"normal";
     // [Type] EasyType completion
     int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
-    bool etInternal = true, etAlias = true, etHistory = true;
+    bool etInternal = true, etAlias = true, etHistory = true, etSysAlias = true;
     // [Color] scheme 0 (COLORREF integers, -1 = system default)
     int  consoleBg = -1, consoleFg = -1;
     // [History] [Undo]
@@ -105,6 +114,10 @@ static std::wstring              g_iniPath;
 static std::vector<std::wstring> g_history;
 static size_t                    g_histPos = 0;
 static std::vector<Alias>        g_aliases;
+static std::vector<SysAlias>     g_sysAliases;
+static std::vector<std::wstring> g_ignores;    // Ignores.ini entries (BadApp)
+static HANDLE                    g_aliasProc = nullptr; // last alias process
+static std::wstring              g_aliasName;
 static NOTIFYICONDATAW           g_nid     = {};
 static std::wstring              g_lastRun; // for Undo
 // EasyType completion state
@@ -361,6 +374,9 @@ static void LogInfo(const std::wstring& msg) { LogWrite(L"INFO", msg); }
 
 // ---------------------------------------------------------------- settings
 
+static void LoadSysAliases();
+static void LoadIgnores();
+
 static void LoadSettings() {
     g_set.width             = ReadIniInt(L"Show", L"Width", 720);
     g_set.height            = ReadIniInt(L"Show", L"Height", 40);
@@ -387,11 +403,14 @@ static void LoadSettings() {
     g_set.fontName = ReadIniStr(L"Font", L"Name", L"Courier New");
     g_set.fontSize = ReadIniInt(L"Font", L"Size", 18);
     g_set.fontBold = ReadIniInt(L"Font", L"Bold", 1);
+    g_set.applyEnglish = ReadIniBool(L"Font", L"ApplyEnglish", false);
+    g_set.priority = Lower(Trim(ReadIniStr(L"Show", L"Priority", L"normal")));
 
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
     g_set.etInternal = ReadIniBool(L"Type", L"UseInternalET", true);
     g_set.etAlias    = ReadIniBool(L"Type", L"UseAliasET", true);
     g_set.etHistory  = ReadIniBool(L"Type", L"UseHistoryET", true);
+    g_set.etSysAlias = ReadIniBool(L"Type", L"UseSysAliasET", true);
 
     g_set.consoleBg = ReadIniInt(L"Color", L"ConsoleBG", -1);
     g_set.consoleFg = ReadIniInt(L"Color", L"ConsoleFG", -1);
@@ -420,6 +439,9 @@ static void LoadSettings() {
     g_hotkey.ctrl   = ReadIniBool(L"HotKey", L"CtrlKey",  false);
     g_hotkey.shift  = ReadIniBool(L"HotKey", L"ShiftKey", false);
     g_hotkey.win    = ReadIniBool(L"HotKey", L"WinKey",   false);
+
+    LoadSysAliases();
+    LoadIgnores();
 }
 
 // Load aliases from [Aliases] of TypeBox.ini and, when present, from a
@@ -464,6 +486,101 @@ static const Alias* FindAlias(const std::wstring& word) {
     for (const auto& a : g_aliases)
         if (_wcsicmp(a.name.c_str(), word.c_str()) == 0) return &a;
     return nullptr;
+}
+
+// ------------------------------------------------- system aliases ([SysAliases])
+//
+// TypeAndRun had a system command table (~lock, ~logoff, ~cdeject ...).
+// A user section overrides everything; otherwise the default table applies.
+
+static void LoadSysAliases() {
+    g_sysAliases.clear();
+    std::vector<wchar_t> buf(64 * 1024);
+    DWORD n = GetPrivateProfileSectionW(L"SysAliases", buf.data(), (DWORD)buf.size(), g_iniPath.c_str());
+    for (wchar_t* p = buf.data(); p < buf.data() + n; ) {
+        std::wstring line(p);
+        p += line.size() + 1;
+        if (line.empty() || line[0] == L';' || line[0] == L'[') continue;
+        size_t eq = line.find(L'=');
+        if (eq == std::wstring::npos) continue;
+        SysAlias sa;
+        sa.name = Trim(line.substr(0, eq));
+        sa.action = Trim(line.substr(eq + 1));
+        if (!sa.name.empty() && !sa.action.empty()) g_sysAliases.push_back(sa);
+    }
+    if (g_sysAliases.empty()) { // TypeAndRun-style defaults
+        const wchar_t* def[][2] = {
+            { L"~lock",       L"rundll32.exe user32.dll,LockWorkStation" },
+            { L"~logoff",     L"shutdown.exe /l" },
+            { L"~sleep",      L" rundll32.exe powrprof.dll,SetSuspendState 0,1,0" },
+            { L"~screensave", L"control.exe desk.cpl,,@screensaver" },
+            { L"~reboot",     L"shutdown.exe /r /t 5" },
+        };
+        for (auto& d : def) g_sysAliases.push_back({ d[0], Trim(d[1]) });
+    }
+}
+
+static const SysAlias* FindSysAlias(const std::wstring& word) {
+    for (const auto& s : g_sysAliases)
+        if (_wcsicmp(s.name.c_str(), word.c_str()) == 0) return &s;
+    return nullptr;
+}
+
+// ------------------------------------------------------------- Ignores.ini
+//
+// TypeAndRun BadApp: do not pop the console over the listed applications.
+// One pattern per line in the portable Ignores.ini (process file name or
+// window class, wildcards * and ?, ';' starts a comment).
+
+static bool WildMatch(const std::wstring& pat, const std::wstring& s) {
+    size_t p = 0, i = 0, star = std::wstring::npos, mark = 0;
+    while (i < s.size()) {
+        if (p < pat.size() && (towlower(pat[p]) == towlower(s[i]) || pat[p] == L'?')) { ++p; ++i; }
+        else if (p < pat.size() && pat[p] == L'*') { star = p++; mark = i; }
+        else if (star != std::wstring::npos) { p = star + 1; i = ++mark; }
+        else return false;
+    }
+    while (p < pat.size() && pat[p] == L'*') ++p;
+    return p == pat.size();
+}
+
+static void LoadIgnores() {
+    g_ignores.clear();
+    std::ifstream f((ExeDir() + L"Ignores.ini").c_str(), std::ios::binary);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        std::wstring e = Trim(FromUtf8(line));
+        if (e.empty() || e[0] == L';' || e[0] == L'#') continue;
+        g_ignores.push_back(e);
+    }
+}
+
+static bool AppIgnored() {
+    if (g_ignores.empty()) return false;
+    HWND fg = GetForegroundWindow();
+    if (!fg) return false;
+    std::wstring proc;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    if (pid) {
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+        if (h) {
+            wchar_t buf[MAX_PATH] = {};
+            DWORD n = MAX_PATH;
+            if (QueryFullProcessImageNameW(h, 0, buf, &n))
+                proc = PathFindFileNameW(buf);
+            CloseHandle(h);
+        }
+    }
+    wchar_t cls[128] = {};
+    GetClassNameW(fg, cls, 128);
+    for (const auto& pat : g_ignores) {
+        if ((!proc.empty() && WildMatch(pat, proc)) || WildMatch(pat, cls))
+            return true;
+    }
+    return false;
 }
 
 // ---------------------------------------------------------------- history
@@ -740,11 +857,13 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         std::wstring msg =
             L"TypeBox " + WVersion() + L" — universal hotkey console + launcher.\n\n"
             L"Type an alias, app name, URL, e-mail, file or command and press Enter.\n"
-            L"Up/Down browse history, Esc hides, Ctrl+Z restores the last command.\n\n"
+            L"~commands run system actions (~lock ~logoff ~sleep ~screensave ~reboot).\n"
+            L"Up/Down browse history, Esc hides, Ctrl+Z restores the last command.\n"
+            L"Shift+Enter kills the process started by the last alias.\n\n"
             L"Internal commands:\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
-            L"TypeBox additions: /export <file>  /import <file>  /undo  /log";
+            L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
@@ -760,9 +879,11 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         bool iniOk = PathFileExistsW(g_iniPath.c_str());
         wchar_t msg[512];
         wsprintfW(msg,
-            L"TypeBox.ini: %s\nAliases loaded: %d\nHistory items: %d\nHotkey registered: %s",
+            L"TypeBox.ini: %s\nAliases loaded: %d  SysAliases: %d\nIgnores (Ignores.ini): %d\n"
+            L"History items: %d\nHotkey registered: %s",
             iniOk ? L"found" : L"MISSING (using defaults)",
-            (int)g_aliases.size(), (int)g_history.size(),
+            (int)g_aliases.size(), (int)g_sysAliases.size(), (int)g_ignores.size(),
+            (int)g_history.size(),
             g_hotkey.key ? L"yes" : L"no");
         MessageBoxW(mainWnd, msg, L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/config" || c == L"/settings") {
@@ -839,6 +960,34 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             SetWindowTextW(g_edit, g_lastRun.c_str());
             SendMessageW(g_edit, EM_SETSEL, -1, 0);
         }
+    } else if (c == L"/sys") {
+        // Info display (PowerToys Run-style starter): RAM/CPU/uptime/battery to
+        // the portable log + tray balloon — never blocks the console.
+        MEMORYSTATUSEX ms = { sizeof(ms) };
+        GlobalMemoryStatusEx(&ms);
+        SYSTEM_POWER_STATUS ps = {};
+        GetSystemPowerStatus(&ps);
+        SYSTEM_INFO sysinf; GetSystemInfo(&sysinf);
+        ULONGLONG upsec = GetTickCount64() / 1000;
+        wchar_t bat[48] = L"battery: none";
+        if (ps.BatteryFlag != 128)
+            wsprintfW(bat, L"battery %u%%%s", (unsigned)ps.BatteryLifePercent,
+                      (ps.BatteryFlag & 0x08) ? L" (charging)" : L"");
+        wchar_t txt[512];
+        wsprintfW(txt,
+            L"RAM %u/%u MB free | CPU %u cores | uptime %u d %02u:%02u | %s",
+            (unsigned)(ms.ullAvailPhys / 1048576), (unsigned)(ms.ullTotalPhys / 1048576),
+            (unsigned)sysinf.dwNumberOfProcessors,
+            (unsigned)(upsec / 86400), (unsigned)((upsec / 3600) % 24),
+            (unsigned)((upsec / 60) % 60), bat);
+        LogInfo(L"/sys: " + std::wstring(txt));
+        if (g_nid.hWnd) {
+            g_nid.uFlags = NIF_INFO;
+            g_nid.dwInfoFlags = NIIF_INFO;
+            lstrcpynW(g_nid.szInfoTitle, L"TypeBox — system", ARRAYSIZE(g_nid.szInfoTitle));
+            lstrcpynW(g_nid.szInfo, txt, ARRAYSIZE(g_nid.szInfo));
+            Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+        }
     } else if (c == L"/log") {
         std::wstring p = LogPath();
         if (!p.empty() && PathFileExistsW(p.c_str()))
@@ -892,15 +1041,53 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
             std::wstring prog = FirstWord(cmd);
             std::wstring args = RestWords(cmd);
-            HINSTANCE hres = ShellExecuteW(mainWnd, L"open", prog.c_str(),
-                               args.empty() ? nullptr : args.c_str(),
-                               a->dir.empty() ? nullptr : a->dir.c_str(),
-                               a->state);
-            if ((INT_PTR)hres <= 32)
+            // ShellExecuteEx with NOCLOSEPROCESS so Shift+Enter can kill the app
+            SHELLEXECUTEINFOW sei = { sizeof(sei) };
+            sei.fMask       = SEE_MASK_NOCLOSEPROCESS;
+            sei.hwnd        = mainWnd;
+            sei.lpVerb      = L"open";
+            sei.lpFile      = prog.c_str();
+            sei.lpParameters = args.empty() ? nullptr : args.c_str();
+            sei.lpDirectory = a->dir.empty() ? nullptr : a->dir.c_str();
+            sei.nShow       = a->state;
+            if (ShellExecuteExW(&sei)) {
+                if (g_aliasProc) CloseHandle(g_aliasProc);
+                g_aliasProc = sei.hProcess;   // may be null for shell verb relaunches
+                g_aliasName = a->name;
+                LogInfo(L"alias started: " + a->name + L" (handle " +
+                        (sei.hProcess ? std::wstring(L"ok") : std::wstring(L"none")) + L")");
+            } else {
                 LogError(L"alias failed: " + a->name + L" -> " + cmd +
-                         L" (ShellExecute code " + std::to_wstring((int)(INT_PTR)hres) + L")");
+                         L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
+            }
             PlayTypeSound(L"ExecuteAliasSound", L"Sounds\\alias.wav");
             return EXC_ALIAS;
+        }
+    }
+
+    // 1b) system alias (~lock, ~logoff, ...) — TypeAndRun system table
+    if (g_set.execAliases && !word.empty() && word[0] == L'~') {
+        if (const SysAlias* sa = FindSysAlias(word)) {
+            std::wstring cmd = ExpandEnv(Substitute(sa->action, rest));
+            std::wstring prog = FirstWord(cmd);
+            std::wstring args = RestWords(cmd);
+            SHELLEXECUTEINFOW sei = { sizeof(sei) };
+            sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
+            sei.hwnd         = mainWnd;
+            sei.lpVerb       = L"open";
+            sei.lpFile       = prog.c_str();
+            sei.lpParameters = args.empty() ? nullptr : args.c_str();
+            sei.nShow        = SW_SHOWNORMAL;
+            if (ShellExecuteExW(&sei)) {
+                if (g_aliasProc) CloseHandle(g_aliasProc);
+                g_aliasProc = sei.hProcess;
+                g_aliasName = sa->name;
+            } else {
+                LogError(L"sysalias failed: " + sa->name + L" -> " + cmd +
+                         L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
+            }
+            PlayTypeSound(L"ExecuteSysAliasSound", L"Sounds\\sysalias.wav");
+            return EXC_SYSALIAS;
         }
     }
 
@@ -983,6 +1170,8 @@ static void ShowBox(HWND mainWnd) {
     }
     SetForegroundWindow(mainWnd);
     SetFocus(g_edit);
+    if (g_set.applyEnglish) // [Font] ApplyEnglish: type commands in EN layout (TypeAndRun)
+        ActivateKeyboardLayout((HKL)MAKELONG(0x409, 0x0409), 0);
     SendMessageW(g_edit, EM_SETSEL, 0, -1);
     g_visible = true;
     g_histPos = g_history.size();
@@ -1070,11 +1259,13 @@ static void TabComplete(HWND edit) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
                      L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
                      L"/inidir", L"/inifiles", L"/load", L"/log", L"/reread", L"/settings",
-                     L"/show", L"/unload", L"/undo" })
+                     L"/show", L"/sys", L"/unload", L"/undo" })
                     add(cmd);
             }
             if (g_set.etAlias)
                 for (const auto& a : g_aliases) add(a.name);
+            if (g_set.etSysAlias)
+                for (const auto& s : g_sysAliases) add(s.name);
             if (g_set.execPlugins)
                 for (auto& p : g_plugins)
                     if (p.GetCount && p.GetString)
@@ -1122,7 +1313,28 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
     switch (msg) {
     case WM_KEYDOWN:
         switch (wp) {
-        case VK_RETURN: Submit(mainWnd);  return 0;
+        case VK_RETURN: {
+            // Shift+Enter kills the process started by the last alias (TypeAndRun parity).
+            // Physical shift lives in GetKeyState, not in WM_KEYDOWN lParam bits.
+            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0 ||
+                         (GET_KEYSTATE_WPARAM(lp) & MK_SHIFT) != 0;
+            if (shift && g_aliasProc) {
+                DWORD w = WaitForSingleObject(g_aliasProc, 0);
+                if (w == WAIT_TIMEOUT) {
+                    TerminateProcess(g_aliasProc, 0);
+                    LogInfo(L"Shift+Enter: killed alias process " + g_aliasName);
+                } else {
+                    LogInfo(L"Shift+Enter: nothing to kill (" + g_aliasName +
+                            L", wait=" + std::to_wstring(w) +
+                            L", gle=" + std::to_wstring(GetLastError()) + L")");
+                }
+                CloseHandle(g_aliasProc);
+                g_aliasProc = nullptr;
+                return 0;
+            }
+            if (shift) { LogInfo(L"Shift+Enter: no running alias process to kill"); return 0; }
+            Submit(mainWnd);  return 0;
+        }
         case VK_ESCAPE: HideBox(mainWnd); return 0;
         case VK_TAB: TabComplete(hWnd);  return 0;
         case VK_UP:
@@ -1196,7 +1408,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     case WM_HOTKEY:
-        if (wp == kHotkeyId) g_visible ? HideBox(hWnd) : ShowBox(hWnd);
+        if (wp == kHotkeyId) {
+            // Ignores.ini (TypeAndRun BadApp): stay hidden over listed apps
+            if (!g_visible && AppIgnored()) return 0;
+            g_visible ? HideBox(hWnd) : ShowBox(hWnd);
+        }
         return 0;
     case WM_ACTIVATE:
         if (LOWORD(wp) == WA_INACTIVE && g_visible && g_set.hideOnDeactivate)
@@ -1234,6 +1450,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         UnregisterHotKey(hWnd, kHotkeyId);
         RemoveTrayIcon();
+        if (g_aliasProc) { CloseHandle(g_aliasProc); g_aliasProc = nullptr; }
         CallPluginsUnload();
         for (auto& p : g_plugins)
             if (p.hmod) FreeLibrary(p.hmod);
@@ -1311,6 +1528,13 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     LoadAliases();
     LoadHistory();
     DiscoverPlugins();
+
+    // [Show] Priority — process class of TypeBox itself
+    DWORD pc = NORMAL_PRIORITY_CLASS;
+    if      (g_set.priority == L"idle")     pc = IDLE_PRIORITY_CLASS;
+    else if (g_set.priority == L"high")     pc = HIGH_PRIORITY_CLASS;
+    else if (g_set.priority == L"realtime") pc = REALTIME_PRIORITY_CLASS;
+    SetPriorityClass(GetCurrentProcess(), pc);
     if (g_set.consoleBg >= 0)
         g_bgBrush = CreateSolidBrush((COLORREF)g_set.consoleBg);
 

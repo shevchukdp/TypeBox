@@ -3,6 +3,33 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.5.0] - 2026-11-15
+
+### Added
+- **System aliases (`[SysAliases]`)** — TypeAndRun-style `~name = action` commands
+  with safe built-in defaults `~lock · ~logoff · ~sleep · ~screensave · ~reboot`;
+  user section replaces the table; `%s`/`%1..%n` supported; Tab-completed
+  (`[Type] UseSysAliasET`); logged on failure (`sysalias failed: ...`).
+- **Ignores.ini (BadApp parity)** — portable file of process-name / window-class
+  patterns (wildcards `*` `?`); while the foreground window matches, the hotkey
+  keeps the console hidden.
+- **Shift+Enter kills the last alias process** — `ShellExecuteExW`
+  (`SEE_MASK_NOCLOSEPROCESS`) keeps the handle, `TerminateProcess` on demand;
+  works for aliases and sys aliases; result visible in the log.
+- **`[Show] Priority`** — process class of TypeBox itself:
+  `idle · normal · high · realtime` (`SetPriorityClass`).
+- **`[Font] ApplyEnglish`** — force US-English keyboard layout when the console
+  opens (TypeAndRun parity, no more typing commands in the wrong layout).
+- **`/sys` command** — RAM/CPU/uptime/battery snapshot to the portable log and a
+  tray balloon (non-blocking, PowerToys-Run-style info line).
+- `/checkconfig` now also reports sys aliases and Ignores counts.
+
+### Verified
+- End-to-end harness (C helper posts WM_HOTKEY / WM_KEYDOWN): hotkey toggle,
+  Ignores suppression over the foreground app, sys alias launch, alias launch
+  with handle tracking, Shift+Enter kill — all confirmed through the portable log
+  (`alias started: cmd (handle ok)` → `Shift+Enter: killed alias process cmd`).
+
 ## [0.4.0] - 2026-11-15
 
 ### Added

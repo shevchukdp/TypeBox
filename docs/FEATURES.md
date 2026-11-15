@@ -22,7 +22,7 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 | DestroyForm (recreate on show to avoid focus bugs) | 📋 |
 | TrayIcon, BalloonTips | ✅ (context menu: show · config · exit) |
 | AutoHide + AutoHideValue (seconds) | ✅ |
-| Priority (process class of TypeBox itself) | 📋 |
+| Priority (process class of TypeBox itself) | ✅ `[Show] Priority=idle\|normal\|high\|realtime` |
 | PutMouseIntoConsole | 📋 |
 | Auto-hide on deactivate | ✅ |
 
@@ -31,22 +31,23 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 |---|---|
 | Key, AltKey, CtrlKey, ShiftKey, WinKey (RegisterHotKey) | ✅ |
 | RereadHotKey (reload hotkey before each show) | 📋 |
-| Ignores.ini — do not show over listed apps (BadApp) | 📋 |
+| Ignores.ini — do not show over listed apps (BadApp) | ✅ process name / window class, wildcards |
 
 ## Font  `[Font]`
-Name, Size, Bold — ✅. Italic, StrikeOut, UnderLine, Align (L/C/R), AutoSize,
-ApplyEnglish (force EN layout on input), LockEnglish. → 📋
+Name, Size, Bold — ✅. ApplyEnglish (force EN layout on input) — ✅ `[Font] ApplyEnglish`.
+Italic, StrikeOut, UnderLine, Align (L/C/R), AutoSize,
+LockEnglish. → 📋
 
 ## EasyType / completion  `[Type]`
 EasyType modes: Off / Easy / Linux-style — ✅ `Tab` completes the word at the caret from
-internal commands + aliases + history, repeated `Tab` cycles matches (`[Type] EasyType`,
-`UseInternalET/UseAliasET/UseHistoryET`); AdvancedBackspace (word-wise ✅).
+internal commands + aliases + history + sys aliases (`UseSysAliasET`), repeated `Tab` cycles matches
+(`[Type] EasyType`, `UseInternalET/UseAliasET/UseHistoryET`); AdvancedBackspace (word-wise ✅).
 CaseSensitivity; AdvancedSpace; DeleteDuplicates; colored hint per mode → 📋 (popup, Phase 2)
 
 ## Execution  `[Exec]`
 Internal commands · Aliases · SystemAliases · WWW · EMail · Folders · Files · Plugins ·
-Shell (cmd /c and /k) · DefaultAction (runas etc.). → ✅ for Internal/Aliases/WWW/EMail/
-Files/Shell with `[Exec]` toggles · 📋 SystemAliases, Plugins, DefaultAction
+Shell (cmd /c and /k) · DefaultAction (runas etc.). → ✅ for Internal/Aliases/SysAliases/
+WWW/EMail/Files/Shell/Plugins with `[Exec]` toggles · 📋 DefaultAction
 
 ## Aliases (`Config.ini` → TypeBox `[Aliases]`)
 - Fields: `alias | action | param | dir | state | priori` (+ comment) — ✅ (dir, state applied)
@@ -54,11 +55,12 @@ Files/Shell with `[Exec]` toggles · 📋 SystemAliases, Plugins, DefaultAction
 - `%ENVVAR%` and `%TARDIR%`/`%TYPEBOXDIR%` expansion — ✅
 - working dir, window state — ✅ · process priority, runas/default action — 📋
 - MoveTop on use, AutoSort, editor UI — 📋
-- Shift+Enter kills the alias process (KillTask via Toolhelp32) — 📋
+- Shift+Enter kills the process started by the last alias — ✅ (ShellExecuteEx handle + TerminateProcess)
 - Dead-alias check (CheckDeadAliases/ReturnDeadAliases, backup file, confirmations) — 📋
 
 ## System aliases
-Name/Action/Path tables from config (system commands like `~lock`, `~logoff`, `~cdeject`) — 📋
+`[SysAliases]` name=action table (defaults: `~lock ~logoff ~sleep ~screensave ~reboot`),
+Tab-completed, Shift+Enter-killable — ✅
 
 ## History  `[History]`
 MaxHistory — ✅; persistence to portable `History.dat` (UTF-8) — ✅; ↑/↓ scroll — ✅;
