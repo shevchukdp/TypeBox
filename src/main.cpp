@@ -206,7 +206,32 @@ static std::vector<std::wstring> SplitPipe(const std::wstring& s) {
     return parts;
 }
 
+// TypeBox's own environment, mirroring the Windows "Environment Variables"
+// dialog (System Properties -> Advanced): [Path] folders are prepended to the
+// process PATH (aliases, shell lines and every child process pick them up),
+// [Variables] define custom %NAME% substitutions.
+struct EnvVar { std::wstring name, value, raw; }; // raw = as written in the INI
+static std::vector<EnvVar>       g_envVars;
+static std::vector<std::wstring> g_pathDirs;   // expanded
+static std::vector<std::wstring> g_pathRaw;    // as written in the INI (for GUI round-trip)
+static std::wstring              g_basePath;   // PATH as it was when the process started
+
+// Prepend our folders to PATH. Called at startup and whenever settings apply.
+static void ApplyEnvPath() {
+    if (g_basePath.empty()) {
+        std::vector<wchar_t> buf(64 * 1024);
+        DWORD n = GetEnvironmentVariableW(L"PATH", buf.data(), (DWORD)buf.size());
+        g_basePath = (n > 0 && n < buf.size()) ? buf.data() : L"";
+    }
+    std::wstring merged;
+    for (auto& d : g_pathDirs) { if (d.empty()) continue; merged += d; merged += L';'; }
+    merged += g_basePath;
+    SetEnvironmentVariableW(L"PATH", merged.c_str());
+}
+
 // Replace %VAR% (any env var, case-insensitive) and %TYPEBOXDIR%.
+// Custom [Variables] from TypeBox.ini (TypeBox's own "user variables", OS-style)
+// take precedence over the process environment.
 static std::wstring ExpandEnv(const std::wstring& s) {
     std::wstring out;
     for (size_t i = 0; i < s.size();) {
@@ -219,9 +244,16 @@ static std::wstring ExpandEnv(const std::wstring& s) {
                     std::wstring d = ExeDir();
                     val = d.substr(0, d.size() - 1); // like legacy %TARDIR%
                 } else {
-                    wchar_t buf[4096] = {};
-                    DWORD n = GetEnvironmentVariableW(name.c_str(), buf, 4096);
-                    if (n > 0 && n < 4096) val = buf;
+                    bool custom = false;
+                    for (auto& v : g_envVars)
+                        if (_wcsicmp(v.name.c_str(), name.c_str()) == 0) {
+                            val = v.value; custom = true; break;
+                        }
+                    if (!custom) {
+                        wchar_t buf[4096] = {};
+                        DWORD n = GetEnvironmentVariableW(name.c_str(), buf, 4096);
+                        if (n > 0 && n < 4096) val = buf;
+                    }
                 }
                 out += val; // unknown vars expand to empty (like TypeAndRun)
                 i = close + 1;
@@ -394,6 +426,50 @@ static const wchar_t* kSoundLabels[9] = {
     L"Internal commands", L"Aliases", L"System aliases", L"Websites",
     L"E-mail", L"Files", L"Folders", L"Plugins", L"Shell commands" };
 
+// [Path] one folder per key (Dir1=.., 2=..) or semicolons in "Extra=..";
+// [Variables] name=value. %VARS% are expanded, comments ignored.
+static void LoadEnvironment() {
+    g_pathDirs.clear();
+    g_envVars.clear();
+
+    auto parseSection = [&](const wchar_t* section,
+                            std::function<void(const std::wstring&, const std::wstring&)> on) {
+        std::vector<wchar_t> buf(64 * 1024);
+        DWORD n = GetPrivateProfileSectionW(section, buf.data(), (DWORD)buf.size(), g_iniPath.c_str());
+        for (wchar_t* q = buf.data(); q < buf.data() + n; ) {
+            std::wstring ln(q);
+            q += ln.size() + 1;
+            if (ln.empty() || ln[0] == L';') continue;
+            size_t eq = ln.find(L'=');
+            if (eq == std::wstring::npos) continue;
+            on(Trim(ln.substr(0, eq)), Trim(ln.substr(eq + 1)));
+        }
+    };
+
+    // variables first: [Path] entries may reference %THEM%
+    parseSection(L"Variables", [&](const std::wstring& key, const std::wstring& value) {
+        if (key.empty() || value.empty()) return;
+        EnvVar v; v.name = key; v.raw = value; v.value = ExpandEnv(value);
+        g_envVars.push_back(v);
+    });
+    parseSection(L"Path", [&](const std::wstring&, const std::wstring& value) {
+        // split on ';' so both "Extra=a;b" and one-dir-per-key work
+        size_t start = 0;
+        while (start <= value.size()) {
+            size_t sc = value.find(L';', start);
+            std::wstring raw = Trim(value.substr(start, sc == std::wstring::npos
+                                                       ? std::wstring::npos : sc - start));
+            if (!raw.empty()) {
+                std::wstring d = ExpandEnv(raw);
+                if (d.back() == L'\\') d.pop_back();
+                if (!d.empty()) { g_pathDirs.push_back(d); g_pathRaw.push_back(raw); }
+            }
+            if (sc == std::wstring::npos) break;
+            start = sc + 1;
+        }
+    });
+}
+
 static void LoadSettings() {
     g_set.width             = ReadIniInt(L"Show", L"Width", 720);
     g_set.height            = ReadIniInt(L"Show", L"Height", 40);
@@ -477,6 +553,8 @@ static void LoadSettings() {
     g_hotkey.shift  = ReadIniBool(L"HotKey", L"ShiftKey", false);
     g_hotkey.win    = ReadIniBool(L"HotKey", L"WinKey",   false);
 
+    LoadEnvironment();
+    ApplyEnvPath();                    // custom PATH takes effect immediately
     LoadSysAliases();
     LoadIgnores();
 }
@@ -903,7 +981,7 @@ static void ReloadHotkey(HWND mainWnd);
 static void ResetET();
 static void OpenSettings(HWND mainWnd, int page);
 enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
-       PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_COUNT };
+       PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_ENV, PG_COUNT };
 
 // ---------------------------------------------------------------- internal commands
 //
@@ -922,7 +1000,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Internal commands:\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
-            L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig\n"
+            L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
@@ -965,6 +1043,16 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         }
         if (list.empty()) list = L"(no .ini files found)\n";
         MessageBoxW(mainWnd, list.c_str(), L"TypeBox — ini files", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/path") {
+        // Show the own PATH folders and %variables% (OS Environment Variables style).
+        std::wstring msg;
+        for (auto& d : g_pathDirs) msg += d + L"\n";
+        if (msg.empty()) msg = L"(no [Path] folders)\n";
+        msg += L"\nVariables:\n";
+        for (auto& v : g_envVars) msg += v.name + L" = " + v.value + L"\n";
+        if (g_envVars.empty()) msg += L"(no [Variables])\n";
+        MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — own path & variables",
+                    MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/reread") {
         LoadSettings();
         LoadAliases();
@@ -1106,9 +1194,10 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
             std::wstring prog = FirstWord(cmd);
             std::wstring args = RestWords(cmd);
-            // ShellExecuteEx with NOCLOSEPROCESS so Shift+Enter can kill the app
+            // ShellExecuteEx with NOCLOSEPROCESS so Shift+Enter can kill the app;
+            // FLAG_NO_UI: never pop the system "file not found" dialog — we log it.
             SHELLEXECUTEINFOW sei = { sizeof(sei) };
-            sei.fMask       = SEE_MASK_NOCLOSEPROCESS;
+            sei.fMask       = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
             sei.hwnd        = mainWnd;
             sei.lpVerb      = L"open";
             sei.lpFile      = prog.c_str();
@@ -1137,7 +1226,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             std::wstring prog = FirstWord(cmd);
             std::wstring args = RestWords(cmd);
             SHELLEXECUTEINFOW sei = { sizeof(sei) };
-            sei.fMask        = SEE_MASK_NOCLOSEPROCESS;
+            sei.fMask        = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
             sei.hwnd         = mainWnd;
             sei.lpVerb       = L"open";
             sei.lpFile       = prog.c_str();
@@ -1191,6 +1280,39 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             ShellExecuteW(mainWnd, L"open", expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             PlayTypeSound(dir ? 6 : 5);
             return dir ? EXC_FOLDER : EXC_FILE;
+        }
+    }
+
+    // 4b) own PATH folders ([Path], OS-style): run a bare command name found
+    //     in one of the user's folders. Direct launch keeps the process handle
+    //     so Shift+Enter can kill it, and works even with [Shell] disabled.
+    if (!word.empty() && !g_pathDirs.empty() &&
+        word.find(L'\\') == std::wstring::npos && word.find(L'/') == std::wstring::npos) {
+        static const wchar_t* kExts[] = { L".exe", L".bat", L".cmd", L".com" };
+        for (auto& d : g_pathDirs) {
+            for (auto ext : kExts) {
+                std::wstring cand = d + L'\\' + word + ext;
+                if (GetFileAttributesW(cand.c_str()) == INVALID_FILE_ATTRIBUTES) continue;
+                SHELLEXECUTEINFOW sei = { sizeof(sei) };
+                sei.fMask        = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+                sei.hwnd         = mainWnd;
+                sei.lpVerb       = L"open";
+                sei.lpFile       = cand.c_str();
+                sei.lpParameters = rest.empty() ? nullptr : rest.c_str();
+                sei.lpDirectory  = d.c_str();
+                sei.nShow        = SW_SHOWNORMAL;
+                if (ShellExecuteExW(&sei)) {
+                    if (g_aliasProc) CloseHandle(g_aliasProc);
+                    g_aliasProc = sei.hProcess;
+                    g_aliasName = word;
+                    LogInfo(L"path started: " + word + L" from " + d);
+                } else {
+                    LogError(L"path start failed: " + cand +
+                             L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
+                }
+                PlayTypeSound(8);
+                return EXC_SHELL;
+            }
         }
     }
 
@@ -1322,7 +1444,7 @@ static void TabComplete(HWND edit) {
             if (g_set.etInternal) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
                      L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
-                     L"/inidir", L"/inifiles", L"/load", L"/log", L"/reread", L"/settings",
+                     L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path", L"/reread", L"/settings",
                      L"/show", L"/sys", L"/unload", L"/undo" })
                     add(cmd);
             }
@@ -1379,7 +1501,8 @@ static void ShowTrayMenu(HWND hWnd) {
 
 static const wchar_t* kPages[PG_COUNT] = {
     L"Appearance", L"Console", L"Font", L"Hotkey", L"Execution",
-    L"EasyType", L"History", L"Log", L"Aliases", L"Sounds", L"Plugins" };
+    L"EasyType", L"History", L"Log", L"Aliases", L"Sounds", L"Plugins",
+    L"Environment" };
 
 static HWND  g_setWnd = nullptr;
 static HWND  g_setList = nullptr;
@@ -1403,6 +1526,11 @@ static HWND g_plLb = nullptr, g_plLoadChk = nullptr, g_plHistChk = nullptr,
 struct PluginRow { std::wstring name; int load = 1, saveHist = 1; };
 static std::vector<PluginRow> g_plRows;
 static int g_plSel = -1;
+static HWND g_envPathEdit = nullptr, g_varLb = nullptr,
+      g_varName = nullptr, g_varValue = nullptr;
+static std::vector<std::wstring> g_draftPath;   // raw folder lines
+static std::vector<EnvVar>       g_draftVars;   // name/value/raw
+static int g_varSel = -1;
 
 static std::wstring HotkeyText(const Hotkey& hk) {
     std::wstring s;
@@ -1598,6 +1726,48 @@ static void PluginsReadRow() {
     r.saveHist = SendMessageW(g_plHistChk, BM_GETCHECK, 0, 0) == BST_CHECKED;
 }
 
+// ---------------------------------------------------------------- environment page
+static void VarsFillList() {
+    if (!g_varLb) return;
+    SendMessageW(g_varLb, LB_RESETCONTENT, 0, 0);
+    for (auto& v : g_draftVars) {
+        std::wstring line = v.name + L" = " + v.raw;
+        SendMessageW(g_varLb, LB_ADDSTRING, 0, (LPARAM)line.c_str());
+    }
+    if (g_varSel >= 0 && g_varSel < (int)g_draftVars.size())
+        SendMessageW(g_varLb, LB_SETCURSEL, g_varSel, 0);
+}
+static void VarsEditRow(int idx) {
+    g_varSel = idx;
+    if (idx < 0 || idx >= (int)g_draftVars.size()) return;
+    SetWindowTextW(g_varName,  g_draftVars[idx].name.c_str());
+    SetWindowTextW(g_varValue, g_draftVars[idx].raw.c_str());
+}
+static bool VarsReadInto(EnvVar& v) {
+    v.name = Trim(GetText(g_varName));
+    v.raw  = Trim(GetText(g_varValue));
+    v.value = v.raw;                       // expanded again on next load
+    return !v.name.empty() && !v.raw.empty() && v.name.find(L'%') == std::wstring::npos;
+}
+static void VarsUpdate() {
+    if (g_varSel < 0 || g_varSel >= (int)g_draftVars.size()) return;
+    EnvVar v;
+    if (!VarsReadInto(v)) return;
+    g_draftVars[g_varSel] = v;
+    VarsFillList();
+    SendMessageW(g_varLb, LB_SETCURSEL, g_varSel, 0);
+}
+static void VarsAdd() {
+    EnvVar v;
+    if (!VarsReadInto(v)) return;
+    for (auto& e : g_draftVars)
+        if (_wcsicmp(e.name.c_str(), v.name.c_str()) == 0) return;   // duplicate
+    g_draftVars.push_back(v);
+    g_varSel = (int)g_draftVars.size() - 1;
+    VarsFillList();
+    SendMessageW(g_varLb, LB_SETCURSEL, g_varSel, 0);
+}
+
 static void AliasesAdd() {
     size_t before = g_draftAliases.size();
     g_draftAliases.push_back({});
@@ -1678,6 +1848,16 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     }
                     return 0;
                 }
+                if (!wcscmp(t, L"Add var"))     { VarsAdd();    return 0; }
+                if (!wcscmp(t, L"Update var"))  { VarsUpdate(); return 0; }
+                if (!wcscmp(t, L"Delete var")) {
+                    if (g_varSel >= 0 && g_varSel < (int)g_draftVars.size()) {
+                        g_draftVars.erase(g_draftVars.begin() + g_varSel);
+                        g_varSel = -1;
+                        VarsFillList();
+                    }
+                    return 0;
+                }
                 if (!wcscmp(t, L"Clear history")) {
                     g_history.clear();
                     SaveHistory();
@@ -1739,6 +1919,11 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             PluginsReadRow();
             int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
             if (s >= 0) PluginsEditRow(s);
+            return 0;
+        }
+        if (code == LBN_SELCHANGE && src == g_varLb) {
+            int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
+            if (s >= 0) VarsEditRow(s);
             return 0;
         }
         return 0;
@@ -1983,6 +2168,47 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     MkLabel(g_setPage[PG_PLUGINS],
             L"Dlls live in the portable Plugins\\ folder.", 8, 268, 190);
 
+    // --- Environment (own PATH folders + %variables%, like the OS dialog)
+    MkLabel(g_setPage[PG_ENV], L"Own PATH folders (one per line, %VAR% allowed):",
+            16, 10, 430);
+    g_envPathEdit = MkOn(g_setPage[PG_ENV], L"EDIT", L"",
+                         WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_AUTOHSCROLL,
+                         16, 30, 430, 100);
+    Bind([]{
+        std::wstring joined;
+        for (auto& d : g_draftPath) { joined += d; joined += L"\r\n"; }
+        SetWindowTextW(g_envPathEdit, joined.c_str());
+    }, []{
+        std::vector<wchar_t> buf(8192);
+        GetWindowTextW(g_envPathEdit, buf.data(), 8191);
+        g_draftPath.clear();
+        std::wstring text(buf.data()), cur;
+        for (wchar_t ch : text) {
+            if (ch == L'\r' || ch == L'\n') {
+                std::wstring t = Trim(cur);
+                if (!t.empty()) g_draftPath.push_back(t);
+                cur.clear();
+            } else cur += ch;
+        }
+        std::wstring t = Trim(cur);
+        if (!t.empty()) g_draftPath.push_back(t);
+    });
+    MkLabel(g_setPage[PG_ENV], L"Variables (typed %NAME% expands to the value):",
+            16, 140, 430);
+    g_varLb = MkOn(g_setPage[PG_ENV], L"LISTBOX", L"",
+                   WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 16, 160, 200, 170);
+    int vx = 226;
+    MkLabel(g_setPage[PG_ENV], L"Name",  vx, 162, 50);
+    g_varName  = MkEdit(g_setPage[PG_ENV], L"", vx + 45, 160, 175);
+    MkLabel(g_setPage[PG_ENV], L"Value", vx, 192, 50);
+    g_varValue = MkEdit(g_setPage[PG_ENV], L"", vx + 45, 190, 175);
+    MkButton(g_setPage[PG_ENV], L"Add var",    vx, 222, 84);
+    MkButton(g_setPage[PG_ENV], L"Update var", vx + 90, 222, 84);
+    MkButton(g_setPage[PG_ENV], L"Delete var", vx, 252, 84);
+    MkLabel(g_setPage[PG_ENV],
+            L"Folders extend PATH for aliases, shell\nlines and every started program.",
+            vx, 286, 210);
+
     MkButton(g_setWnd, L"OK",     380, 380, 75);
     MkButton(g_setWnd, L"Apply",  461, 380, 75);
     MkButton(g_setWnd, L"Cancel", 542, 380, 75);
@@ -1999,6 +2225,13 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     }
     PluginsFillList();
     PluginsEditRow(g_plSel);
+
+    // environment page drafts (raw, so %VARS% survive the round-trip)
+    g_draftPath = g_pathRaw;
+    g_draftVars = g_envVars;
+    g_varSel = g_draftVars.empty() ? -1 : 0;
+    VarsFillList();
+    VarsEditRow(g_varSel);
 
     UiLoad();
     SettingsShowPage(startPage);
@@ -2095,6 +2328,14 @@ static void WriteDraftIni() {
         WS_(L"PluginState", (r.name + L"_Load").c_str(),        r.load     ? L"1" : L"0");
         WS_(L"PluginState", (r.name + L"_SaveHistory").c_str(), r.saveHist ? L"1" : L"0");
     }
+
+    // [Path] + [Variables]: rewrite with the dialog's raw lines
+    WritePrivateProfileStringW(L"Path", nullptr, nullptr, g_iniPath.c_str());
+    for (size_t i = 0; i < g_draftPath.size(); ++i)
+        WS_(L"Path", (L"Dir" + std::to_wstring(i + 1)).c_str(), g_draftPath[i]);
+    WritePrivateProfileStringW(L"Variables", nullptr, nullptr, g_iniPath.c_str());
+    for (auto& v : g_draftVars)
+        WS_(L"Variables", v.name.c_str(), v.raw);
 
     // [Aliases]: rewrite section in canonical form
     WritePrivateProfileStringW(L"Aliases", nullptr, nullptr, g_iniPath.c_str());
@@ -2446,6 +2687,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 std::to_wstring(g_aliases.size()) + L" aliases, " +
                 std::to_wstring(g_plugins.size()) + L" plugins, " +
                 std::to_wstring(enabled) + L" enabled");
+        if (!g_pathDirs.empty() || !g_envVars.empty())
+            LogInfo(L"own PATH: " + std::to_wstring(g_pathDirs.size()) +
+                    L" folders, variables: " + std::to_wstring(g_envVars.size()));
     }
 
     AddTrayIcon(mainWnd, true);

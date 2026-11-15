@@ -3,6 +3,37 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.8.0] - 2026-11-15
+
+### Added
+- **Own PATH & variables** — TypeBox's version of the Windows *Environment Variables*
+  dialog (System Properties): `[Path]` folders and `[Variables]` in the portable INI.
+  - `DirN = C:\tools` (or `Extra = a;b;c`, `%VARS%` / `%TYPEBOXDIR%` allowed):
+    typed commands are looked up in your folders first — `mytool` launches
+    `mytool.exe` from a `[Path]` folder directly, with the process handle kept for
+    Shift+Enter; folders are also prepended to PATH so aliases, shell lines and every
+    child program find your tools.
+  - `[Variables] NAME = value` define `%NAME%` substitutions usable in aliases,
+    sysaliases and typed text (they take precedence over real env vars).
+  - Settings dialog gained an **Environment** page: multiline folder box + variable
+    editor (list, name/value, Add/Update/Delete). `[Path]`/`[Variables]` sections are
+    rewritten on OK/Apply; Cancel discards.
+  - `/path` internal command shows the current folders and variables; startup log
+    reports `own PATH: N folders, variables: M`.
+- **Screenshots** — `docs/screenshots/` (console + every settings page) shown in the
+  README and attached to releases.
+
+### Fixed
+- A missing program in an alias/sysalias popped the modal system "file not found"
+  dialog, blocking the main thread — ShellExecuteEx now runs with
+  `SEE_MASK_FLAG_NO_UI`; failures are only logged (`alias failed: ... GetLastError=`).
+
+### Verified
+- `test-v080`: bare-name launch from `[Path]` (`path started: tbtool`), alias resolved
+  through the injected PATH (`alias started: bare`), `%TBTOOLDIR%` folder expansion,
+  GUI folder/variable edits round-trip to INI, Cancel discards them, restart picks up
+  the new folder (`own PATH: 1 folders, variables: 2`).
+
 ## [0.7.0] - 2026-11-15
 
 ### Added

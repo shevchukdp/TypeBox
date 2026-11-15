@@ -10,6 +10,20 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 
 **Download:** [latest release](https://github.com/shevchukdp/TypeBox/releases) — unzip, run `TypeBox.exe`, hotkey `Ctrl+Shift+F2`.
 
+## Screenshots
+
+| The console (hotkey → type → Enter) | Settings → Environment: own PATH & variables |
+|---|---|
+| ![console](docs/screenshots/console.png) | ![env](docs/screenshots/settings-environment.png) |
+
+| Appearance | Font | Hotkey capture |
+|---|---|---|
+| ![a](docs/screenshots/settings-appearance.png) | ![f](docs/screenshots/settings-font.png) | ![h](docs/screenshots/settings-hotkey.png) |
+
+| Alias editor | Plugin manager |
+|---|---|
+| ![al](docs/screenshots/settings-aliases.png) | ![p](docs/screenshots/settings-plugins.png) |
+
 > ### Roots & inspiration
 > **TypeBox grows out of [TypeAndRun](https://github.com/galancev/typeandrun)** by Evgeniy Galantsev (2001–2004, GPL-3.0) — the **direct ancestor** whose idea, command/alias engine and INI config schema this project continues.
 > The UX and feature set draw inspiration from:
@@ -33,8 +47,12 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.7.0):
-- ✅ **Settings dialog** — 11 pages (Appearance · Console · Font · Hotkey · Execution ·
+Working today (v0.8.0):
+- ✅ **Own PATH & variables** — `[Path]` folders + `[Variables]` like the Windows
+  *Environment Variables* dialog, but portable: typed names launch from your folders,
+  PATH is injected for aliases/shell/children, `%NAME%` expands everywhere — `/path`,
+  Settings → Environment
+- ✅ **Settings dialog** — 12 pages (Appearance · Console · Font · Hotkey · Execution ·
   EasyType · History · Log · Aliases editor · Sounds · Plugin manager), scratch copy + Cancel,
   live-apply on OK/Apply (hotkey re-registration, font, geometry, alpha, priority, tray,
   plugin load state) — `/settings`, tray menu

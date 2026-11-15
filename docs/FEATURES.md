@@ -26,6 +26,7 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 | Aliases | editor: list + name/action/dir/state, Add/Update/Delete | ✅ |
 | Sounds | enable + 9 per-type WAV fields (`fraSounds`) | ✅ |
 | Plugins | list + info (GetInfo) + Load-on-start/SaveHistory + Rescan/Unload/About/Options (`fraPlugins`) | ✅ |
+| Environment | own PATH folders + %variables% editor (TypeBox addition, OS-style) | ✅ |
 | Hint / DropDown / Registry / Language / dead-alias checker | — | 📋 Phase 2 |
 
 Scratch-copy editing (Cancel discards), OK/Apply → per-key INI write (comments

@@ -117,7 +117,25 @@ rewritten on every OK/Apply (like `[Aliases]`), so keep manual notes elsewhere.
 `ExecuteShellSound`. Relative paths resolve against the portable `Sounds\` folder;
 `none` disables one sound.
 
+### `[Path]` + `[Variables]` — own environment (TypeBox 0.8.0)
+Like the Windows *Environment Variables* dialog, but fully portable (lives in
+TypeBox.ini, survives moves; edit via Settings → **Environment** or `/path` to inspect):
+```ini
+[Path]
+Dir1 = C:\tools              ; one folder per key...
+Extra = D:\bin;E:\scripts    ; ...or semicolons in "Extra"
+Dir2 = %TYPEBOXDIR%\bin      ; %VARS% are expanded ([Variables] first)
+
+[Variables]
+MYDOCS = %USERPROFILE%\Documents   ; %MYDOCS% works in aliases, sysaliases, typed text
+```
+Typed words matching an executable (`exe|bat|cmd|com`) in a `[Path]` folder launch
+directly — the process stays killable with Shift+Enter (log: `path started: name from dir`).
+The folders are also prepended to the process PATH, so aliases, `cmd /c` shell lines
+and every child program find your tools.
+
 ### `[SysAliases]` — system commands (TypeAndRun parity)
+
 `~name = action` lines, e.g. `~notes = notepad.exe`. An empty/absent section loads
 the built-in table: `~lock` · `~logoff` · `~sleep` · `~screensave` · `~reboot`.
 They are Tab-completed (toggle `[Type] UseSysAliasET`), can use `%s`/`%1..%n`,
@@ -137,8 +155,8 @@ in galancev/typeandrun) and activated as features land.
 ## Settings dialog
 
 `/settings` (or tray → **Settings...**) opens a portable settings window —
-11 pages (Appearance, Console, Font, Hotkey, Execution, EasyType, History, Log,
-Aliases, Sounds, Plugins). It edits a scratch copy: **Cancel discards**; **OK/Apply** write
+12 pages (Appearance, Console, Font, Hotkey, Execution, EasyType, History, Log,
+Aliases, Sounds, Plugins, Environment). It edits a scratch copy: **Cancel discards**; **OK/Apply** write
 `TypeBox.ini` key-by-key (your comments and unknown keys survive; `[Aliases]`
 is rewritten in canonical form) and apply live — hotkey re-registration with a
 log entry on conflict, font, geometry, alpha, priority, tray, AutoHide timer.
