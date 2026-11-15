@@ -1,32 +1,39 @@
 // TypeBox — universal hotkey console + bash + launcher for Windows.
-// Early Phase-1 scaffold. Licensed under GPL-3.0 (see LICENSE / docs/PLAN.md).
+// Licensed under GPL-3.0 (see LICENSE / docs/PLAN.md).
 //
 // Roots: TypeAndRun by Evgeniy Galantsev (github.com/galancev/typeandrun, GPL-3.0)
-// — command/alias engine and INI schema continue that project.
+// — command/alias engine, INI schema, internal commands and plugin ABI continue
+// that project.
 // Inspired by: Microsoft PowerToys Run, Flow Launcher, Wox, Raycast, Alfred,
 // ConEmu (portable INI config), Guake/Yakuake/Drop (console/bash mode).
 //
-// Build (MSVC):
-//   cl /EHsc /std:c++17 /DUNICODE /D_UNICODE src\main.cpp /Fe:TypeBox.exe ^
-//      /link user32.lib shell32.lib shlwapi.lib gdi32.lib comctl32.lib
-// Build (CMake): cmake -S . -B build && cmake --build build --config Release
+// Build (MSVC):  cmake -S . -B build && cmake --build build --config Release
+// Build (MSVC):  cmake -S . -B build && cmake --build build --config Release
+// Build (MinGW): g++ -std=c++17 -DUNICODE -D_UNICODE -O2 src/main.cpp
+//                -o TypeBox.exe -municode -mwindows
+//                -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lwinmm
 
 #include <windows.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <commctrl.h>
+#include <mmsystem.h>
 #include <string>
 #include <vector>
+#include <fstream>
 
-#pragma comment(lib, "user32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "comctl32.lib")
+#ifndef TYPEBOX_VERSION
+#define TYPEBOX_VERSION 0.0.0-dev
+#endif
+#define TB_STR_(x) #x
+#define TB_STR(x) TB_STR_(x)
 
-static const wchar_t* kClassName = L"TypeBoxMain";
-static const wchar_t* kEditName  = L"TypeBoxEdit";
-static const int      kHotkeyId  = 666; // same lineage as TypeAndRun HotKeyId=666
+static const wchar_t* kClassName  = L"TypeBoxMain";
+static const int      kHotkeyId   = 666; // same lineage as TypeAndRun HotKeyId=666
+static const UINT     kTrayMsg    = WM_APP + 1;
+static const UINT     kTrayId     = 1;
+
+// ------------------------------------------------------------------ state
 
 struct Hotkey {
     bool alt = false, ctrl = false, shift = false, win = false;
@@ -41,12 +48,43 @@ struct Hotkey {
     }
 };
 
+struct Alias {
+    std::wstring name;
+    std::wstring action;
+    std::wstring dir;          // working directory (pipe form field 3)
+    int          state = SW_SHOWNORMAL; // window state (pipe form field 4)
+};
+
+struct Settings {
+    // [Show]
+    int  width = 720, height = 40, x = -1, y = -1;
+    bool centerX = true, centerY = true;
+    bool hideOnDeactivate = true, trayIcon = true, balloonTips = true;
+    bool showOnStart = true;
+    int  transparent = 255;    // 0..255 alpha
+    // [Exec]
+    bool execInternal = true, execAliases = true, execWww = true,
+         execEmail = true, execFiles = true, execShell = true;
+    // [Font]
+    std::wstring fontName = L"Courier New";
+    int  fontSize = 18, fontBold = 1;
+    // [History] [Undo]
+    int  historyMax = 200;
+    bool useUndo = true;
+    // [Sounds]
+    bool enableSounds = true;
+};
+
 static Hotkey                    g_hotkey;
+static Settings                  g_set;
 static bool                      g_visible = false;
 static HWND                      g_edit    = nullptr;
 static std::wstring              g_iniPath;
 static std::vector<std::wstring> g_history;
 static size_t                    g_histPos = 0;
+static std::vector<Alias>        g_aliases;
+static NOTIFYICONDATAW           g_nid     = {};
+static std::wstring              g_lastRun; // for Undo
 
 // ---------------------------------------------------------------- utilities
 
@@ -69,11 +107,21 @@ static int ReadIniInt(const wchar_t* sec, const wchar_t* key, int def) {
     return GetPrivateProfileIntW(sec, key, def, g_iniPath.c_str());
 }
 
+static bool ReadIniBool(const wchar_t* sec, const wchar_t* key, bool def) {
+    return ReadIniInt(sec, key, def ? 1 : 0) != 0;
+}
+
 static std::wstring Trim(const std::wstring& s) {
     size_t b = s.find_first_not_of(L" \t\r\n");
     if (b == std::wstring::npos) return L"";
     size_t e = s.find_last_not_of(L" \t\r\n");
     return s.substr(b, e - b + 1);
+}
+
+static std::wstring Lower(const std::wstring& s) {
+    std::wstring o = s;
+    for (auto& c : o) c = (wchar_t)towlower(c);
+    return o;
 }
 
 static std::wstring FirstWord(const std::wstring& s) {
@@ -84,6 +132,30 @@ static std::wstring FirstWord(const std::wstring& s) {
 static std::wstring RestWords(const std::wstring& s) {
     size_t sp = s.find_first_of(L" \t");
     return sp == std::wstring::npos ? L"" : Trim(s.substr(sp + 1));
+}
+
+static std::vector<std::wstring> SplitWords(const std::wstring& s) {
+    std::vector<std::wstring> words;
+    size_t i = 0;
+    while (i < s.size()) {
+        while (i < s.size() && (s[i] == L' ' || s[i] == L'\t')) ++i;
+        size_t b = i;
+        while (i < s.size() && s[i] != L' ' && s[i] != L'\t') ++i;
+        if (i > b) words.push_back(s.substr(b, i - b));
+    }
+    return words;
+}
+
+static std::vector<std::wstring> SplitPipe(const std::wstring& s) {
+    std::vector<std::wstring> parts;
+    size_t start = 0;
+    while (true) {
+        size_t p = s.find(L'|', start);
+        if (p == std::wstring::npos) { parts.push_back(Trim(s.substr(start))); break; }
+        parts.push_back(Trim(s.substr(start, p - start)));
+        start = p + 1;
+    }
+    return parts;
 }
 
 // Replace %VAR% (any env var, case-insensitive) and %TYPEBOXDIR%.
@@ -97,7 +169,7 @@ static std::wstring ExpandEnv(const std::wstring& s) {
                 std::wstring val;
                 if (_wcsicmp(name.c_str(), L"TYPEBOXDIR") == 0) {
                     std::wstring d = ExeDir();
-                    val = d.substr(0, d.size() - 1); // strip trailing backslash, as %TARDIR% did
+                    val = d.substr(0, d.size() - 1); // like legacy %TARDIR%
                 } else {
                     wchar_t buf[4096] = {};
                     DWORD n = GetEnvironmentVariableW(name.c_str(), buf, 4096);
@@ -115,14 +187,7 @@ static std::wstring ExpandEnv(const std::wstring& s) {
 
 // Replace %s and %1..%n with words of the typed remainder (TypeAndRun semantics).
 static std::wstring Substitute(const std::wstring& action, const std::wstring& input) {
-    std::vector<std::wstring> words;
-    size_t i = 0;
-    while (i < input.size()) {
-        while (i < input.size() && (input[i] == L' ' || input[i] == L'\t')) ++i;
-        size_t b = i;
-        while (i < input.size() && input[i] != L' ' && input[i] != L'\t') ++i;
-        if (i > b) words.push_back(input.substr(b, i - b));
-    }
+    std::vector<std::wstring> words = SplitWords(input);
     std::wstring out = action;
     size_t pos;
     while ((pos = out.find(L"%s")) != std::wstring::npos)
@@ -144,7 +209,8 @@ static bool LooksLikeUrl(const std::wstring& s) {
 
 static bool LooksLikeEmail(const std::wstring& s) {
     size_t at = s.find(L'@');
-    return at != std::wstring::npos && at > 0 && s.find(L'.', at) != std::wstring::npos;
+    return at != std::wstring::npos && at > 0 && s.find(L'.', at) != std::wstring::npos &&
+           s.find_first_of(L" \t") == std::wstring::npos;
 }
 
 static std::wstring GetEditText(HWND edit) {
@@ -154,94 +220,361 @@ static std::wstring GetEditText(HWND edit) {
     return Trim(s);
 }
 
-// ---------------------------------------------------------------- execution
+static std::string ToUtf8(const std::wstring& w) {
+    int n = WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+    std::string s(n, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.c_str(), (int)w.size(), &s[0], n, nullptr, nullptr);
+    return s;
+}
+
+static std::wstring FromUtf8(const std::string& s) {
+    if (s.empty()) return L"";
+    int n = MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), nullptr, 0);
+    std::wstring w(n, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, s.c_str(), (int)s.size(), &w[0], n);
+    return w;
+}
+
+static std::wstring WVersion() {
+    static std::wstring v = FromUtf8(TB_STR(TYPEBOX_VERSION));
+    return v;
+}
+
+// ---------------------------------------------------------------- settings
+
+static void LoadSettings() {
+    g_set.width             = ReadIniInt(L"Show", L"Width", 720);
+    g_set.height            = ReadIniInt(L"Show", L"Height", 40);
+    g_set.x                 = ReadIniInt(L"Show", L"X", -1);
+    g_set.y                 = ReadIniInt(L"Show", L"Y", -1);
+    g_set.centerX           = ReadIniBool(L"Show", L"CenterScreenX", true);
+    g_set.centerY           = ReadIniBool(L"Show", L"CenterScreenY", true);
+    g_set.hideOnDeactivate  = ReadIniBool(L"Show", L"HideOnDeactivate", true);
+    g_set.trayIcon          = ReadIniBool(L"Show", L"TrayIcon", true);
+    g_set.balloonTips       = ReadIniBool(L"Show", L"BalloonTips", true);
+    g_set.showOnStart       = ReadIniBool(L"Show", L"ShowConsoleOnStart", true);
+    g_set.transparent       = ReadIniInt(L"Show", L"Transparent", 255);
+
+    g_set.execInternal = ReadIniBool(L"Exec", L"Internal", true);
+    g_set.execAliases  = ReadIniBool(L"Exec", L"Aliases",  true);
+    g_set.execWww      = ReadIniBool(L"Exec", L"WWW",      true);
+    g_set.execEmail    = ReadIniBool(L"Exec", L"EMail",    true);
+    g_set.execFiles    = ReadIniBool(L"Exec", L"Files",    true);
+    g_set.execShell    = ReadIniBool(L"Exec", L"Shell",    true);
+
+    g_set.fontName = ReadIniStr(L"Font", L"Name", L"Courier New");
+    g_set.fontSize = ReadIniInt(L"Font", L"Size", 18);
+    g_set.fontBold = ReadIniInt(L"Font", L"Bold", 1);
+
+    g_set.historyMax = ReadIniInt(L"History", L"Max", 200);
+    g_set.useUndo    = ReadIniBool(L"Undo", L"UseUndo", true);
+    g_set.enableSounds = ReadIniBool(L"Sounds", L"EnableSounds", true);
+
+    g_hotkey.key    = (WORD)ReadIniInt(L"HotKey", L"Key", VK_F2);
+    g_hotkey.alt    = ReadIniBool(L"HotKey", L"AltKey",   false);
+    g_hotkey.ctrl   = ReadIniBool(L"HotKey", L"CtrlKey",  false);
+    g_hotkey.shift  = ReadIniBool(L"HotKey", L"ShiftKey", false);
+    g_hotkey.win    = ReadIniBool(L"HotKey", L"WinKey",   false);
+}
+
+// Load aliases from [Aliases] of TypeBox.ini and, when present, from a
+// legacy-style Config.ini next to the exe (pipe form:
+//   alias = action|param|dir|state|priori|comment).
+static void LoadAliases() {
+    g_aliases.clear();
+
+    auto loadSection = [&](const wchar_t* file, const wchar_t* section) {
+        std::vector<wchar_t> buf(64 * 1024);
+        DWORD n = GetPrivateProfileSectionW(section, buf.data(), (DWORD)buf.size(), file);
+        for (wchar_t* p = buf.data(); p < buf.data() + n; ) {
+            std::wstring line(p);
+            p += line.size() + 1;
+            if (line.empty() || line[0] == L';' || line[0] == L'[') continue;
+            size_t eq = line.find(L'=');
+            if (eq == std::wstring::npos) continue;
+            Alias a;
+            a.name = Trim(line.substr(0, eq));
+            std::wstring value = Trim(line.substr(eq + 1));
+            if (a.name.empty() || value.empty()) continue;
+            if (value.find(L'|') != std::wstring::npos) { // legacy pipe form
+                std::vector<std::wstring> f = SplitPipe(value);
+                a.action = f.size() > 0 ? f[0] : L"";
+                if (f.size() > 2 && !f[2].empty()) a.dir = ExpandEnv(f[2]);
+                if (f.size() > 3 && !f[3].empty()) a.state = _wtoi(f[3].c_str());
+                if (a.state < SW_HIDE || a.state > SW_SHOWMAXIMIZED) a.state = SW_SHOWNORMAL;
+            } else {
+                a.action = value;
+            }
+            if (!a.action.empty()) g_aliases.push_back(a);
+        }
+    };
+
+    loadSection(g_iniPath.c_str(), L"Aliases");
+    std::wstring legacy = ExeDir() + L"Config.ini";
+    if (PathFileExistsW(legacy.c_str()))
+        loadSection(legacy.c_str(), L"Aliases");
+}
+
+static const Alias* FindAlias(const std::wstring& word) {
+    for (const auto& a : g_aliases)
+        if (_wcsicmp(a.name.c_str(), word.c_str()) == 0) return &a;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------- history
+
+static std::wstring HistoryFile() { return ExeDir() + L"History.dat"; }
+
+static void LoadHistory() {
+    g_history.clear();
+    std::ifstream f(HistoryFile().c_str(), std::ios::binary);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        g_history.push_back(FromUtf8(line));
+    }
+    if ((int)g_history.size() > g_set.historyMax)
+        g_history.erase(g_history.begin(),
+                        g_history.end() - g_set.historyMax);
+}
+
+static void SaveHistory() {
+    std::ofstream f(HistoryFile().c_str(), std::ios::binary | std::ios::trunc);
+    if (!f) return;
+    for (const auto& h : g_history) f << ToUtf8(h) << '\n';
+}
+
+// ---------------------------------------------------------------- sounds
+
+// Play the per-execution-type sound from [Sounds] (TypeAndRun parity).
+// Values may be absolute or relative to the TypeBox folder (bundled Sounds\).
+static void PlayTypeSound(const wchar_t* key, const wchar_t* fallback) {
+    if (!g_set.enableSounds) return;
+    std::wstring s = ReadIniStr(L"Sounds", key, fallback);
+    if (s.empty() || _wcsicmp(s.c_str(), L"none") == 0) return;
+    std::wstring path = s;
+    if (PathIsRelativeW(path.c_str())) path = ExeDir() + path;
+    if (PathFileExistsW(path.c_str()))
+        PlaySoundW(path.c_str(), nullptr, SND_FILENAME | SND_ASYNC);
+}
+
+// ---------------------------------------------------------------- tray
+
+static void AddTrayIcon(HWND hWnd, bool balloon) {
+    if (!g_set.trayIcon) return;
+    g_nid.cbSize           = sizeof(g_nid);
+    g_nid.hWnd             = hWnd;
+    g_nid.uID              = kTrayId;
+    g_nid.uFlags           = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    g_nid.uCallbackMessage = kTrayMsg;
+    g_nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
+    std::wstring tip = L"TypeBox " + WVersion();
+    lstrcpynW(g_nid.szTip, tip.c_str(), ARRAYSIZE(g_nid.szTip));
+    if (balloon && g_set.balloonTips) {
+        g_nid.uFlags |= NIF_INFO;
+        g_nid.dwInfoFlags = NIIF_INFO;
+        lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
+        lstrcpynW(g_nid.szInfo,
+                  L"Press the hotkey to open. Right-click the icon for the menu.",
+                  ARRAYSIZE(g_nid.szInfo));
+    }
+    Shell_NotifyIconW(NIM_ADD, &g_nid);
+}
+
+static void RemoveTrayIcon() {
+    if (g_nid.hWnd) Shell_NotifyIconW(NIM_DELETE, &g_nid);
+}
+
+// ---------------------------------------------------------------- forward decls
+
+static void ShowBox(HWND mainWnd);
+static void HideBox(HWND mainWnd);
+static bool RunLine(const std::wstring& line, HWND mainWnd);
+static void ReloadHotkey(HWND mainWnd);
+
+// ---------------------------------------------------------------- internal commands
+//
+// The 14 internal commands of TypeAndRun (Static.pas), kept 1:1 by name.
 
 static void RunInternal(const std::wstring& line, HWND mainWnd) {
-    std::wstring c = line;
-    for (auto& ch : c) ch = (wchar_t)tolower(ch);
+    std::wstring c = Lower(FirstWord(line));
+
     if (c == L"/help") {
-        MessageBoxW(mainWnd,
-            L"TypeBox — universal hotkey console + launcher.\n\n"
-            L"Type an alias, app name, URL, e-mail, file or command.\n"
-            L"/help  /hide  /config  /exit",
-            L"TypeBox", MB_OK | MB_ICONINFORMATION);
-    } else if (c == L"/hide") {
-        ShowWindow(mainWnd, SW_HIDE);
-    } else if (c == L"/config") {
+        std::wstring msg =
+            L"TypeBox " + WVersion() + L" — universal hotkey console + launcher.\n\n"
+            L"Type an alias, app name, URL, e-mail, file or command and press Enter.\n"
+            L"Up/Down browse history, Esc hides, Ctrl+Z restores the last command.\n\n"
+            L"Internal commands:\n"
+            L"/about /checkconfig /config /exit /help /hide /homedir\n"
+            L"/inidir /inifiles /load /reread /settings /show /unload";
+        MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/about") {
+        std::wstring msg =
+            L"TypeBox " + WVersion() + L"\n\n"
+            L"Universal hotkey console + bash + launcher for Windows.\n"
+            L"Portable INI config, aliases with %s/%1..%n, plugins.\n\n"
+            L"Roots: continues TypeAndRun by Evgeniy Galantsev\n"
+            L"(github.com/galancev/typeandrun, GPL-3.0).\n"
+            L"Inspired by PowerToys Run, Flow Launcher, Wox, Raycast, Alfred,\n"
+            L"ConEmu and drop-down terminals (Guake/Yakuake/Drop).";
+        MessageBoxW(mainWnd, msg.c_str(), L"About TypeBox", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/checkconfig") {
+        bool iniOk = PathFileExistsW(g_iniPath.c_str());
+        wchar_t msg[512];
+        wsprintfW(msg,
+            L"TypeBox.ini: %s\nAliases loaded: %d\nHistory items: %d\nHotkey registered: %s",
+            iniOk ? L"found" : L"MISSING (using defaults)",
+            (int)g_aliases.size(), (int)g_history.size(),
+            g_hotkey.key ? L"yes" : L"no");
+        MessageBoxW(mainWnd, msg, L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/config" || c == L"/settings") {
         ShellExecuteW(mainWnd, L"open", g_iniPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (c == L"/homedir" || c == L"/inidir") {
+        ShellExecuteW(mainWnd, L"open", ExeDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    } else if (c == L"/inifiles") {
+        std::wstring pattern = ExeDir() + L"*.ini";
+        WIN32_FIND_DATAW fd;
+        HANDLE hq = FindFirstFileW(pattern.c_str(), &fd);
+        std::wstring list;
+        if (hq != INVALID_HANDLE_VALUE) {
+            do { list += fd.cFileName; list += L"\n"; } while (FindNextFileW(hq, &fd));
+            FindClose(hq);
+        }
+        if (list.empty()) list = L"(no .ini files found)\n";
+        MessageBoxW(mainWnd, list.c_str(), L"TypeBox — ini files", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/reread") {
+        LoadSettings();
+        LoadAliases();
+        ReloadHotkey(mainWnd);
+    } else if (c == L"/load") { // plugin loading — Phase 2 (docs/PLUGIN_API.md)
+        MessageBoxW(mainWnd,
+            L"Plugin loading arrives in Phase 2 (TypeAndRun-compatible DLL ABI).\n"
+            L"See docs/PLUGIN_API.md",
+            L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/unload") {
+        // Phase 2: unload plugin DLLs here. Nothing to do yet.
+    } else if (c == L"/hide") {
+        HideBox(mainWnd);
+    } else if (c == L"/show") {
+        ShowBox(mainWnd);
     } else if (c == L"/exit") {
-        PostQuitMessage(0);
+        DestroyWindow(mainWnd);
     }
 }
 
-// Execute one typed line: internal → alias → URL → email → path → shell.
-// Mirrors the TypeAndRun ParseConsole chain (Static.pas), kept minimal here.
+// ---------------------------------------------------------------- execution
+//
+// Mirrors the TypeAndRun ParseConsole chain (Static.pas):
+// internal → alias → URL → email → file/folder → shell, each toggleable in [Exec].
+
 static bool RunLine(const std::wstring& line, HWND mainWnd) {
     if (line.empty()) return false;
 
-    if (line[0] == L'/') { RunInternal(line, mainWnd); return true; }
+    if (line[0] == L'/' && g_set.execInternal) {
+        PlayTypeSound(L"ExecuteInternalSound", L"Sounds\\internal.wav");
+        RunInternal(line, mainWnd);
+        return true;
+    }
 
     std::wstring word = FirstWord(line);
     std::wstring rest = RestWords(line);
 
-    // 1) alias from [Aliases] in the portable ini
-    std::wstring alias = ReadIniStr(L"Aliases", word.c_str(), L"");
-    if (!alias.empty()) {
-        std::wstring cmd = ExpandEnv(Substitute(alias, rest));
-        std::wstring prog = FirstWord(cmd);
-        std::wstring args = RestWords(cmd);
-        ShellExecuteW(mainWnd, L"open", prog.c_str(),
-                      args.empty() ? nullptr : args.c_str(), nullptr, SW_SHOWNORMAL);
-        return true;
+    // 1) alias from [Aliases] (TypeBox.ini or legacy Config.ini)
+    if (g_set.execAliases) {
+        if (const Alias* a = FindAlias(word)) {
+            std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
+            std::wstring prog = FirstWord(cmd);
+            std::wstring args = RestWords(cmd);
+            if (!ShellExecuteW(mainWnd, L"open", prog.c_str(),
+                               args.empty() ? nullptr : args.c_str(),
+                               a->dir.empty() ? nullptr : a->dir.c_str(),
+                               a->state)) {
+                // fall through to shell for shell built-ins
+            }
+            PlayTypeSound(L"ExecuteAliasSound", L"Sounds\\alias.wav");
+            return true;
+        }
     }
 
     // 2) URL
     std::wstring expanded = ExpandEnv(line);
-    if (LooksLikeUrl(expanded)) {
+    if (g_set.execWww && LooksLikeUrl(expanded)) {
         std::wstring url = expanded;
         if (_wcsnicmp(url.c_str(), L"www.", 4) == 0) url = L"http://" + url;
         ShellExecuteW(mainWnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        PlayTypeSound(L"ExecuteURLSound", L"Sounds\\url.wav");
         return true;
     }
 
     // 3) email
-    if (LooksLikeEmail(expanded)) {
+    if (g_set.execEmail && LooksLikeEmail(expanded)) {
         std::wstring mail = expanded;
         size_t sp;
         while ((sp = mail.find(L' ')) != std::wstring::npos) mail.replace(sp, 1, L"%20");
         ShellExecuteW(mainWnd, L"open", (L"mailto:" + mail).c_str(),
                       nullptr, nullptr, SW_SHOWNORMAL);
+        PlayTypeSound(L"ExecuteEmailSound", L"Sounds\\email.wav");
         return true;
     }
 
     // 4) file or folder
-    if (PathFileExistsW(expanded.c_str())) {
-        ShellExecuteW(mainWnd, L"open", expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        return true;
+    if (g_set.execFiles) {
+        DWORD attr = GetFileAttributesW(expanded.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES) {
+            ShellExecuteW(mainWnd, L"open", expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            PlayTypeSound((attr & FILE_ATTRIBUTE_DIRECTORY)
+                          ? L"ExecuteFolderSound" : L"ExecuteFileSound",
+                          (attr & FILE_ATTRIBUTE_DIRECTORY)
+                          ? L"Sounds\\folder.wav" : L"Sounds\\file.wav");
+            return true;
+        }
     }
 
     // 5) shell mode ("bash-ish"): cmd.exe /c <line>
-    std::wstring shellCmd  = ReadIniStr(L"Shell", L"Command", L"cmd.exe");
-    std::wstring shellArgs = ReadIniStr(L"Shell", L"Args", L"/c");
-    ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
-                  (shellArgs + L" " + expanded).c_str(), nullptr, SW_SHOWNORMAL);
-    return true;
+    if (g_set.execShell) {
+        std::wstring shellCmd  = ReadIniStr(L"Shell", L"Command", L"cmd.exe");
+        std::wstring shellArgs = ReadIniStr(L"Shell", L"Args", L"/c");
+        ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
+                      (shellArgs + L" " + expanded).c_str(), nullptr, SW_SHOWNORMAL);
+        PlayTypeSound(L"ExecuteShellSound", L"Sounds\\shell.wav");
+        return true;
+    }
+
+    return false;
 }
 
 // ---------------------------------------------------------------- UI
 
+static void ApplyFont(HWND edit) {
+    HFONT f = CreateFontW(-MulDiv(g_set.fontSize, 96, 72), 0, 0, 0,
+        g_set.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+        OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+        FIXED_PITCH | FF_MODERN, g_set.fontName.c_str());
+    SendMessageW(edit, WM_SETFONT, (WPARAM)f, TRUE);
+}
+
 static void ShowBox(HWND mainWnd) {
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
-    int w = ReadIniInt(L"Show", L"Width", 720);
-    int x = (wr.right - w) / 2;
-    int y = ReadIniInt(L"Show", L"CenterScreenY", 1) ? (wr.bottom) / 3
-                                                     : ReadIniInt(L"Show", L"Y", 100);
-    SetWindowPos(mainWnd, HWND_TOPMOST, x, y, w, 40, SWP_SHOWWINDOW);
+    int x, y;
+    if (g_set.x >= 0) x = g_set.x;
+    else              x = (wr.right - g_set.width) / 2;
+    if (g_set.y >= 0 && !g_set.centerY) y = g_set.y;
+    else y = g_set.centerY ? (wr.bottom - g_set.height) / 3 : 100;
+    if (!g_set.centerX) x = 0;
+
+    SetWindowPos(mainWnd, HWND_TOPMOST, x, y, g_set.width, g_set.height, SWP_SHOWWINDOW);
+    if (g_set.transparent < 255) {
+        SetWindowLongW(mainWnd, GWL_EXSTYLE,
+                       GetWindowLongW(mainWnd, GWL_EXSTYLE) | WS_EX_LAYERED);
+        SetLayeredWindowAttributes(mainWnd, 0, (BYTE)g_set.transparent, LWA_ALPHA);
+    }
     SetForegroundWindow(mainWnd);
     SetFocus(g_edit);
     SendMessageW(g_edit, EM_SETSEL, 0, -1);
-    g_visible  = true;
-    g_histPos  = g_history.size();
+    g_visible = true;
+    g_histPos = g_history.size();
 }
 
 static void HideBox(HWND mainWnd) {
@@ -253,46 +586,80 @@ static void HideBox(HWND mainWnd) {
 static void Submit(HWND mainWnd) {
     std::wstring line = GetEditText(g_edit);
     if (line.empty()) return;
+    g_lastRun = line;
     g_history.push_back(line);
-    if (g_history.size() > (size_t)ReadIniInt(L"History", L"Max", 200))
+    if ((int)g_history.size() > g_set.historyMax)
         g_history.erase(g_history.begin());
+    SaveHistory();
     RunLine(line, mainWnd);
     SetWindowTextW(g_edit, L"");
     HideBox(mainWnd);
 }
 
-static void SetHistory(HWND mainWnd, size_t idx) {
+static void SetHistory(size_t idx) {
     if (idx < g_history.size()) SetWindowTextW(g_edit, g_history[idx].c_str());
-    else                         SetWindowTextW(g_edit, L"");
+    else                        SetWindowTextW(g_edit, L"");
+    SendMessageW(g_edit, EM_SETSEL, -1, 0); // caret to end
+}
+
+static void ShowTrayMenu(HWND hWnd) {
+    POINT pt; GetCursorPos(&pt);
+    HMENU menu = CreatePopupMenu();
+    AppendMenuW(menu, MF_STRING, 1, L"Show / Hide");
+    AppendMenuW(menu, MF_STRING, 2, L"Config (TypeBox.ini)");
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(menu, MF_STRING, 3, L"Exit");
+    SetForegroundWindow(hWnd); // so the menu dismisses on click-away
+    TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
+    DestroyMenu(menu);
 }
 
 static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
                                  UINT_PTR id, DWORD_PTR ref) {
     HWND mainWnd = (HWND)ref;
+    (void)id;
+    bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
     switch (msg) {
     case WM_KEYDOWN:
         switch (wp) {
-        case VK_RETURN: Submit(mainWnd);          return 0;
-        case VK_ESCAPE: HideBox(mainWnd);         return 0;
+        case VK_RETURN: Submit(mainWnd);  return 0;
+        case VK_ESCAPE: HideBox(mainWnd); return 0;
         case VK_UP:
-            if (g_histPos > 0) SetHistory(mainWnd, --g_histPos);
+            if (g_histPos > 0) SetHistory(--g_histPos);
             return 0;
         case VK_DOWN:
-            if (g_histPos < g_history.size()) SetHistory(mainWnd, ++g_histPos);
-            else { g_histPos = g_history.size(); SetHistory(mainWnd, g_histPos); }
+            if (g_histPos < g_history.size()) SetHistory(++g_histPos);
+            else { g_histPos = g_history.size(); SetHistory(g_histPos); }
             return 0;
+        case VK_BACK: // word-wise backspace (TypeAndRun AdvancedBackspace)
+            if (ctrl) {
+                std::wstring t = GetEditText(hWnd);
+                size_t e = t.size();
+                while (e > 0 && (t[e-1] == L' ' || t[e-1] == L'\t')) --e;
+                size_t b = e;
+                while (b > 0 && t[b-1] != L' ' && t[b-1] != L'\t') --b;
+                SetWindowTextW(hWnd, t.substr(0, b).c_str());
+                SendMessageW(hWnd, EM_SETSEL, -1, 0);
+                return 0;
+            }
+            break;
+        case 'Z': // Undo: bring back the last executed command (TypeAndRun [Undo])
+            if (ctrl && g_set.useUndo && !g_lastRun.empty()) {
+                SetWindowTextW(hWnd, g_lastRun.c_str());
+                SendMessageW(hWnd, EM_SETSEL, -1, 0);
+                return 0;
+            }
+            break;
         }
         break;
     }
     return DefSubclassProc(hWnd, msg, wp, lp);
 }
 
-static void LoadHotkey() {
-    g_hotkey.key    = (WORD)ReadIniInt(L"HotKey", L"Key", VK_F2);
-    g_hotkey.alt    = ReadIniInt(L"HotKey", L"AltKey", 0)   != 0;
-    g_hotkey.ctrl   = ReadIniInt(L"HotKey", L"CtrlKey", 0)  != 0;
-    g_hotkey.shift  = ReadIniInt(L"HotKey", L"ShiftKey", 0) != 0;
-    g_hotkey.win    = ReadIniInt(L"HotKey", L"WinKey", 0)   != 0;
+static void ReloadHotkey(HWND mainWnd) {
+    UnregisterHotKey(mainWnd, kHotkeyId);
+    LoadSettings();
+    RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key);
 }
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -301,27 +668,52 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         g_edit = CreateWindowExW(0, L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
             0, 0, 0, 0, hWnd, nullptr, nullptr, nullptr);
-        SendMessageW(g_edit, WM_SETFONT,
-            (WPARAM)CreateFontW(18, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
-                OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                FIXED_PITCH | FF_MODERN, L"Courier New"),
-            TRUE);
         SetWindowSubclass(g_edit, EditProc, 1, (DWORD_PTR)hWnd);
         return 0;
     }
     case WM_SIZE:
-        MoveWindow(g_edit, 2, 2, LOWORD(lp) - 4, 28, TRUE);
+        MoveWindow(g_edit, 2, (HIWORD(lp) - 24) / 2, LOWORD(lp) - 4, 24, TRUE);
         return 0;
     case WM_HOTKEY:
         if (wp == kHotkeyId) g_visible ? HideBox(hWnd) : ShowBox(hWnd);
         return 0;
     case WM_ACTIVATE:
-        if (LOWORD(wp) == WA_INACTIVE && g_visible &&
-            ReadIniInt(L"Show", L"HideOnDeactivate", 1))
+        if (LOWORD(wp) == WA_INACTIVE && g_visible && g_set.hideOnDeactivate)
             HideBox(hWnd);
         return 0;
+    case kTrayMsg: {
+        UINT ev = LOWORD(lp);
+        if (ev == WM_LBUTTONUP || ev == WM_LBUTTONDBLCLK)
+            g_visible ? HideBox(hWnd) : ShowBox(hWnd);
+        else if (ev == WM_RBUTTONUP)
+            ShowTrayMenu(hWnd);
+        return 0;
+    }
+    case WM_COMMAND:
+        if (LOWORD(wp) == 1)      g_visible ? HideBox(hWnd) : ShowBox(hWnd);
+        else if (LOWORD(wp) == 2) ShellExecuteW(hWnd, L"open", g_iniPath.c_str(),
+                                                nullptr, nullptr, SW_SHOWNORMAL);
+        else if (LOWORD(wp) == 3) DestroyWindow(hWnd);
+        return 0;
+    case WM_COPYDATA: {
+        // Second instance forwards its command line for execution.
+        auto cds = (PCOPYDATASTRUCT)lp;
+        if (cds && cds->cbData >= sizeof(wchar_t)) {
+            std::wstring cmd((const wchar_t*)cds->lpData, cds->cbData / sizeof(wchar_t));
+            while (!cmd.empty() && cmd.back() == L'\0') cmd.pop_back();
+            cmd = Trim(cmd);
+            if (!cmd.empty()) {
+                ShowBox(hWnd);
+                SetWindowTextW(g_edit, cmd.c_str());
+                Submit(hWnd);
+            }
+        }
+        return TRUE;
+    }
     case WM_DESTROY:
         UnregisterHotKey(hWnd, kHotkeyId);
+        RemoveTrayIcon();
+        SaveHistory();
         PostQuitMessage(0);
         return 0;
     }
@@ -330,9 +722,43 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 // ---------------------------------------------------------------- entry
 
+// Args of a second instance, without the program name.
+static std::wstring SecondInstanceArgs() {
+    int argc = 0;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    std::wstring out;
+    for (int i = 1; i < argc; ++i) {
+        if (i > 1) out += L' ';
+        out += argv[i];
+    }
+    if (argv) LocalFree(argv);
+    return Trim(out);
+}
+
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
+    SetProcessDPIAware();
     g_iniPath = ExeDir() + L"TypeBox.ini";
     InitCommonControls();
+
+    // Single instance: forward the command line to the running one.
+    HANDLE mutex = CreateMutexW(nullptr, TRUE, L"TypeBox_SingleInstance");
+    (void)mutex; // must stay open for the lifetime of the process
+    if (GetLastError() == ERROR_ALREADY_EXISTS) {
+        HWND other = FindWindowW(kClassName, nullptr);
+        std::wstring args = SecondInstanceArgs();
+        if (other && !args.empty()) {
+            COPYDATASTRUCT cds = {};
+            cds.dwData = 1;
+            cds.cbData = (DWORD)((args.size() + 1) * sizeof(wchar_t));
+            cds.lpData = (PVOID)args.c_str();
+            SendMessageW(other, WM_COPYDATA, 0, (LPARAM)&cds);
+        }
+        return 0;
+    }
+
+    LoadSettings();
+    LoadAliases();
+    LoadHistory();
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc   = WndProc;
@@ -343,22 +769,29 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
 
     HWND mainWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
         kClassName, L"TypeBox", WS_POPUP,
-        0, 0, 720, 40, nullptr, nullptr, hInst, nullptr);
+        0, 0, g_set.width, g_set.height, nullptr, nullptr, hInst, nullptr);
     if (!mainWnd) return 1;
 
-    LoadHotkey();
+    ApplyFont(g_edit);
+
     if (!RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key)) {
-        MessageBoxW(nullptr,
+        MessageBoxW(mainWnd,
             L"TypeBox: failed to register the hotkey.\n"
-            L"Check [HotKey] in TypeBox.ini.",
+            L"Check [HotKey] in TypeBox.ini, then run /reread.",
             L"TypeBox", MB_OK | MB_ICONERROR);
-        return 1;
     }
 
-    ShowBox(mainWnd); // start visible so the user can immediately type
+    AddTrayIcon(mainWnd, true);
+    if (g_set.showOnStart) ShowBox(mainWnd);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
+        // Let Esc close the box even when the edit has focus.
+        if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE &&
+            msg.hwnd == g_edit && g_visible) {
+            HideBox(mainWnd);
+            continue;
+        }
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }

@@ -1,6 +1,48 @@
 # Changelog
 
 All notable changes to TypeBox are documented here.
+Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
+
+## [0.2.0] - 2026-11-15
+
+First functional build. CI compiles with MSVC on every push; tagged releases ship a
+portable zip with `TypeBox.exe` + `TypeBox.ini`.
+
+### Added
+- **CI/CD** — `.github/workflows/build.yml`: MSVC (Ninja) build on `windows-latest`,
+  `VERSION`-vs-tag consistency check, artifact zip `TypeBox-<ver>-windows-x64.zip`,
+  GitHub release on tag with binaries and roots/inspiration notes.
+- `VERSION` file — single source of truth for the version; injected into the binary
+  via CMake (`/about`, tray tooltip show it).
+- **All 14 TypeAndRun internal commands** —
+  `/about /checkconfig /config /exit /help /hide /homedir /inidir /inifiles /load
+  /reread /settings /show /unload` (`/load`–`/unload` become functional with Phase 2 plugins).
+- **Tray icon** with context menu (Show/Hide · Config · Exit) and startup balloon tip
+  (`[Show] TrayIcon`, `BalloonTips`).
+- **Transparency** — `[Show] Transparent=0..255` (layered window).
+- **Font from INI** — `[Font] Name / Size / Bold`.
+- **`[Exec]` toggles** — Internal / Aliases / WWW / EMail / Files / Shell now all honored.
+- **Sounds** — `[Sounds] EnableSounds` + 9 per-execution-type sounds (internal, alias,
+  sysalias, url, email, file, folder, plugin, shell), paths relative to the portable
+  `Sounds\` folder (TypeAndRun parity).
+- **Undo** — `[Undo] UseUndo`, `Ctrl+Z` restores the last executed command.
+- **Persistent history** — saved to portable `History.dat` next to the exe (UTF-8),
+  `[History] Max`, loaded at startup; `↑/↓` navigation; Ctrl+Backspace deletes a word.
+- **Legacy pipe-form aliases** — `alias = action|param|dir|state|priori|comment`
+  (working directory and window state applied), read from `[Aliases]` of `TypeBox.ini`
+  or a legacy `Config.ini` next to the exe.
+- **Single instance + IPC** — a second launch forwards its command line to the running
+  instance via `WM_COPYDATA` and exits (TypeAndRun parity).
+- **DPI-aware** manifest call (`SetProcessDPIAware`).
+- `/reread` reloads hotkey, aliases and settings without restart.
+
+### Fixed / improved
+- Alias execution uses `ShellExecuteExW`-style dir/state parameters.
+- History caret lands at end of line; history survives restarts.
+
+### Verified
+- Compiles clean (MinGW g++ 13.2 `-Wall -Wextra`, zero warnings) and runs:
+  hotkey registration, tray icon, popup, execution chain. MSVC verification in CI.
 
 ## [0.1.0] - 2026-11-15
 
@@ -27,5 +69,5 @@ Project start. Docs, plan, config schema and an early Phase-1 scaffold.
 - `CHANGELOG.md`, `.gitignore`.
 
 ### Known limitations (tracked in docs/PLAN.md)
-- Tray icon, plugin loader, sounds, undo, info display, terminal mode: not yet implemented.
+- Plugin loader, info display, terminal mode: not yet implemented.
 - Import/export is "copy the INI" for now; a UI action is planned.
