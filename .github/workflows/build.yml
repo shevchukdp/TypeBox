@@ -78,7 +78,16 @@ jobs:
             Write-Error "example plugin not discovered by host`n$log"
             exit 1
           }
-          Write-Host "Smoke OK: TypeBox $ver + calc plugin verified via startup log"
+          # settings dialog must build, pump messages and close cleanly
+          Remove-Item build/TypeBox.log -ErrorAction SilentlyContinue
+          & cmd /c "build\TypeBox.exe --test-settings >nul 2>&1"
+          if ($LASTEXITCODE -ne 0) { Write-Error "settings dialog self-test exited $LASTEXITCODE"; exit 1 }
+          $log2 = Get-Content build/TypeBox.log -Raw -ErrorAction SilentlyContinue
+          if (-not $log2 -or $log2 -notmatch "settings self-test OK") {
+            Write-Error "settings self-test line missing from log`n$log2"
+            exit 1
+          }
+          Write-Host "Smoke OK: TypeBox $ver + calc plugin + settings dialog verified"
 
       - name: Package
         shell: pwsh

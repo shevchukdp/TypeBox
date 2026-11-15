@@ -14,6 +14,7 @@
 //                -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lwinmm
 
 #include <windows.h>
+#include <commdlg.h>
 #include <shellapi.h>
 #include <shlwapi.h>
 #include <commctrl.h>
@@ -22,6 +23,8 @@
 #include <vector>
 #include <fstream>
 #include <cstring>
+#include <cwctype>
+#include <functional>
 
 #ifndef TYPEBOX_VERSION
 #define TYPEBOX_VERSION 0.0.0-dev
@@ -76,7 +79,8 @@ struct Settings {
          execEmail = true, execFiles = true, execShell = true, execPlugins = true;
     // [Font]
     std::wstring fontName = L"Courier New";
-    int  fontSize = 18, fontBold = 1;
+    int  fontSize = 18;
+    bool fontBold = true;
     bool applyEnglish = false;   // force US-English layout when the console opens
     // [Show] Priority of the TypeBox process: idle|normal|high|realtime
     std::wstring priority = L"normal";
@@ -95,7 +99,7 @@ struct Settings {
     // [Log] — portable error log
     bool  logEnabled = true;
     std::wstring logFile = L"TypeBox.log";
-    long  logMaxKB = 512;      // size cap
+    int   logMaxKB = 512;      // size cap
     int   logRewrite = 0;      // 0 rotate (.1 .2 ...), 1 truncate, 2 timestamp, 3 keep (stop)
     int   logKeep = 3;         // rotated copies to keep
 };
@@ -110,6 +114,7 @@ static Hotkey                    g_hotkey;
 static Settings                  g_set;
 static bool                      g_visible = false;
 static HWND                      g_edit    = nullptr;
+static bool                      g_testSettings = false;
 static std::wstring              g_iniPath;
 static std::vector<std::wstring> g_history;
 static size_t                    g_histPos = 0;
@@ -845,6 +850,9 @@ static void HideBox(HWND mainWnd);
 static int  RunLine(const std::wstring& line, HWND mainWnd);
 static void ReloadHotkey(HWND mainWnd);
 static void ResetET();
+static void OpenSettings(HWND mainWnd, int page);
+enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
+       PG_HISTORY, PG_LOG, PG_ALIASES, PG_COUNT };
 
 // ---------------------------------------------------------------- internal commands
 //
@@ -863,7 +871,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Internal commands:\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
-            L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys";
+            L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig\n"
+            L"/settings opens the settings dialog, /config opens its alias editor.";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
@@ -886,7 +895,11 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             (int)g_history.size(),
             g_hotkey.key ? L"yes" : L"no");
         MessageBoxW(mainWnd, msg, L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
-    } else if (c == L"/config" || c == L"/settings") {
+    } else if (c == L"/settings") {
+        OpenSettings(mainWnd, PG_APPEAR);
+    } else if (c == L"/config") {
+        OpenSettings(mainWnd, PG_ALIASES);
+    } else if (c == L"/openconfig") {
         ShellExecuteW(mainWnd, L"open", g_iniPath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
     } else if (c == L"/homedir" || c == L"/inidir") {
         ShellExecuteW(mainWnd, L"open", ExeDir().c_str(), nullptr, nullptr, SW_SHOWNORMAL);
@@ -1297,12 +1310,660 @@ static void ShowTrayMenu(HWND hWnd) {
     POINT pt; GetCursorPos(&pt);
     HMENU menu = CreatePopupMenu();
     AppendMenuW(menu, MF_STRING, 1, L"Show / Hide");
+    AppendMenuW(menu, MF_STRING, 4, L"Settings...");
     AppendMenuW(menu, MF_STRING, 2, L"Config (TypeBox.ini)");
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 3, L"Exit");
     SetForegroundWindow(hWnd); // so the menu dismisses on click-away
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
     DestroyMenu(menu);
+}
+
+// =================================================================== settings dialog
+//
+// TypeAndRun-style settings window (frmSettingsUnit): left page list, controls
+// bound to a scratch copy of the settings (Cancel discards), OK/Apply writes
+// TypeBox.ini key-by-key (comments/unknown keys survive) and live-applies:
+// font, geometry, alpha, hotkey re-registration, priority, tray, timer, brush.
+
+static const wchar_t* kPages[PG_COUNT] = {
+    L"Appearance", L"Console", L"Font", L"Hotkey", L"Execution",
+    L"EasyType", L"History", L"Log", L"Aliases" };
+
+static HWND  g_setWnd = nullptr;
+static HWND  g_setList = nullptr;
+static HWND  g_setPage[PG_COUNT] = {};
+static HFONT g_uiFont = nullptr;
+static std::vector<HWND> g_setAll;
+static std::vector<std::function<void()>> g_loaders, g_storers;
+
+// scratch state
+static Settings  g_draft;
+static Hotkey    g_draftHk;
+static std::vector<Alias> g_draftAliases;
+static int       g_aliasSel = -1;
+
+// controls that need direct access
+static HWND g_hkEdit = nullptr, g_hkLabel = nullptr, g_hkVk = nullptr;
+static HWND g_alLb = nullptr, g_alName = nullptr, g_alAction = nullptr,
+      g_alDir = nullptr, g_alState = nullptr, g_fontPreview = nullptr;
+
+static std::wstring HotkeyText(const Hotkey& hk) {
+    std::wstring s;
+    if (hk.ctrl)  s += L"Ctrl+";
+    if (hk.alt)   s += L"Alt+";
+    if (hk.shift) s += L"Shift+";
+    if (hk.win)   s += L"Win+";
+    wchar_t buf[32] = {};
+    int c = MapVirtualKeyW(hk.key, MAPVK_VK_TO_CHAR);
+    if (hk.key >= VK_F1 && hk.key <= VK_F24)
+        wsprintfW(buf, L"F%u", hk.key - VK_F1 + 1);
+    else if (c >= 0x20 && iswalnum((wchar_t)c))
+        buf[0] = (wchar_t)towupper(c);
+    else switch (hk.key) {
+        case VK_SPACE: wcscpy(buf, L"Space"); break;
+        case VK_UP:    wcscpy(buf, L"Up"); break;
+        case VK_DOWN:  wcscpy(buf, L"Down"); break;
+        case VK_LEFT:  wcscpy(buf, L"Left"); break;
+        case VK_RIGHT: wcscpy(buf, L"Right"); break;
+        case VK_INSERT:wcscpy(buf, L"Insert"); break;
+        case VK_HOME:  wcscpy(buf, L"Home"); break;
+        case VK_END:   wcscpy(buf, L"End"); break;
+        case VK_NEXT:  wcscpy(buf, L"PgUp"); break;
+        case VK_PRIOR: wcscpy(buf, L"PgDn"); break;
+        default: wsprintfW(buf, L"VK%u", hk.key);
+    }
+    return s + buf;
+}
+
+static void HkRefresh() {
+    std::wstring t = HotkeyText(g_draftHk);
+    if (g_hkEdit)   SetWindowTextW(g_hkEdit, t.c_str());
+    if (g_hkLabel)  SetWindowTextW(g_hkLabel,
+        (std::wstring(L"Current hotkey: ") + t).c_str());
+    if (g_hkVk) { wchar_t b[16]; wsprintfW(b, L"%u", g_draftHk.key); SetWindowTextW(g_hkVk, b); }
+}
+
+static LRESULT CALLBACK HkCapProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+    if (m == WM_KEYDOWN || m == WM_SYSKEYDOWN) {
+        WORD vk = (WORD)w;
+        bool pure = vk == VK_SHIFT || vk == VK_CONTROL || vk == VK_MENU;
+        g_draftHk.ctrl  = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+        g_draftHk.shift = (GetKeyState(VK_SHIFT)   & 0x8000) != 0;
+        g_draftHk.alt   = (GetKeyState(VK_MENU)    & 0x8000) != 0;
+        g_draftHk.win   = (GetAsyncKeyState(VK_LWIN) & 0x8000) ||
+                          (GetAsyncKeyState(VK_RWIN) & 0x8000);
+        if (!pure) {
+            if (vk == VK_ESCAPE) { HkRefresh(); return 0; }  // cancel capture
+            g_draftHk.key = vk;
+        }
+        HkRefresh();
+        return 0;
+    }
+    if (m == WM_KEYUP && (w == VK_SHIFT || w == VK_CONTROL || w == VK_MENU))
+        return DefSubclassProc(h, m, w, l);
+    if (m == WM_KEYUP) return 0;
+    if (m == WM_CHAR)  return 0;
+    return DefSubclassProc(h, m, w, l);
+}
+
+// ---------------------------------------------------------------- control makers
+static HWND MkOn(HWND host, const wchar_t* cls, const wchar_t* text, DWORD style,
+                 int x, int y, int w, int h) {
+    HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
+                             x, y, w, h, host, nullptr,
+                             (HINSTANCE)(LONG_PTR)GetWindowLongPtrW(host, GWLP_HINSTANCE), nullptr);
+    SendMessageW(c, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
+    return c;
+}
+static HWND MkLabel(HWND host, const wchar_t* t, int x, int y, int w = 150) {
+    return MkOn(host, L"STATIC", t, SS_LEFT, x, y, w, 18);
+}
+static HWND MkCheck(HWND host, const wchar_t* t, int x, int y, int w) {
+    return MkOn(host, L"BUTTON", t, BS_AUTOCHECKBOX, x, y, w, 20);
+}
+static HWND MkEdit(HWND host, const wchar_t* t, int x, int y, int w, bool num = false) {
+    return MkOn(host, L"EDIT", t, WS_BORDER | ES_AUTOHSCROLL | (num ? ES_NUMBER : 0),
+                x, y, w, 22);
+}
+static HWND MkCombo(HWND host, int x, int y, int w, const wchar_t** items, int n) {
+    HWND c = MkOn(host, L"COMBOBOX", L"", WS_VSCROLL | CBS_DROPDOWNLIST, x, y, w, 200);
+    for (int i = 0; i < n; ++i) SendMessageW(c, CB_ADDSTRING, 0, (LPARAM)items[i]);
+    SendMessageW(c, CB_SETCURSEL, 0, 0);
+    return c;
+}
+static HWND MkButton(HWND host, const wchar_t* t, int x, int y, int w) {
+    return MkOn(host, L"BUTTON", t, BS_PUSHBUTTON, x, y, w, 24);
+}
+
+static std::wstring GetText(HWND h) {
+    int n = GetWindowTextLengthW(h);
+    std::wstring s(n, L'\0');
+    GetWindowTextW(h, &s[0], n + 1);
+    return s;
+}
+static void Bind(std::function<void()> load, std::function<void()> store) {
+    g_loaders.push_back(load); g_storers.push_back(store);
+}
+
+// checkbox bound to a Settings bool member
+static void CkB(HWND host, const wchar_t* label, int x, int y, bool Settings::*mem) {
+    HWND c = MkCheck(host, label, x, y, 380);
+    Bind([c, mem]{ SendMessageW(c, BM_SETCHECK, (g_draft.*mem) ? BST_CHECKED : BST_UNCHECKED, 0); },
+         [c, mem]{ g_draft.*mem = SendMessageW(c, BM_GETCHECK, 0, 0) == BST_CHECKED; });
+}
+static void NumB(HWND host, const wchar_t* label, int x, int y, int Settings::*mem,
+                 int minv, int maxv, bool allowNeg = false) {
+    MkLabel(host, label, x, y + 2, 150);
+    HWND e = MkEdit(host, L"", x + 155, y, 80, !allowNeg);
+    Bind([e, mem]{ wchar_t b[24]; wsprintfW(b, L"%d", g_draft.*mem); SetWindowTextW(e, b); },
+         [e, mem, minv, maxv]{
+             int v = GetWindowTextLengthW(e) ? _wtoi(GetText(e).c_str()) : g_draft.*mem;
+             if (v < minv) v = minv; if (v > maxv) v = maxv;
+             g_draft.*mem = v;
+         });
+}
+static void TxB(HWND host, const wchar_t* label, int x, int y, std::wstring Settings::*mem) {
+    MkLabel(host, label, x, y + 2, 150);
+    HWND e = MkEdit(host, L"", x + 155, y, 260);
+    Bind([e, mem]{ SetWindowTextW(e, (g_draft.*mem).c_str()); },
+         [e, mem]{ g_draft.*mem = Trim(GetText(e)); });
+}
+
+// ---------------------------------------------------------------- aliases page
+static void AliasesFillList() {
+    if (!g_alLb) return;
+    SendMessageW(g_alLb, LB_RESETCONTENT, 0, 0);
+    for (auto& a : g_draftAliases)
+        SendMessageW(g_alLb, LB_ADDSTRING, 0, (LPARAM)a.name.c_str());
+}
+static void AliasesEditRow(int idx) {
+    g_aliasSel = idx;
+    if (idx < 0 || idx >= (int)g_draftAliases.size()) return;
+    Alias& a = g_draftAliases[idx];
+    SetWindowTextW(g_alName,   a.name.c_str());
+    SetWindowTextW(g_alAction, a.action.c_str());
+    SetWindowTextW(g_alDir,    a.dir.c_str());
+    int sel = 0;
+    if (a.state == SW_SHOWMAXIMIZED) sel = 1;
+    else if (a.state == SW_SHOWMINIMIZED) sel = 2;
+    else if (a.state == SW_HIDE) sel = 3;
+    SendMessageW(g_alState, CB_SETCURSEL, sel, 0);
+}
+static void AliasesReadRow(int idx) {
+    if (idx < 0 || idx >= (int)g_draftAliases.size()) return;
+    Alias a;
+    a.name   = Trim(GetText(g_alName));
+    a.action = Trim(GetText(g_alAction));
+    a.dir    = Trim(GetText(g_alDir));
+    int sel = (int)SendMessageW(g_alState, CB_GETCURSEL, 0, 0);
+    a.state = sel == 1 ? SW_SHOWMAXIMIZED : sel == 2 ? SW_SHOWMINIMIZED
+            : sel == 3 ? SW_HIDE : SW_SHOWNORMAL;
+    if (a.name.empty() || a.action.empty()) return;
+    g_draftAliases[idx] = a;
+    AliasesFillList();
+    SendMessageW(g_alLb, LB_SETCURSEL, idx, 0);
+}
+static void AliasesAdd() {
+    size_t before = g_draftAliases.size();
+    g_draftAliases.push_back({});
+    AliasesReadRow((int)before);
+    if (g_draftAliases.size() == before) g_draftAliases.pop_back(); // rejected
+    g_aliasSel = (int)before;
+    AliasesFillList();
+    SendMessageW(g_alLb, LB_SETCURSEL, g_aliasSel, 0);
+}
+
+// ---------------------------------------------------------------- build dialog
+static void UiLoad() {
+    for (auto& f : g_loaders) f();
+    HkRefresh();
+}
+static void UiCollect() {
+    for (auto& f : g_storers) f();
+}
+
+static void WriteDraftIni();
+static void LiveApply(HWND mainWnd);
+
+static void SettingsShowPage(int p) {
+    for (int i = 0; i < PG_COUNT; ++i)
+        ShowWindow(g_setPage[i], i == p ? SW_SHOW : SW_HIDE);
+}
+
+static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+    case WM_COMMAND: {
+        HWND src = (HWND)l;
+        int code = HIWORD(w);
+        if (src == g_setList && code == LBN_SELCHANGE) {
+            SettingsShowPage((int)SendMessageW(src, LB_GETCURSEL, 0, 0));
+            return 0;
+        }
+        if (code == BN_CLICKED) {
+            if (src == g_alLb) return 0;
+            // page-specific buttons handled by tag stored in control user data? simpler: compare text
+            if (src) {
+                wchar_t t[64] = {};
+                GetWindowTextW(src, t, 63);
+                if (!wcscmp(t, L"OK") || !wcscmp(t, L"Apply")) {
+                    UiCollect();
+                    WriteDraftIni();
+                    g_set = g_draft; g_hotkey = g_draftHk; g_aliases = g_draftAliases;
+                    LiveApply((HWND)GetWindowLongPtrW(h, GWLP_HWNDPARENT));
+                    if (!wcscmp(t, L"OK")) DestroyWindow(h);
+                    else UiLoad();
+                    return 0;
+                }
+                if (!wcscmp(t, L"Cancel")) { DestroyWindow(h); return 0; }
+                if (!wcscmp(t, L"Add"))    { AliasesAdd(); return 0; }
+                if (!wcscmp(t, L"Update")) { AliasesReadRow(g_aliasSel); return 0; }
+                if (!wcscmp(t, L"Delete")) {
+                    if (g_aliasSel >= 0 && g_aliasSel < (int)g_draftAliases.size()) {
+                        g_draftAliases.erase(g_draftAliases.begin() + g_aliasSel);
+                        g_aliasSel = -1;
+                        AliasesFillList();
+                    }
+                    return 0;
+                }
+                if (!wcscmp(t, L"Choose...")) {
+                    CHOOSEFONTW cf = { sizeof(cf) };
+                    LOGFONTW lf = {};
+                    lstrcpynW(lf.lfFaceName, g_draft.fontName.c_str(), LF_FACESIZE);
+                    lf.lfHeight = -MulDiv(g_draft.fontSize, 96, 72);
+                    lf.lfWeight = g_draft.fontBold ? FW_BOLD : FW_NORMAL;
+                    cf.lpLogFont = &lf; cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT;
+                    cf.hwndOwner = h;
+                    if (ChooseFontW(&cf)) {
+                        g_draft.fontName = lf.lfFaceName;
+                        g_draft.fontSize = MulDiv(-lf.lfHeight, 72, 96);
+                        if (g_draft.fontSize < 6) g_draft.fontSize = 6;
+                        if (g_draft.fontSize > 72) g_draft.fontSize = 72;
+                        g_draft.fontBold = lf.lfWeight >= FW_BOLD;
+                        UiLoad();
+                    }
+                    return 0;
+                }
+                if (!wcscmp(t, L"Clear history")) {
+                    g_history.clear();
+                    SaveHistory();
+                    LogInfo(L"settings: history cleared");
+                    return 0;
+                }
+            }
+        }
+        if (code == LBN_SELCHANGE && src == g_alLb) {
+            int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
+            if (s >= 0) AliasesEditRow(s);
+            return 0;
+        }
+        return 0;
+    }
+    case WM_CLOSE:
+        DestroyWindow(h);
+        return 0;
+    case WM_DESTROY:
+        for (HWND c : g_setAll) DestroyWindow(c);
+        g_setAll.clear();
+        g_loaders.clear(); g_storers.clear();
+        if (g_uiFont) { DeleteObject(g_uiFont); g_uiFont = nullptr; }
+        g_setWnd = nullptr;
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void SettingsCreate(HWND mainWnd, int startPage) {
+    HINSTANCE hInst = (HINSTANCE)(LONG_PTR)GetWindowLongPtrW(mainWnd, GWLP_HINSTANCE);
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = SettingsProc;
+    wc.hInstance = hInst;
+    wc.lpszClassName = L"TypeBoxSettings";
+    wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+    wc.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+    RegisterClassW(&wc);
+    wc.lpszClassName = L"TypeBoxPage";
+    wc.lpfnWndProc = DefWindowProcW;
+    RegisterClassW(&wc);
+
+    g_draft = g_set; g_draftHk = g_hotkey; g_draftAliases = g_aliases;
+    g_aliasSel = 0;
+
+    NONCLIENTMETRICSW ncm = { sizeof(ncm) };
+    SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+    g_uiFont = CreateFontIndirectW(&ncm.lfMessageFont);
+
+    RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    int W = 640, H = 460;
+    int sx = GetPrivateProfileIntW(L"Coordinates", L"SettingsX", -1, g_iniPath.c_str());
+    int sy = GetPrivateProfileIntW(L"Coordinates", L"SettingsY", -1, g_iniPath.c_str());
+    if (sx < 0) sx = (wa.right - W) / 2;
+    if (sy < 0) sy = (wa.bottom - H) / 2;
+
+    g_setWnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
+        L"TypeBoxSettings", (L"TypeBox Settings — " + WVersion()).c_str(),
+        WS_CAPTION | WS_SYSMENU, sx, sy, W, H, mainWnd, nullptr, hInst, nullptr);
+
+    g_setList = MkOn(g_setWnd, L"LISTBOX", L"", WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
+                     8, 8, 140, 360);
+    for (int i = 0; i < PG_COUNT; ++i)
+        SendMessageW(g_setList, LB_ADDSTRING, 0, (LPARAM)kPages[i]);
+    SendMessageW(g_setList, LB_SETCURSEL, startPage, 0);
+
+    for (int i = 0; i < PG_COUNT; ++i) {
+        g_setPage[i] = CreateWindowExW(0, L"TypeBoxPage", L"",
+            WS_CHILD | WS_CLIPCHILDREN, 156, 8, 470, 360, g_setWnd, nullptr, hInst, nullptr);
+        SendMessageW(g_setPage[i], WM_SETFONT, (WPARAM)g_uiFont, TRUE);
+    }
+    g_setAll.push_back(g_setList);
+    for (int i = 0; i < PG_COUNT; ++i) g_setAll.push_back(g_setPage[i]);
+
+    int y;
+    // --- Appearance
+    y = 12;
+    CkB(g_setPage[PG_APPEAR], L"Show console on start",  16, y, &Settings::showOnStart);        y += 26;
+    CkB(g_setPage[PG_APPEAR], L"Hide console when focus is lost", 16, y, &Settings::hideOnDeactivate); y += 26;
+    CkB(g_setPage[PG_APPEAR], L"Tray icon",              16, y, &Settings::trayIcon);           y += 26;
+    CkB(g_setPage[PG_APPEAR], L"Balloon tips",           16, y, &Settings::balloonTips);        y += 26;
+    CkB(g_setPage[PG_APPEAR], L"Auto-hide after idle",   16, y, &Settings::autoHide);           y += 30;
+    NumB(g_setPage[PG_APPEAR], L"Idle seconds", 16, y, &Settings::autoHideValue, 1, 3600);      y += 32;
+    MkLabel(g_setPage[PG_APPEAR], L"Process priority", 16, y + 2);
+    {
+        const wchar_t* it[] = { L"idle", L"normal", L"high", L"realtime" };
+        HWND c = MkCombo(g_setPage[PG_APPEAR], 175, y, 110, it, 4);
+        Bind([c]{ int s = 0;
+                  if (g_draft.priority == L"high") s = 2;
+                  else if (g_draft.priority == L"realtime") s = 3;
+                  else if (g_draft.priority == L"idle") s = 0;
+                  else s = 1;
+                  SendMessageW(c, CB_SETCURSEL, s, 0); },
+             [c]{ int s = (int)SendMessageW(c, CB_GETCURSEL, 0, 0);
+                  g_draft.priority = s == 3 ? L"realtime" : s == 2 ? L"high"
+                                 : s == 0 ? L"idle" : L"normal"; });
+    }
+
+    // --- Console
+    y = 12;
+    NumB(g_setPage[PG_WINDOW], L"Width (px)",   16, y, &Settings::width, 200, 7680);  y += 28;
+    NumB(g_setPage[PG_WINDOW], L"Height (px)",  16, y, &Settings::height, 24, 2160);  y += 28;
+    NumB(g_setPage[PG_WINDOW], L"X (-1 = auto)", 16, y, &Settings::x, -1, 7680, true);  y += 28;
+    NumB(g_setPage[PG_WINDOW], L"Y (-1 = auto)", 16, y, &Settings::y, -1, 2160, true);   y += 28;
+    CkB(g_setPage[PG_WINDOW], L"Center horizontally", 16, y, &Settings::centerX);     y += 26;
+    CkB(g_setPage[PG_WINDOW], L"Center vertically",   16, y, &Settings::centerY);     y += 30;
+    NumB(g_setPage[PG_WINDOW], L"Transparency 0..255", 16, y, &Settings::transparent, 30, 255); y += 32;
+    NumB(g_setPage[PG_WINDOW], L"BG color (COLORREF)", 16, y, &Settings::consoleBg, -1, 0x00FFFFFF, true); y += 28;
+    NumB(g_setPage[PG_WINDOW], L"FG color (COLORREF)", 16, y, &Settings::consoleFg, -1, 0x00FFFFFF, true);
+
+    // --- Font
+    y = 12;
+    MkLabel(g_setPage[PG_FONT], L"Preview", 16, y, 430);
+    g_fontPreview = MkOn(g_setPage[PG_FONT], L"STATIC", L"Aa Bb Cc 0123456789",
+                         SS_LEFT, 16, y + 20, 430, 40);
+    y += 70;
+    TxB(g_setPage[PG_FONT], L"Font name", 16, y, &Settings::fontName);                  y += 28;
+    NumB(g_setPage[PG_FONT], L"Size", 16, y, &Settings::fontSize, 6, 72);               y += 28;
+    CkB(g_setPage[PG_FONT], L"Bold", 16, y, &Settings::fontBold);                       y += 26;
+    CkB(g_setPage[PG_FONT], L"Apply English layout on open", 16, y, &Settings::applyEnglish); y += 30;
+    MkButton(g_setPage[PG_FONT], L"Choose...", 16, y, 110);
+    Bind([g_fontPreview]{
+        static HFONT prev = nullptr;
+        if (prev) { DeleteObject(prev); prev = nullptr; }
+        HFONT pf = CreateFontW(-MulDiv(g_draft.fontSize, 96, 72), 0, 0, 0,
+            g_draft.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+            OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+            VARIABLE_PITCH, g_draft.fontName.c_str());
+        prev = pf;
+        SendMessageW(g_fontPreview, WM_SETFONT, (WPARAM)pf, TRUE); }, []{});
+
+    // --- Hotkey
+    y = 12;
+    MkLabel(g_setPage[PG_HOTKEY], L"Click the box and press the hotkey (Esc cancels):", 16, y, 430); y += 24;
+    g_hkEdit = MkEdit(g_setPage[PG_HOTKEY], L"", 16, y, 300);
+    SetWindowSubclass(g_hkEdit, HkCapProc, 777, 0);
+    SetWindowLongW(g_hkEdit, GWL_STYLE, GetWindowLongW(g_hkEdit, GWL_STYLE) | ES_READONLY);
+    y += 32;
+    g_hkLabel = MkLabel(g_setPage[PG_HOTKEY], L"Current hotkey:", 16, y, 430); y += 30;
+    MkLabel(g_setPage[PG_HOTKEY], L"VK code (advanced):", 16, y + 2, 120);
+    g_hkVk = MkEdit(g_setPage[PG_HOTKEY], L"", 140, y, 70, true);
+    Bind([g_hkVk]{ wchar_t b[16]; wsprintfW(b, L"%u", g_draftHk.key);
+                   SetWindowTextW(g_hkVk, b); }, []{});
+
+    // --- Execution
+    y = 12;
+    CkB(g_setPage[PG_EXEC], L"Internal commands (/...)",   16, y, &Settings::execInternal); y += 26;
+    CkB(g_setPage[PG_EXEC], L"Aliases and ~system aliases", 16, y, &Settings::execAliases); y += 26;
+    CkB(g_setPage[PG_EXEC], L"Websites (www. / http)",     16, y, &Settings::execWww);     y += 26;
+    CkB(g_setPage[PG_EXEC], L"E-mail (mailto)",            16, y, &Settings::execEmail);   y += 26;
+    CkB(g_setPage[PG_EXEC], L"Files and folders",          16, y, &Settings::execFiles);   y += 26;
+    CkB(g_setPage[PG_EXEC], L"Shell commands (cmd /c)",    16, y, &Settings::execShell);   y += 26;
+    CkB(g_setPage[PG_EXEC], L"Plugins",                    16, y, &Settings::execPlugins);
+
+    // --- EasyType
+    y = 12;
+    MkLabel(g_setPage[PG_TYPE], L"Completion mode", 16, y + 2);
+    {
+        const wchar_t* it[] = { L"off", L"easy", L"linux (Tab cycles)" };
+        HWND c = MkCombo(g_setPage[PG_TYPE], 175, y, 180, it, 3);
+        Bind([c]{ SendMessageW(c, CB_SETCURSEL,
+                 g_draft.easyType == 0 ? 0 : g_draft.easyType == 1 ? 1 : 2, 0); },
+             [c]{ g_draft.easyType = (int)SendMessageW(c, CB_GETCURSEL, 0, 0); });
+    }
+    y += 34;
+    CkB(g_setPage[PG_TYPE], L"Complete internal commands", 16, y, &Settings::etInternal); y += 26;
+    CkB(g_setPage[PG_TYPE], L"Complete aliases",           16, y, &Settings::etAlias);    y += 26;
+    CkB(g_setPage[PG_TYPE], L"Complete system aliases (~)", 16, y, &Settings::etSysAlias); y += 26;
+    CkB(g_setPage[PG_TYPE], L"Complete from history",      16, y, &Settings::etHistory);
+
+    // --- History
+    y = 12;
+    NumB(g_setPage[PG_HISTORY], L"Max history items", 16, y, &Settings::historyMax, 10, 10000); y += 32;
+    CkB(g_setPage[PG_HISTORY], L"Ctrl+Z undo",  16, y, &Settings::useUndo);       y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save internal commands", 16, y, &Settings::saveInternal); y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save aliases",           16, y, &Settings::saveAlias);   y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save websites",          16, y, &Settings::saveWww);     y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save e-mails",           16, y, &Settings::saveEmail);   y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save paths",             16, y, &Settings::savePath);    y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save plugin commands",   16, y, &Settings::savePlugins); y += 26;
+    CkB(g_setPage[PG_HISTORY], L"Save other commands",    16, y, &Settings::saveUnknown); y += 30;
+    MkButton(g_setPage[PG_HISTORY], L"Clear history", 16, y, 130);
+
+    // --- Log
+    y = 12;
+    CkB(g_setPage[PG_LOG], L"Enable error log", 16, y, &Settings::logEnabled); y += 28;
+    TxB(g_setPage[PG_LOG], L"File", 16, y, &Settings::logFile);                y += 28;
+    NumB(g_setPage[PG_LOG], L"Max size KB", 16, y, &Settings::logMaxKB, 16, 65536); y += 32;
+    MkLabel(g_setPage[PG_LOG], L"On overflow", 16, y + 2);
+    {
+        const wchar_t* it[] = { L"rotate", L"truncate", L"timestamp", L"keep" };
+        HWND c = MkCombo(g_setPage[PG_LOG], 175, y, 130, it, 4);
+        Bind([c]{ SendMessageW(c, CB_SETCURSEL, g_draft.logRewrite, 0); },
+             [c]{ g_draft.logRewrite = (int)SendMessageW(c, CB_GETCURSEL, 0, 0); });
+    }
+    y += 32;
+    NumB(g_setPage[PG_LOG], L"Keep rotated copies", 16, y, &Settings::logKeep, 1, 99);
+
+    // --- Aliases
+    g_alLb = MkOn(g_setPage[PG_ALIASES], L"LISTBOX", L"",
+                  WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 150, 330);
+    int ax = 170;
+    MkLabel(g_setPage[PG_ALIASES], L"Name",   ax, 10, 60);
+    g_alName   = MkEdit(g_setPage[PG_ALIASES], L"", ax + 55, 8, 230);
+    MkLabel(g_setPage[PG_ALIASES], L"Action", ax, 40, 60);
+    g_alAction = MkEdit(g_setPage[PG_ALIASES], L"", ax + 55, 38, 230);
+    MkLabel(g_setPage[PG_ALIASES], L"Work dir", ax, 70, 60);
+    g_alDir    = MkEdit(g_setPage[PG_ALIASES], L"", ax + 55, 68, 230);
+    MkLabel(g_setPage[PG_ALIASES], L"Window", ax, 100, 60);
+    {
+        const wchar_t* it[] = { L"Normal", L"Maximized", L"Minimized", L"Hidden" };
+        g_alState = MkCombo(g_setPage[PG_ALIASES], ax + 55, 98, 130, it, 4);
+    }
+    MkButton(g_setPage[PG_ALIASES], L"Add",    ax, 132, 72);
+    MkButton(g_setPage[PG_ALIASES], L"Update", ax + 80, 132, 72);
+    MkButton(g_setPage[PG_ALIASES], L"Delete", ax + 160, 132, 72);
+    MkLabel(g_setPage[PG_ALIASES],
+            L"Action supports %s and %1..%n parameters.", ax, 168, 290);
+
+    MkButton(g_setWnd, L"OK",     380, 380, 75);
+    MkButton(g_setWnd, L"Apply",  461, 380, 75);
+    MkButton(g_setWnd, L"Cancel", 542, 380, 75);
+
+    UiLoad();
+    SettingsShowPage(startPage);
+    ShowWindow(g_setWnd, SW_SHOW);
+    UpdateWindow(g_setWnd);
+    SetForegroundWindow(g_setWnd);
+}
+
+// ---------------------------------------------------------------- INI + apply
+static void WInt(const wchar_t* sec, const wchar_t* key, long v) {
+    wchar_t b[24]; wsprintfW(b, L"%ld", v);
+    WritePrivateProfileStringW(sec, key, b, g_iniPath.c_str());
+}
+static void WB(const wchar_t* sec, const wchar_t* key, bool v) {
+    WritePrivateProfileStringW(sec, key, v ? L"1" : L"0", g_iniPath.c_str());
+}
+static void WS_(const wchar_t* sec, const wchar_t* key, const std::wstring& v) {
+    WritePrivateProfileStringW(sec, key, v.c_str(), g_iniPath.c_str());
+}
+
+static void WriteDraftIni() {
+    Settings& s = g_draft;
+    WB(L"Show", L"ShowConsoleOnStart", s.showOnStart);
+    WB(L"Show", L"HideOnDeactivate",   s.hideOnDeactivate);
+    WB(L"Show", L"TrayIcon",           s.trayIcon);
+    WB(L"Show", L"BalloonTips",        s.balloonTips);
+    WB(L"Show", L"AutoHide",           s.autoHide);
+    WInt(L"Show", L"AutoHideValue",    s.autoHideValue);
+    WInt(L"Show", L"Width",            s.width);
+    WInt(L"Show", L"Height",           s.height);
+    WInt(L"Show", L"X",                s.x);
+    WInt(L"Show", L"Y",                s.y);
+    WB(L"Show", L"CenterScreenX",      s.centerX);
+    WB(L"Show", L"CenterScreenY",      s.centerY);
+    WInt(L"Show", L"Transparent",      s.transparent);
+    WS_(L"Show", L"Priority",          s.priority);
+
+    WS_(L"Font", L"Name",              s.fontName);
+    WInt(L"Font", L"Size",             s.fontSize);
+    WB(L"Font", L"Bold",               s.fontBold != 0);
+    WB(L"Font", L"ApplyEnglish",       s.applyEnglish);
+
+    WInt(L"HotKey", L"Key",            g_draftHk.key);
+    WB(L"HotKey", L"AltKey",           g_draftHk.alt);
+    WB(L"HotKey", L"CtrlKey",          g_draftHk.ctrl);
+    WB(L"HotKey", L"ShiftKey",         g_draftHk.shift);
+    WB(L"HotKey", L"WinKey",           g_draftHk.win);
+
+    WB(L"Exec", L"Internal", s.execInternal);
+    WB(L"Exec", L"Aliases",  s.execAliases);
+    WB(L"Exec", L"WWW",      s.execWww);
+    WB(L"Exec", L"EMail",    s.execEmail);
+    WB(L"Exec", L"Files",    s.execFiles);
+    WB(L"Exec", L"Shell",    s.execShell);
+    WB(L"Exec", L"Plugins",  s.execPlugins);
+
+    WInt(L"Type", L"EasyType",     s.easyType);
+    WB(L"Type", L"UseInternalET",  s.etInternal);
+    WB(L"Type", L"UseAliasET",     s.etAlias);
+    WB(L"Type", L"UseHistoryET",   s.etHistory);
+    WB(L"Type", L"UseSysAliasET",  s.etSysAlias);
+
+    WInt(L"History", L"Max",        s.historyMax);
+    WB(L"History", L"Internal",     s.saveInternal);
+    WB(L"History", L"Alias",        s.saveAlias);
+    WB(L"History", L"WWW",          s.saveWww);
+    WB(L"History", L"EMail",        s.saveEmail);
+    WB(L"History", L"Path",         s.savePath);
+    WB(L"History", L"Plugins",      s.savePlugins);
+    WB(L"History", L"Unknown",      s.saveUnknown);
+    WB(L"Undo", L"UseUndo",         s.useUndo);
+
+    WB(L"Log", L"Enabled",          s.logEnabled);
+    WS_(L"Log", L"File",            s.logFile);
+    WInt(L"Log", L"MaxSizeKB",      s.logMaxKB);
+    WS_(L"Log", L"Rewrite",         s.logRewrite == 1 ? L"truncate" :
+                                    s.logRewrite == 2 ? L"timestamp" :
+                                    s.logRewrite == 3 ? L"keep" : L"rotate");
+    WInt(L"Log", L"Keep",           s.logKeep);
+
+    if (s.consoleBg >= 0) WInt(L"Color", L"ConsoleBG", s.consoleBg);
+    else WritePrivateProfileStringW(L"Color", L"ConsoleBG", nullptr, g_iniPath.c_str());
+    if (s.consoleFg >= 0) WInt(L"Color", L"ConsoleFG", s.consoleFg);
+    else WritePrivateProfileStringW(L"Color", L"ConsoleFG", nullptr, g_iniPath.c_str());
+
+    // [Aliases]: rewrite section in canonical form
+    WritePrivateProfileStringW(L"Aliases", nullptr, nullptr, g_iniPath.c_str());
+    for (auto& a : g_draftAliases) {
+        std::wstring value = a.action;
+        if (!a.dir.empty() || a.state != SW_SHOWNORMAL) {
+            wchar_t st[8]; wsprintfW(st, L"%d", a.state);
+            value = a.action + L"|" + L"|" + a.dir + L"|" + st;
+        }
+        WS_(L"Aliases", a.name.c_str(), value);
+    }
+
+    // remember dialog position (TypeAndRun [Coordinates] parity)
+    if (g_setWnd) {
+        RECT r; GetWindowRect(g_setWnd, &r);
+        WInt(L"Coordinates", L"SettingsX", r.left);
+        WInt(L"Coordinates", L"SettingsY", r.top);
+    }
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, g_iniPath.c_str()); // flush
+}
+
+static void LiveApply(HWND mainWnd) {
+    ReloadHotkey(mainWnd);                 // LoadSettings + RegisterHotKey
+    LoadAliases();                         // LoadSettings covers sys-aliases/ignores
+    ApplyFont(g_edit);
+    DWORD pc = NORMAL_PRIORITY_CLASS;
+    if      (g_set.priority == L"idle")     pc = IDLE_PRIORITY_CLASS;
+    else if (g_set.priority == L"high")     pc = HIGH_PRIORITY_CLASS;
+    else if (g_set.priority == L"realtime") pc = REALTIME_PRIORITY_CLASS;
+    SetPriorityClass(GetCurrentProcess(), pc);
+    if (g_bgBrush) { DeleteObject(g_bgBrush); g_bgBrush = nullptr; }
+    if (g_set.consoleBg >= 0) g_bgBrush = CreateSolidBrush((COLORREF)g_set.consoleBg);
+    if (g_set.trayIcon) { if (!g_nid.hWnd) AddTrayIcon(mainWnd, false); }
+    else RemoveTrayIcon();
+    KillTimer(mainWnd, 1);
+    if (g_visible && g_set.autoHide && g_set.autoHideValue > 0)
+        SetTimer(mainWnd, 1, (UINT)g_set.autoHideValue * 1000, nullptr);
+    if (g_visible) ShowBox(mainWnd);       // reposition / re-alpha with new values
+    else InvalidateRect(mainWnd, nullptr, TRUE);
+    LogInfo(L"settings applied");
+}
+
+static void OpenSettings(HWND mainWnd, int page) {
+    if (g_setWnd) {                        // already open: raise + switch page
+        SendMessageW(g_setList, LB_SETCURSEL, page, 0);
+        SettingsShowPage(page);
+        SetForegroundWindow(g_setWnd);
+        return;
+    }
+    SettingsCreate(mainWnd, page);
+}
+
+// test hook: create the dialog, pump, destroy (--test-settings)
+static bool SettingsSelfTest(HWND mainWnd) {
+    OpenSettings(mainWnd, 0);
+    if (!g_setWnd) return false;
+    MSG m;
+    for (int i = 0; i < 20; ++i) {
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        Sleep(20);
+    }
+    bool ok = g_setWnd != nullptr;         // survived the pump
+    if (g_setWnd) PostMessageW(g_setWnd, WM_CLOSE, 0, 0);
+    for (int i = 0; i < 20; ++i) {
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        Sleep(20);
+    }
+    return ok && g_setWnd == nullptr;
 }
 
 static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
@@ -1431,6 +2092,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         else if (LOWORD(wp) == 2) ShellExecuteW(hWnd, L"open", g_iniPath.c_str(),
                                                 nullptr, nullptr, SW_SHOWNORMAL);
         else if (LOWORD(wp) == 3) DestroyWindow(hWnd);
+        else if (LOWORD(wp) == 4) OpenSettings(hWnd, PG_APPEAR);
         return 0;
     case WM_COPYDATA: {
         // Second instance forwards its command line for execution.
@@ -1489,6 +2151,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         for (int i = 1; i < argc; ++i)
             if (_wcsicmp(argv[i], L"--version") == 0 || _wcsicmp(argv[i], L"/version") == 0)
                 wantVersion = true;
+        for (int i = 1; i < argc; ++i)
+            if (_wcsicmp(argv[i], L"--test-settings") == 0)
+                g_testSettings = true;
         if (argv) LocalFree(argv);
         if (wantVersion) {
             if (AttachConsole(ATTACH_PARENT_PROCESS)) {
@@ -1569,8 +2234,25 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     AddTrayIcon(mainWnd, true);
     if (g_set.showOnStart) ShowBox(mainWnd);
 
+    if (g_testSettings) {                  // CI gate: dialog must build, pump, close
+        bool ok = SettingsSelfTest(mainWnd);
+        LogInfo(ok ? L"settings self-test OK" : L"settings self-test FAILED");
+        DestroyWindow(mainWnd);
+        MSG m; while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) DispatchMessageW(&m);
+        return ok ? 0 : 1;
+    }
+
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
+        // Settings dialog: tab/enter navigation + Esc closes it.
+        if (g_setWnd && (GetAncestor(msg.hwnd, GA_ROOT) == g_setWnd)) {
+            if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE &&
+                msg.hwnd != g_hkEdit) {
+                DestroyWindow(g_setWnd);
+                continue;
+            }
+            if (IsDialogMessageW(g_setWnd, &msg)) continue;
+        }
         // Let Esc close the box even when the edit has focus.
         if (msg.message == WM_KEYDOWN && msg.wParam == VK_ESCAPE &&
             msg.hwnd == g_edit && g_visible) {

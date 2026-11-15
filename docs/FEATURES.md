@@ -12,6 +12,24 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
   Wox (GPL ancestor of Run), Raycast / Alfred (rich info display), ConEmu (portable INI),
   Guake / Yakuake / Drop (drop-down console/bash mode).
 
+## Settings dialog (TypeAndRun `frmSettingsUnit` parity)
+| Page | Covers | Status |
+|---|---|---|
+| Appearance | start/hide/tray/balloons/AutoHide/Priority | ✅ |
+| Console | size/position/centering/alpha/colors | ✅ |
+| Font | name/size/bold + native Choose-font dialog + ApplyEnglish + preview | ✅ |
+| Hotkey | THotKey-style capture widget + VK display | ✅ |
+| Execution | 7 exec toggles | ✅ |
+| EasyType | mode + 4 completion sources | ✅ |
+| History | max + per-type toggles + Clear history | ✅ |
+| Log | enabled/file/max KB/rewrite/keep | ✅ |
+| Aliases | editor: list + name/action/dir/state, Add/Update/Delete | ✅ |
+| Hint / DropDown / Sounds / Registry / Language / dead-alias checker | — | 📋 Phase 2 |
+
+Scratch-copy editing (Cancel discards), OK/Apply → per-key INI write (comments
+survive) → live apply (hotkey re-register, font, geometry, alpha, priority, tray,
+timer, brush) — ✅; `[Coordinates]` remembers dialog position — ✅.
+
 ## Console & Show  `[Show]`
 | TypeAndRun option | TypeBox |
 |---|---|

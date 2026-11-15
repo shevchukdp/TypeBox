@@ -3,6 +3,39 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.6.0] - 2026-11-15
+
+### Added
+- **Settings dialog** (`/settings`, tray "Settings...") — the TypeAndRun GUI parity
+  milestone: settings are now edited in a window, not only in the INI.
+  Nine pages: **Appearance** (start/hide/tray/balloons/AutoHide/Priority) ·
+  **Console** (size/position/centering/alpha/BG/FG colors) ·
+  **Font** (name/size/bold + native *Choose font...* dialog + ApplyEnglish, live preview) ·
+  **Hotkey** (click the box, press the combo — THotKey-style capture widget,
+  VK display) · **Execution** toggles · **EasyType** (mode + completion sources) ·
+  **History** (max, per-type save toggles, Clear history) ·
+  **Log** (enabled/file/max KB/rewrite method/keep) ·
+  **Aliases** (list + name/action/work-dir/window-state editor with Add/Update/Delete).
+- **TypeAndRun save semantics**: the dialog edits a scratch copy —
+  **Cancel discards**, OK/Apply write `TypeBox.ini` key-by-key
+  (comments and unknown keys survive; `[Aliases]` is rewritten canonically) — then
+  **`ApplySettings` applies live**: hotkey re-registration, font, geometry, alpha,
+  process priority, tray, AutoHide timer, background brush. `[Coordinates]`
+  remembers the dialog position (parity with TypeAndRun).
+- `/config` opens the dialog on the Aliases page (TypeAndRun parity);
+  `/openconfig` keeps the old "open TypeBox.ini" behavior; tray menu gained
+  **Settings...**.
+- CI **smoke gate** now also runs `TypeBox.exe --test-settings` — a build whose
+  settings dialog cannot be created/pumped/closed never reaches a release.
+
+### Verified
+- Round-trip harness (posts real WM_KEYDOWN/WM_SETTEXT/BM_CLICK at the dialog):
+  INI→GUI load (width, font, hotkey text, history max, log size),
+  GUI→INI save (`Max=1234` after typing + OK), hotkey capture (F9 →
+  `[HotKey] Key=120`), external INI edit + `/reread` reloads the dialog,
+  **Cancel discards** (typed 999, file kept 77), `[SysAliases]`/comments survive
+  the rewrite, `settings applied` in the portable log.
+
 ## [0.5.0] - 2026-11-15
 
 ### Added

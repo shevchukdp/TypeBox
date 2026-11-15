@@ -126,6 +126,18 @@ While the foreground window matches, the hotkey keeps the console hidden.
 `[DropDown]`, `[Color]` — inherited from the legacy schema (see `TypeAndRun.ini`
 in galancev/typeandrun) and activated as features land.
 
+## Settings dialog
+
+`/settings` (or tray → **Settings...**) opens a portable settings window —
+9 pages (Appearance, Console, Font, Hotkey, Execution, EasyType, History, Log,
+Aliases). It edits a scratch copy: **Cancel discards**; **OK/Apply** write
+`TypeBox.ini` key-by-key (your comments and unknown keys survive; `[Aliases]`
+is rewritten in canonical form) and apply live — hotkey re-registration with a
+log entry on conflict, font, geometry, alpha, priority, tray, AutoHide timer.
+`/config` opens the alias editor page directly; `/openconfig` opens the raw file.
+The dialog position is remembered in `[Coordinates] SettingsX/SettingsY`.
+Everything remains pure INI — hand-editing the file and `/reread` still works.
+
 ## Migration from TypeAndRun
 | Legacy | TypeBox |
 |---|---|

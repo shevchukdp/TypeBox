@@ -33,7 +33,10 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.5.0):
+Working today (v0.6.0):
+- ✅ **Settings dialog** — 9 pages (Appearance · Console · Font · Hotkey · Execution ·
+  EasyType · History · Log · Aliases editor), scratch copy + Cancel, live-apply on OK/Apply
+  (hotkey re-registration, font, geometry, alpha, priority, tray) — `/settings`, tray menu
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)
 - ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware, AutoHide)
 - ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`),
