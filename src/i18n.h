@@ -52,6 +52,8 @@ enum StrId {
     STR_EN_VALUE, STR_LA_AUTO,
     STR_AL_WN_NORMAL, STR_AL_WN_MAX, STR_AL_WN_MIN, STR_AL_WN_HIDDEN,
     STR_LA_HINT,
+    STR_PG_THEME, STR_TH_SCHEME, STR_TH_HINT,
+    STR_AN_PATH, STR_AN_UNKNOWN, STR_AN_OFF,
     STR_LAST
 };
 
@@ -86,7 +88,9 @@ static const char* const kKeyNames[STR_LAST] = {
     "la_label", "about_text", "help_head",
     "en_value", "la_auto",
     "al_wn_normal", "al_wn_max", "al_wn_min", "al_wn_hidden",
-    "la_hint"
+    "la_hint",
+    "pg_theme", "th_scheme", "th_hint",
+    "an_path", "an_unknown", "an_off"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -165,7 +169,10 @@ L"ConEmu and drop-down terminals (Guake/Yakuake/Drop).",
 L"Internal commands:",
 L"Value", L"(Auto)",
 L"Normal", L"Maximized", L"Minimized", L"Hidden",
-L"lang\\<code>.ini adds portable overrides (key=value, UTF-8)." };
+L"lang\\<code>.ini adds portable overrides (key=value, UTF-8).",
+L"Theme", L"Color scheme",
+L"Warm presets for the console and tray icon; explicit [Color] values win.",
+L"from PATH", L"unknown command", L"disabled by [Exec]" };
 
 // ---------------------------------------------------------------- Russian (full)
 static const Pack kRu = {
@@ -217,7 +224,10 @@ L"Вдохновлён PowerToys Run, Flow Launcher, Wox, Raycast, Alfred,\n"
 L"ConEmu и выпадающими терминалами (Guake/Yakuake/Drop).",
 L"Внутренние команды:",
 L"Значение", L"(Авто)", L"Обычное", L"Развёрнутое", L"Свёрнутое", L"Скрытое",
-L"lang\\<code>.ini добавляет портативные переводы (key=value, UTF-8)." };
+L"lang\\<code>.ini добавляет портативные переводы (key=value, UTF-8).",
+L"Тема", L"Цветовая схема",
+L"Тёплые пресеты консоли и трей-иконки; явные значения [Color] важнее.",
+L"из PATH", L"неизвестная команда", L"запрещено в [Exec]" };
 
 // ---------------------------------------------------------------- Ukrainian (full)
 static const Pack kUk = {

@@ -24,9 +24,9 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 |---|---|
 | ![al](docs/screenshots/settings-aliases.png) | ![p](docs/screenshots/settings-plugins.png) |
 
-| Settings → Language (20 UI languages) | The same page, Russian UI |
-|---|---|
-| ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
+| Settings → Theme (cozy presets) | Settings → Language (20 UI languages) | The same page, Russian UI |
+|---|---|---|
+| ![theme](docs/screenshots/settings-theme.png) | ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
 
 > ### Roots & inspiration
 > **TypeBox grows out of [TypeAndRun](https://github.com/galancev/typeandrun)** by Evgeniy Galantsev (2001–2004, GPL-3.0) — the **direct ancestor** whose idea, command/alias engine and INI config schema this project continues.
@@ -51,7 +51,11 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.9.0):
+Working today (v0.9.1):
+- ✅ **Cozy themes + visual anchors** — 7 warm presets (`[Theme]`, Theme page, live
+  preview), GDI-drawn tray badge (accent rim, state dot), console status strip
+  (counts · chips · clock) and a traffic light previewing Enter: 🟢 your alias/~/cmd,
+  🟡 PATH/file/URL/plugin, 🔴 shell catch-all — per keystroke, localized labels
 - ✅ **Localization — 20 languages, everywhere** (en ru uk de fr es pt it complete +
   zh ja ko ar tr pl vi hi id sw af am core): tray, balloons, help/about, whole settings
   dialog; `[UI] Language`, Language page, Arabic RTL, CJK/RTL font auto-suggestion,
@@ -60,9 +64,9 @@ Working today (v0.9.0):
   *Environment Variables* dialog, but portable: typed names launch from your folders,
   PATH is injected for aliases/shell/children, `%NAME%` expands everywhere — `/path`,
   Settings → Environment
-- ✅ **Settings dialog** — 13 pages (Appearance · Console · Font · Hotkey · Execution ·
+- ✅ **Settings dialog** — 14 pages (Appearance · Console · Font · Hotkey · Execution ·
   EasyType · History · Log · Aliases editor · Sounds · Plugin manager · Environment ·
-  Language), scratch copy + Cancel,
+  Theme · Language), scratch copy + Cancel,
   live-apply on OK/Apply (hotkey re-registration, font, geometry, alpha, priority, tray,
   plugin load state, UI language) — `/settings`, tray menu
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)

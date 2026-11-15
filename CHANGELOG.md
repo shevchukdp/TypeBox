@@ -3,6 +3,41 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.9.1] - 2026-11-15
+
+### Added
+- **Cozy themes** — seven warm presets paint the console, the status strip and the
+  tray badge as one: `cozy-dark · paper-light · midnight-blue · nord-frost ·
+  solarized-dark · solarized-light · forest-night`. Pick it on the new **Theme**
+  settings page (live preview card) or via `[Theme] Name=`; explicit
+  `[Color] ConsoleBG/ConsoleFG` always win. Apply re-skins everything live
+  (log: `theme: nord-frost`).
+- **Cozy tray badge** — drawn with GDI (no resources): charcoal circle, rim in the
+  theme accent, `>_` glyph; state dot: **idle** dim rim, **console shown** accent
+  dot, **error since start** red dot (cleared on Apply). System-icon fallback if GDI
+  ever fails.
+- **Status strip** (bottom 20 px of the drop-down, self-drawn, follows the theme):
+  mini `>_`, alias count, plugin dots `●2/3`, EasyType and theme chips, sound ♪,
+  language code and a clock. Console default height 40 → 56.
+- **Visual anchors — a traffic light next to what Enter will do** (re-classified on
+  every keystroke): 🟢 green = your own (`alias`, `~sysalias`, known `/command`);
+  🟡 amber = found outside (`PATH` program, file/folder, URL, mail, plugin command);
+  🔴 red = catch-all/unknown (shell fallback, unknown `/cmd`, or the class is
+  switched off in `[Exec]`). Each lamp lights with a localized label
+  (Aliases / from PATH / shell commands / disabled by [Exec] …).
+
+### Fixed
+- Settings dialog buttons (OK/Apply/Cancel/Add/Update/Delete/Choose.../Clear
+  history/Rescan/Unload all/About/Options/Add var…) now dispatch by **control id**,
+  not by button text — before, they were dead in every non-English UI.
+
+### Verified
+- `test-v091` (12 checks): startup `theme:` log, Theme-page combo + Apply round-trip
+  (`Name = forest-night`), Apply click in the **Russian** UI (id dispatch), explicit
+  `[Color]` override survives, tray fallback path, `--test-settings` on the 14-page
+  dialog. `test-v090` regression still 17/17. Traffic lights visually verified for
+  alias (green), URL/PATH/plugin (amber), shell/unknown (red).
+
 ## [0.9.0] - 2026-11-15
 
 ### Added

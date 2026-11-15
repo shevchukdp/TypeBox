@@ -144,6 +144,17 @@ writes this key; Apply switches the whole UI immediately (Arabic also mirrors th
 drop-down RTL). Portable community overrides live in `lang\<code>.ini` next to the
 exe — see [LANGUAGE.md](LANGUAGE.md).
 
+### `[Theme]` — cozy color schemes (TypeBox 0.9.1)
+```ini
+[Theme]
+Name = cozy-dark   ; cozy-dark | paper-light | midnight-blue | nord-frost
+                   ; | solarized-dark | solarized-light | forest-night
+```
+A preset paints the console, the status strip and the tray badge in one go
+(the accent tints the badge rim and the chips). **Theme** page of the settings
+dialog has a live preview; **Apply** re-skins live (log `theme: …`). Explicit
+`[Color] ConsoleBG/ConsoleFG` values always override the preset.
+
 ### `[SysAliases]` — system commands (TypeAndRun parity)
 
 `~name = action` lines, e.g. `~notes = notepad.exe`. An empty/absent section loads

@@ -115,6 +115,12 @@ TypeAndRun shipped external `.lng` tables + `.chm` help for 10 languages. TypeBo
 script-capable font suggestion; portable `lang\<code>.ini` overrides replace the `.lng`
 idea without extra downloads — ✅ (`.chm` help — 📋, `/help` covers the basics)
 
+## Cozy look  `[Theme]` / `[Color]`  (TypeBox beyond TypeAndRun)
+7 warm presets (console + status strip + GDI-drawn tray badge as one, accent-linked),
+live preview on the Theme page; status strip shows counts/chips/clock; **visual anchors**
+— a traffic light classifies the typed line on every keystroke (green = alias/~/command,
+amber = PATH/file/URL/plugin, red = shell catch-all/unknown/off) — ✅ 0.9.1
+
 ## Registry integration  `[Registry]`
 AutoRun (HKLM/HKCU), "Add to context menu" (ShellInt), MultiUser — 📋
 (⚠ TypeBox keeps ALL portable settings in INI; these opt-in entries are explicit-only.)

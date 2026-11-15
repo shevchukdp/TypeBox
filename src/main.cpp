@@ -68,7 +68,7 @@ struct SysAlias {
 
 struct Settings {
     // [Show]
-    int  width = 720, height = 40, x = -1, y = -1;
+    int  width = 720, height = 56, x = -1, y = -1;   // 56 = line + status strip
     bool centerX = true, centerY = true;
     bool hideOnDeactivate = true, trayIcon = true, balloonTips = true;
     bool showOnStart = true;
@@ -87,6 +87,9 @@ struct Settings {
     std::wstring priority = L"normal";
     // [UI] Language: auto | en ru uk de fr es pt it zh ja ko ar tr pl vi hi id sw af am
     std::wstring langCode = L"auto";
+    // [Theme] Name — cozy color scheme: cozy-dark paper-light midnight-blue
+    // nord-frost solarized-dark solarized-light forest-night
+    std::wstring theme = L"cozy-dark";
     // [Type] EasyType completion
     int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
     bool etInternal = true, etAlias = true, etHistory = true, etSysAlias = true;
@@ -413,7 +416,13 @@ static void LogWrite(const wchar_t* level, const std::wstring& msg) {
     }
 }
 
-static void LogError(const std::wstring& msg) { LogWrite(L"ERROR", msg); }
+static void SetTrayVisual();
+static bool g_trayErr = false;   // set by LogError, cleared on Apply
+static void LogError(const std::wstring& msg) {
+    LogWrite(L"ERROR", msg);
+    g_trayErr = true;   // cozy badge turns red until the next Apply
+    SetTrayVisual();
+}
 static void LogInfo(const std::wstring& msg) { LogWrite(L"INFO", msg); }
 
 // ---------------------------------------------------------------- settings
@@ -474,7 +483,7 @@ static void LoadEnvironment() {
 
 static void LoadSettings() {
     g_set.width             = ReadIniInt(L"Show", L"Width", 720);
-    g_set.height            = ReadIniInt(L"Show", L"Height", 40);
+    g_set.height            = ReadIniInt(L"Show", L"Height", 56);
     g_set.x                 = ReadIniInt(L"Show", L"X", -1);
     g_set.y                 = ReadIniInt(L"Show", L"Y", -1);
     g_set.centerX           = ReadIniBool(L"Show", L"CenterScreenX", true);
@@ -501,6 +510,7 @@ static void LoadSettings() {
     g_set.applyEnglish = ReadIniBool(L"Font", L"ApplyEnglish", false);
     g_set.priority = Lower(Trim(ReadIniStr(L"Show", L"Priority", L"normal")));
     g_set.langCode = Trim(ReadIniStr(L"UI", L"Language", L"auto"));
+    g_set.theme    = Trim(ReadIniStr(L"Theme", L"Name", L"cozy-dark"));
 
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
     g_set.etInternal = ReadIniBool(L"Type", L"UseInternalET", true);
@@ -983,7 +993,7 @@ static void ResetET();
 static void OpenSettings(HWND mainWnd, int page);
 enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
        PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_ENV,
-       PG_LANG, PG_COUNT };
+       PG_THEME, PG_LANG, PG_COUNT };
 
 // ---------------------------------------------------------------- internal commands
 //
@@ -1326,6 +1336,76 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
     return EXC_NONE;
 }
 
+// ---------------------------------------------------------------- visual anchors
+// A traffic light previews what Enter WILL do with the typed line:
+//   green  — something you defined (alias, ~sysalias, known /command)
+//   amber  — found outside (PATH program, file/folder, URL, mail, plugin)
+//   red    — nothing is really known (shell catch-all, unknown, or the class
+//            is switched off in [Exec])
+// It re-classifies on every keystroke (EN_CHANGE) and is painted in the
+// status strip next to three physical lamp dots.
+static const wchar_t* const kInternalCmds[] = {
+    L"/about", L"/checkconfig", L"/config", L"/exit", L"/export", L"/help",
+    L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
+    L"/log", L"/openconfig", L"/path", L"/reread", L"/settings", L"/show",
+    L"/sys", L"/unload", L"/undo" };
+
+struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
+static Anchor g_anchor;
+
+static Anchor ClassifyAnchor(const std::wstring& lineRaw) {
+    Anchor a;
+    std::wstring line = Trim(lineRaw);
+    if (line.empty()) return a;
+
+    if (line[0] == L'/') {
+        if (!g_set.execInternal) { a.lamp = 2; a.labelId = STR_AN_OFF; return a; }
+        std::wstring w = FirstWord(line);
+        for (auto c : kInternalCmds)
+            if (_wcsicmp(w.c_str(), c) == 0) { a.lamp = 0; a.labelId = STR_SO_INTERNAL; return a; }
+        a.lamp = 2; a.labelId = STR_AN_UNKNOWN; return a;
+    }
+
+    std::wstring word = FirstWord(line);
+    if (g_set.execAliases) {
+        if (word[0] != L'~' && FindAlias(word)) { a.lamp = 0; a.labelId = STR_SO_ALIAS; return a; }
+        if (word[0] == L'~' && FindSysAlias(word)) { a.lamp = 0; a.labelId = STR_SO_SYS; return a; }
+    }
+
+    if (g_set.execPlugins)
+        for (auto& p : g_plugins) {
+            if (!p.GetCount || !p.GetString || !PluginLoadAllowed(p)) continue;
+            for (int i = 0; i < p.GetCount(); ++i)
+                if (_wcsicmp(word.c_str(), FromAnsi(p.GetString(i)).c_str()) == 0)
+                    { a.lamp = 1; a.labelId = STR_SO_PLUGIN; return a; }
+        }
+
+    std::wstring expanded = ExpandEnv(line);
+    if (LooksLikeUrl(expanded))
+        { a.lamp = g_set.execWww   ? 1 : 2; a.labelId = g_set.execWww   ? STR_SO_URL  : STR_AN_OFF; return a; }
+    if (LooksLikeEmail(expanded))
+        { a.lamp = g_set.execEmail ? 1 : 2; a.labelId = g_set.execEmail ? STR_SO_MAIL : STR_AN_OFF; return a; }
+    if (g_set.execFiles) {
+        DWORD attr = GetFileAttributesW(expanded.c_str());
+        if (attr != INVALID_FILE_ATTRIBUTES) {
+            a.lamp = 1;
+            a.labelId = (attr & FILE_ATTRIBUTE_DIRECTORY) ? STR_SO_FOLDER : STR_SO_FILE;
+            return a;
+        }
+    }
+    if (!word.empty() && word.find(L'\\') == std::wstring::npos &&
+        word.find(L'/') == std::wstring::npos) {
+        static const wchar_t* kExts[] = { L".exe", L".bat", L".cmd", L".com" };
+        for (auto& d : g_pathDirs)
+            for (auto ext : kExts)
+                if (GetFileAttributesW((d + L'\\' + word + ext).c_str())
+                        != INVALID_FILE_ATTRIBUTES)
+                    { a.lamp = 1; a.labelId = STR_AN_PATH; return a; }
+    }
+    if (g_set.execShell) { a.lamp = 2; a.labelId = STR_SO_SHELL; return a; }
+    a.lamp = 2; a.labelId = STR_AN_UNKNOWN; return a;
+}
+
 // ---------------------------------------------------------------- UI
 
 static void ApplyFont(HWND edit) {
@@ -1336,6 +1416,8 @@ static void ApplyFont(HWND edit) {
         ConsoleFontSuggestion(g_set.fontName.c_str()));
     SendMessageW(edit, WM_SETFONT, (WPARAM)f, TRUE);
 }
+
+static void SetTrayVisual();
 
 static void ShowBox(HWND mainWnd) {
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
@@ -1360,6 +1442,8 @@ static void ShowBox(HWND mainWnd) {
     g_visible = true;
     g_histPos = g_history.size();
     ResetET();
+    g_anchor = Anchor{};             // lights off until the first keystroke
+    SetTrayVisual();
     if (g_set.autoHide && g_set.autoHideValue > 0)
         SetTimer(mainWnd, 1, (UINT)g_set.autoHideValue * 1000, nullptr);
 }
@@ -1370,6 +1454,224 @@ static void HideBox(HWND mainWnd) {
     g_visible = false;
     KillTimer(mainWnd, 1);
     ResetET();
+    SetTrayVisual();
+}
+
+// ---------------------------------------------------------------- themes (cozy look)
+// Seven warm presets paint the console, the status strip and the tray badge.
+// Explicit [Color] ConsoleBG/ConsoleFG always win; the theme accent tints
+// the tray rim and the status chips so tray and console match.
+struct Theme { const wchar_t* name; COLORREF bg, fg, accent; };
+static const Theme kThemes[] = {
+    { L"cozy-dark",       RGB(0x2B, 0x26, 0x22), RGB(0xF5, 0xE9, 0xDC), RGB(0xFF, 0xB8, 0x6C) },
+    { L"paper-light",     RGB(0xFB, 0xF5, 0xEA), RGB(0x3A, 0x33, 0x2B), RGB(0xC2, 0x66, 0x2D) },
+    { L"midnight-blue",   RGB(0x1E, 0x24, 0x30), RGB(0xD8, 0xE2, 0xF0), RGB(0x7A, 0xA2, 0xF7) },
+    { L"nord-frost",      RGB(0x2E, 0x34, 0x40), RGB(0xD8, 0xDE, 0xE9), RGB(0x88, 0xC0, 0xD0) },
+    { L"solarized-dark",  RGB(0x00, 0x2B, 0x36), RGB(0x83, 0x94, 0x92), RGB(0xB5, 0x89, 0x00) },
+    { L"solarized-light", RGB(0xFD, 0xF6, 0xE3), RGB(0x58, 0x6E, 0x75), RGB(0xB5, 0x89, 0x00) },
+    { L"forest-night",    RGB(0x1F, 0x28, 0x23), RGB(0xDC, 0xE5, 0xDC), RGB(0xA3, 0xC9, 0xA8) },
+};
+static const int kThemeCount = (int)(sizeof(kThemes) / sizeof(kThemes[0]));
+
+static int ThemeFromName(const std::wstring& name) {
+    for (int i = 0; i < kThemeCount; ++i)
+        if (_wcsicmp(kThemes[i].name, name.c_str()) == 0) return i;
+    return 0;   // cozy-dark
+}
+
+static COLORREF MixColor(COLORREF a, COLORREF b, int pct) {   // pct% of b
+    auto mix = [pct](int x, int y) { return x + (y - x) * pct / 100; };
+    return RGB(mix(GetRValue(a), GetRValue(b)),
+               mix(GetGValue(a), GetGValue(b)),
+               mix(GetBValue(a), GetBValue(b)));
+}
+
+static COLORREF g_effBg  = RGB(0x2B, 0x26, 0x22);
+static COLORREF g_effFg  = RGB(0xF5, 0xE9, 0xDC);
+static COLORREF g_accent = RGB(0xFF, 0xB8, 0x6C);
+
+// Cozy tray badge: charcoal circle, accent rim, ">_" glyph, state dot.
+// Drawn with GDI into a 32bpp DIB; alpha is the circle mask we compute
+// ourselves (GDI never writes alpha).
+static HICON MakeCozyIcon(COLORREF card, COLORREF rim, COLORREF dot) {
+    const int S = 32, C = 16, R = 15;
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    bi.bmiHeader.biWidth = S; bi.bmiHeader.biHeight = -S;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HDC dc = GetDC(nullptr);
+    HBITMAP dib = CreateDIBSection(dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+    HDC mem = CreateCompatibleDC(dc);
+    HBITMAP old = (HBITMAP)SelectObject(mem, dib);
+    HPEN   pen  = CreatePen(PS_SOLID, 2, rim);
+    HBRUSH br   = CreateSolidBrush(card);
+    HPEN   oldPen = (HPEN)SelectObject(mem, pen);
+    HBRUSH oldBr  = (HBRUSH)SelectObject(mem, br);
+    Ellipse(mem, C - R, C - R, C + R, C + R);
+    HFONT f = CreateFontW(-13, 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET,
+                          OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                          FIXED_PITCH | FF_MODERN, L"Consolas");
+    HFONT oldF = (HFONT)SelectObject(mem, f);
+    SetBkMode(mem, TRANSPARENT);
+    SetTextColor(mem, RGB(0xF5, 0xE9, 0xDC));
+    RECT tr = { C - R, C - R - 1, C + R, C + R + 2 };
+    DrawTextW(mem, L">_", -1, &tr, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (dot) {
+        HBRUSH db = CreateSolidBrush(dot);
+        HPEN   dp = CreatePen(PS_SOLID, 1, card);
+        SelectObject(mem, dp); SelectObject(mem, db);
+        Ellipse(mem, 20, 1, 31, 12);
+        DeleteObject(db); DeleteObject(dp);
+    }
+    if (bits) {
+        unsigned char* px = (unsigned char*)bits;
+        for (int yy = 0; yy < S; ++yy)
+            for (int xx = 0; xx < S; ++xx) {
+                int dx = xx - C + 1, dy = yy - C;
+                px[4 * (yy * S + xx) + 3] =
+                    (dx * dx + dy * dy <= (R + 1) * (R + 1)) ? 0xFF : 0x00;
+            }
+    }
+    SelectObject(mem, oldF); SelectObject(mem, oldBr); SelectObject(mem, oldPen);
+    SelectObject(mem, old);
+    DeleteDC(mem); ReleaseDC(nullptr, dc);
+    DeleteObject(pen); DeleteObject(br); DeleteObject(f);
+    ICONINFO ii = {}; ii.fIcon = TRUE; ii.hbmColor = dib;
+    ii.hbmMask = CreateBitmap(S, S, 1, 1, nullptr);
+    HICON ic = CreateIconIndirect(&ii);
+    DeleteObject(ii.hbmMask); DeleteObject(dib);
+    return ic;
+}
+
+static HICON g_icoIdle = nullptr, g_icoShown = nullptr, g_icoErr = nullptr;
+
+static void EnsureTrayIcons() {
+    if (g_icoIdle) return;
+    const COLORREF card = RGB(0x2E, 0x2A, 0x27);
+    g_icoIdle  = MakeCozyIcon(card, MixColor(card, g_accent, 45), 0);
+    g_icoShown = MakeCozyIcon(card, g_accent, g_accent);
+    g_icoErr   = MakeCozyIcon(card, g_accent, RGB(0xE0, 0x6C, 0x75));
+    if (!g_icoIdle || !g_icoShown || !g_icoErr) {
+        // never ship an invisible tray icon: fall back to the system one
+        HICON def = LoadIconW(nullptr, IDI_APPLICATION);
+        if (!g_icoIdle)  g_icoIdle  = CopyIcon(def);
+        if (!g_icoShown) g_icoShown = CopyIcon(def);
+        if (!g_icoErr)   g_icoErr   = CopyIcon(def);
+    }
+}
+static void FreeTrayIcons() {
+    if (g_icoIdle)  { DestroyIcon(g_icoIdle);  g_icoIdle  = nullptr; }
+    if (g_icoShown) { DestroyIcon(g_icoShown); g_icoShown = nullptr; }
+    if (g_icoErr)   { DestroyIcon(g_icoErr);   g_icoErr   = nullptr; }
+}
+static void SetTrayVisual() {
+    if (!g_nid.hWnd) return;
+    EnsureTrayIcons();
+    g_nid.hIcon  = g_visible ? g_icoShown : (g_trayErr ? g_icoErr : g_icoIdle);
+    g_nid.uFlags = NIF_ICON;
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+// Effective console colors: explicit [Color] values win, else the theme.
+static void ApplyThemeVisual() {
+    const Theme& t = kThemes[ThemeFromName(g_set.theme)];
+    g_effBg  = g_set.consoleBg >= 0 ? (COLORREF)g_set.consoleBg : t.bg;
+    g_effFg  = g_set.consoleFg >= 0 ? (COLORREF)g_set.consoleFg : t.fg;
+    g_accent = t.accent;
+    if (g_bgBrush) { DeleteObject(g_bgBrush); g_bgBrush = nullptr; }
+    g_bgBrush = CreateSolidBrush(g_effBg);
+}
+
+// ---------------------------------------------------------------- status strip
+// A 20px cozy strip at the bottom of the drop-down: mini ">_", alias/plugin
+// counts, EasyType + theme chips, sound / language / clock on the right.
+static const int SB_H = 20;
+static HFONT g_sbFont = nullptr;
+
+static void PaintStatusBar(HDC dc, RECT rc) {
+    rc.top = rc.bottom - SB_H;
+    HBRUSH b = CreateSolidBrush(MixColor(g_effBg, RGB(0, 0, 0), 12));
+    FillRect(dc, &rc, b);
+    DeleteObject(b);
+    HPEN   pen    = CreatePen(PS_SOLID, 1, MixColor(g_effBg, g_accent, 60));
+    HPEN   oldPen = (HPEN)SelectObject(dc, pen);
+    MoveToEx(dc, rc.left, rc.top, nullptr);
+    LineTo(dc, rc.right, rc.top);
+    SelectObject(dc, oldPen);
+    DeleteObject(pen);
+
+    HFONT oldF = (HFONT)SelectObject(dc, g_sbFont);
+    SetBkMode(dc, TRANSPARENT);
+    int y = rc.top + 3;
+
+    // visual anchors: three physical lamps previewing what Enter will do
+    static const COLORREF lit[3] = { RGB(0x98, 0xC9, 0x74),   // green: your own
+                                     RGB(0xE0, 0xAF, 0x68),   // amber: found outside
+                                     RGB(0xE0, 0x6C, 0x75) };  // red: unknown/shell
+    int x = rc.left + 7;
+    for (int i = 0; i < 3; ++i) {
+        bool on = (g_anchor.lamp == i);
+        HBRUSH b2 = CreateSolidBrush(on ? lit[i] : MixColor(g_effBg, lit[i], 16));
+        HPEN   p2 = CreatePen(PS_SOLID, 1, MixColor(g_effBg, RGB(0xFF, 0xFF, 0xFF),
+                                                    on ? 45 : 10));
+        HPEN o2 = (HPEN)SelectObject(dc, p2);
+        HBRUSH o3 = (HBRUSH)SelectObject(dc, b2);
+        Ellipse(dc, x, rc.top + 6, x + 8, rc.top + 14);
+        SelectObject(dc, o2); SelectObject(dc, o3);
+        DeleteObject(b2); DeleteObject(p2);
+        x += 12;
+    }
+    x += 4;
+    if (g_anchor.lamp >= 0 && g_anchor.labelId >= 0 && g_anchor.lamp < 3) {
+        const wchar_t* lbl = L(g_anchor.labelId);
+        SIZE ls; GetTextExtentPoint32W(dc, lbl, (int)wcslen(lbl), &ls);
+        SetTextColor(dc, MixColor(g_effBg, lit[g_anchor.lamp], 85));
+        TextOutW(dc, x, y, lbl, (int)wcslen(lbl));
+        x += ls.cx + 14;
+    } else {
+        x += 6;
+    }
+
+    SetTextColor(dc, g_accent);
+    TextOutW(dc, x, y, L">_", 2);
+    x += 17;
+    size_t plg = 0, plgOn = 0;
+    for (auto& p : g_plugins) { ++plg; if (p.loaded) ++plgOn; }
+    std::wstring left = std::to_wstring(g_aliases.size()) + L" al   \u25CF" +
+                        std::to_wstring(plgOn) + L"/" + std::to_wstring(plg);
+    SetTextColor(dc, MixColor(g_effBg, g_effFg, 62));
+    TextOutW(dc, x, y, left.c_str(), (int)left.size());
+    SIZE sz; GetTextExtentPoint32W(dc, left.c_str(), (int)left.size(), &sz);
+    x += sz.cx + 12;
+
+    const wchar_t* mode = g_set.easyType == 0 ? L(STR_ET_OFF)
+                        : g_set.easyType == 1 ? L(STR_ET_EASY) : L(STR_ET_LINUX);
+    for (int pass = 0; pass < 2; ++pass) {
+        const wchar_t* chip = pass == 0 ? mode : kThemes[ThemeFromName(g_set.theme)].name;
+        SIZE cs; GetTextExtentPoint32W(dc, chip, (int)wcslen(chip), &cs);
+        HBRUSH cb = CreateSolidBrush(MixColor(g_effBg, g_accent, 18));
+        HPEN   cp = CreatePen(PS_SOLID, 1, MixColor(g_effBg, g_accent, 55));
+        HPEN   o2 = (HPEN)SelectObject(dc, cp);
+        HBRUSH o3 = (HBRUSH)SelectObject(dc, cb);
+        RoundRect(dc, x, rc.top + 2, x + cs.cx + 10, rc.top + SB_H - 3, 7, 7);
+        SelectObject(dc, o2); SelectObject(dc, o3);
+        DeleteObject(cb); DeleteObject(cp);
+        SetTextColor(dc, MixColor(g_effBg, g_accent, 85));
+        TextOutW(dc, x + 5, y, chip, (int)wcslen(chip));
+        x += cs.cx + 18;
+    }
+
+    SYSTEMTIME st; GetLocalTime(&st);
+    wchar_t clk[8]; wsprintfW(clk, L"%02d:%02d", (int)st.wHour, (int)st.wMinute);
+    std::wstring right = std::wstring(g_set.enableSounds ? L"\u266A " : L"\u00D7 ") +
+                         std::wstring(kLangs[g_langIdx].code) + L"  " + clk;
+    SIZE rs; GetTextExtentPoint32W(dc, right.c_str(), (int)right.size(), &rs);
+    SetTextColor(dc, MixColor(g_effBg, g_effFg, 62));
+    TextOutW(dc, rc.right - rs.cx - 8, y, right.c_str(), (int)right.size());
+
+    SelectObject(dc, oldF);
 }
 
 static void Submit(HWND mainWnd) {
@@ -1500,7 +1802,7 @@ static void ShowTrayMenu(HWND hWnd) {
 static const int kPageStr[PG_COUNT] = {
     STR_PG_APPEARANCE, STR_PG_CONSOLE, STR_PG_FONT, STR_PG_HOTKEY, STR_PG_EXEC,
     STR_PG_EASYTYPE, STR_PG_HISTORY, STR_PG_LOG, STR_PG_ALIASES, STR_PG_SOUNDS,
-    STR_PG_PLUGINS, STR_PG_ENV, STR_PG_LANG };
+    STR_PG_PLUGINS, STR_PG_ENV, STR_PG_THEME, STR_PG_LANG };
 
 static HWND  g_setWnd = nullptr;
 static HWND  g_setList = nullptr;
@@ -1522,6 +1824,7 @@ static HWND g_alLb = nullptr, g_alName = nullptr, g_alAction = nullptr,
 static HWND g_plLb = nullptr, g_plLoadChk = nullptr, g_plHistChk = nullptr,
       g_plInfo = nullptr;
 static HWND g_langCombo = nullptr;
+static HWND g_themeCombo = nullptr, g_themePrev = nullptr;
 struct PluginRow { std::wstring name; int load = 1, saveHist = 1; };
 static std::vector<PluginRow> g_plRows;
 static int g_plSel = -1;
@@ -1615,9 +1918,18 @@ static HWND MkCombo(HWND host, int x, int y, int w, const wchar_t** items, int n
     SendMessageW(c, CB_SETCURSEL, 0, 0);
     return c;
 }
-static HWND MkButton(HWND host, const wchar_t* t, int x, int y, int w) {
-    return MkOn(host, L"BUTTON", t, BS_PUSHBUTTON, x, y, w, 24);
+static HWND MkButton(HWND host, const wchar_t* t, int x, int y, int w, UINT id = 0) {
+    HWND c = MkOn(host, L"BUTTON", t, BS_PUSHBUTTON, x, y, w, 24);
+    if (id) SetWindowLongPtrW(c, GWLP_ID, (LONG_PTR)id);   // language-independent dispatch
+    return c;
 }
+
+// Dialog button ids (GWLP_ID) — dispatch must never depend on localized text.
+enum { IDB_OK = 101, IDB_APPLY, IDB_CANCEL,
+       IDB_AL_ADD, IDB_AL_UPDATE, IDB_AL_DELETE,
+       IDB_FONT_CHOOSE, IDB_HI_CLEAR,
+       IDB_PL_RESCAN, IDB_PL_UNLOAD, IDB_PL_ABOUT, IDB_PL_OPTIONS,
+       IDB_EN_ADDVAR, IDB_EN_UPDATEVAR, IDB_EN_DELETEVAR };
 
 static std::wstring GetText(HWND h) {
     int n = GetWindowTextLengthW(h);
@@ -1796,6 +2108,36 @@ static void SettingsShowPage(int p) {
 
 static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+    case WM_DRAWITEM: {
+        LPDRAWITEMSTRUCT di = (LPDRAWITEMSTRUCT)l;
+        if (g_themePrev && di->hwndItem == g_themePrev) {   // theme preview card
+            const Theme& t = kThemes[ThemeFromName(g_draft.theme)];
+            HBRUSH b = CreateSolidBrush(t.bg);
+            FillRect(di->hDC, &di->rcItem, b);
+            DeleteObject(b);
+            RECT bar = di->rcItem;
+            bar.bottom = bar.top + 4;
+            HBRUSH ab = CreateSolidBrush(t.accent);
+            FillRect(di->hDC, &bar, ab);
+            FrameRect(di->hDC, &di->rcItem, ab);
+            DeleteObject(ab);
+            HFONT f = CreateFontW(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                  OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
+                                  FIXED_PITCH | FF_MODERN, L"Consolas");
+            HFONT oldF = (HFONT)SelectObject(di->hDC, f);
+            SetBkMode(di->hDC, TRANSPARENT);
+            int tx = di->rcItem.left + 12, ty = di->rcItem.top + 24;
+            SetTextColor(di->hDC, t.accent);
+            TextOutW(di->hDC, tx, ty, L">_", 2);
+            std::wstring s = std::wstring(L" TypeBox \u2014 ") + t.name;
+            SetTextColor(di->hDC, t.fg);
+            TextOutW(di->hDC, tx + 22, ty, s.c_str(), (int)s.size());
+            SelectObject(di->hDC, oldF);
+            DeleteObject(f);
+            return TRUE;
+        }
+        break;
+    }
     case WM_COMMAND: {
         HWND src = (HWND)l;
         int code = HIWORD(w);
@@ -1805,23 +2147,21 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         if (code == BN_CLICKED) {
             if (src == g_alLb) return 0;
-            // page-specific buttons handled by tag stored in control user data? simpler: compare text
             if (src) {
-                wchar_t t[64] = {};
-                GetWindowTextW(src, t, 63);
-                if (!wcscmp(t, L"OK") || !wcscmp(t, L"Apply")) {
+                int bid = (int)GetWindowLongW(src, GWLP_ID);   // locale-proof dispatch
+                if (bid == IDB_OK || bid == IDB_APPLY) {
                     UiCollect();
                     WriteDraftIni();
                     g_set = g_draft; g_hotkey = g_draftHk; g_aliases = g_draftAliases;
                     LiveApply((HWND)GetWindowLongPtrW(h, GWLP_HWNDPARENT));
-                    if (!wcscmp(t, L"OK")) DestroyWindow(h);
+                    if (bid == IDB_OK) DestroyWindow(h);
                     else UiLoad();
                     return 0;
                 }
-                if (!wcscmp(t, L"Cancel")) { DestroyWindow(h); return 0; }
-                if (!wcscmp(t, L"Add"))    { AliasesAdd(); return 0; }
-                if (!wcscmp(t, L"Update")) { AliasesReadRow(g_aliasSel); return 0; }
-                if (!wcscmp(t, L"Delete")) {
+                if (bid == IDB_CANCEL) { DestroyWindow(h); return 0; }
+                if (bid == IDB_AL_ADD)     { AliasesAdd(); return 0; }
+                if (bid == IDB_AL_UPDATE)  { AliasesReadRow(g_aliasSel); return 0; }
+                if (bid == IDB_AL_DELETE) {
                     if (g_aliasSel >= 0 && g_aliasSel < (int)g_draftAliases.size()) {
                         g_draftAliases.erase(g_draftAliases.begin() + g_aliasSel);
                         g_aliasSel = -1;
@@ -1829,7 +2169,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     }
                     return 0;
                 }
-                if (!wcscmp(t, L"Choose...")) {
+                if (bid == IDB_FONT_CHOOSE) {
                     CHOOSEFONTW cf = { sizeof(cf) };
                     LOGFONTW lf = {};
                     lstrcpynW(lf.lfFaceName, g_draft.fontName.c_str(), LF_FACESIZE);
@@ -1847,9 +2187,9 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     }
                     return 0;
                 }
-                if (!wcscmp(t, L"Add var"))     { VarsAdd();    return 0; }
-                if (!wcscmp(t, L"Update var"))  { VarsUpdate(); return 0; }
-                if (!wcscmp(t, L"Delete var")) {
+                if (bid == IDB_EN_ADDVAR)     { VarsAdd();    return 0; }
+                if (bid == IDB_EN_UPDATEVAR)  { VarsUpdate(); return 0; }
+                if (bid == IDB_EN_DELETEVAR) {
                     if (g_varSel >= 0 && g_varSel < (int)g_draftVars.size()) {
                         g_draftVars.erase(g_draftVars.begin() + g_varSel);
                         g_varSel = -1;
@@ -1857,14 +2197,14 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     }
                     return 0;
                 }
-                if (!wcscmp(t, L"Clear history")) {
+                if (bid == IDB_HI_CLEAR) {
                     g_history.clear();
                     SaveHistory();
                     LogInfo(L"settings: history cleared");
                     return 0;
                 }
                 HWND parent = (HWND)GetWindowLongPtrW(h, GWLP_HWNDPARENT);
-                if (!wcscmp(t, L"Rescan")) {
+                if (bid == IDB_PL_RESCAN) {
                     PluginsReadRow();
                     CallPluginsUnload();
                     DiscoverPlugins();
@@ -1884,18 +2224,18 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                             std::to_wstring(g_plugins.size()) + L" found");
                     return 0;
                 }
-                if (!wcscmp(t, L"Unload all")) {
+                if (bid == IDB_PL_UNLOAD) {
                     PluginsReadRow();
                     CallPluginsUnload();
                     LogInfo(L"settings: all plugins unloaded");
                     return 0;
                 }
-                if (!wcscmp(t, L"About") || !wcscmp(t, L"Options")) {
+                if (bid == IDB_PL_ABOUT || bid == IDB_PL_OPTIONS) {
                     PluginsReadRow();
                     if (g_plSel >= 0 && g_plSel < (int)g_plRows.size()) {
                         for (auto& p : g_plugins)
                             if (PluginKey(p) == g_plRows[g_plSel].name) {
-                                if (!wcscmp(t, L"About")) {
+                                if (bid == IDB_PL_ABOUT) {
                                     if (p.About) p.About();
                                     else LogInfo(L"plugin has no About: " + g_plRows[g_plSel].name);
                                 } else {
@@ -1944,8 +2284,8 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 // Page windows are DefWindowProc containers; forward their child notifications
 // (BN_CLICKED, LBN_SELCHANGE, EN_CHANGE...) to the settings window proc.
 static LRESULT CALLBACK PageProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
-    if (m == WM_COMMAND)
-        return SendMessageW(GetParent(h), WM_COMMAND, w, l);
+    if (m == WM_COMMAND || m == WM_DRAWITEM)   // owner-draw controls live on the pages
+        return SendMessageW(GetParent(h), m, w, l);
     return DefSubclassProc(h, m, w, l);
 }
 
@@ -2041,7 +2381,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     NumB(g_setPage[PG_FONT], L(STR_FO_SIZE), 16, y, &Settings::fontSize, 6, 72);        y += 28;
     CkB(g_setPage[PG_FONT], L(STR_FO_BOLD), 16, y, &Settings::fontBold);                y += 26;
     CkB(g_setPage[PG_FONT], L(STR_FO_APPLY_EN), 16, y, &Settings::applyEnglish);        y += 30;
-    MkButton(g_setPage[PG_FONT], L(STR_FO_CHOOSE), 16, y, 110);
+    MkButton(g_setPage[PG_FONT], L(STR_FO_CHOOSE), 16, y, 110, IDB_FONT_CHOOSE);
     Bind([]{
         static HFONT prev = nullptr;
         if (prev) { DeleteObject(prev); prev = nullptr; }
@@ -2102,7 +2442,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_HISTORY], L(STR_HI_PATH),  16, y, &Settings::savePath);      y += 26;
     CkB(g_setPage[PG_HISTORY], L(STR_HI_PLG),   16, y, &Settings::savePlugins);   y += 26;
     CkB(g_setPage[PG_HISTORY], L(STR_HI_OTHER), 16, y, &Settings::saveUnknown);   y += 30;
-    MkButton(g_setPage[PG_HISTORY], L(STR_HI_CLEAR), 16, y, 130);
+    MkButton(g_setPage[PG_HISTORY], L(STR_HI_CLEAR), 16, y, 130, IDB_HI_CLEAR);
 
     // --- Log
     y = 12;
@@ -2135,9 +2475,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
                                 L(STR_AL_WN_MIN), L(STR_AL_WN_HIDDEN) };
         g_alState = MkCombo(g_setPage[PG_ALIASES], ax + 55, 98, 130, it, 4);
     }
-    MkButton(g_setPage[PG_ALIASES], L(STR_AL_ADD),    ax, 132, 72);
-    MkButton(g_setPage[PG_ALIASES], L(STR_AL_UPDATE), ax + 80, 132, 72);
-    MkButton(g_setPage[PG_ALIASES], L(STR_AL_DELETE), ax + 160, 132, 72);
+    MkButton(g_setPage[PG_ALIASES], L(STR_AL_ADD),    ax, 132, 72, IDB_AL_ADD);
+    MkButton(g_setPage[PG_ALIASES], L(STR_AL_UPDATE), ax + 80, 132, 72, IDB_AL_UPDATE);
+    MkButton(g_setPage[PG_ALIASES], L(STR_AL_DELETE), ax + 160, 132, 72, IDB_AL_DELETE);
     MkLabel(g_setPage[PG_ALIASES], L(STR_AL_HINT), ax, 168, 290);
 
     // --- Sounds
@@ -2160,10 +2500,10 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_plHistChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_HIST), px, 38, 180);
     g_plInfo = MkOn(g_setPage[PG_PLUGINS], L"STATIC", L"", SS_LEFT | SS_EDITCONTROL,
                     px, 70, 260, 150);
-    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_RESCAN),  px, 240, 80);
-    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_UNLOAD),  px + 90, 240, 80);
-    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_ABOUT),   px, 270, 80);
-    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_OPTIONS), px + 90, 270, 80);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_RESCAN),  px, 240, 80, IDB_PL_RESCAN);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_UNLOAD),  px + 90, 240, 80, IDB_PL_UNLOAD);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_ABOUT),   px, 270, 80, IDB_PL_ABOUT);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_OPTIONS), px + 90, 270, 80, IDB_PL_OPTIONS);
     MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 268, 190);
 
     // --- Environment (own PATH folders + %variables%, like the OS dialog)
@@ -2198,10 +2538,29 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_varName  = MkEdit(g_setPage[PG_ENV], L"", vx + 45, 160, 175);
     MkLabel(g_setPage[PG_ENV], L(STR_EN_VALUE), vx, 192, 50);
     g_varValue = MkEdit(g_setPage[PG_ENV], L"", vx + 45, 190, 175);
-    MkButton(g_setPage[PG_ENV], L(STR_EN_ADDVAR), vx, 222, 84);
-    MkButton(g_setPage[PG_ENV], L(STR_EN_UPDVAR), vx + 90, 222, 84);
-    MkButton(g_setPage[PG_ENV], L(STR_EN_DELVAR), vx, 252, 84);
+    MkButton(g_setPage[PG_ENV], L(STR_EN_ADDVAR), vx, 222, 84, IDB_EN_ADDVAR);
+    MkButton(g_setPage[PG_ENV], L(STR_EN_UPDVAR), vx + 90, 222, 84, IDB_EN_UPDATEVAR);
+    MkButton(g_setPage[PG_ENV], L(STR_EN_DELVAR), vx, 252, 84, IDB_EN_DELETEVAR);
     MkLabel(g_setPage[PG_ENV], L(STR_EN_NOTE), vx, 286, 210);
+
+    // --- Theme (cozy look: console + status strip + tray badge colors)
+    y = 12;
+    MkLabel(g_setPage[PG_THEME], L(STR_TH_SCHEME), 16, y + 2, 110);
+    {
+        const wchar_t* it[kThemeCount];
+        for (int i = 0; i < kThemeCount; ++i) it[i] = kThemes[i].name;
+        g_themeCombo = MkCombo(g_setPage[PG_THEME], 130, y, 180, it, kThemeCount);
+        Bind([]{ SendMessageW(g_themeCombo, CB_SETCURSEL,
+                              ThemeFromName(g_draft.theme), 0);
+                 if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE); },
+             []{ int sel = (int)SendMessageW(g_themeCombo, CB_GETCURSEL, 0, 0);
+                 if (sel < 0) sel = 0;
+                 g_draft.theme = kThemes[sel].name;
+                 if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE); });
+    }
+    y += 30;
+    g_themePrev = MkOn(g_setPage[PG_THEME], L"STATIC", L"", SS_OWNERDRAW, 16, y, 430, 96);
+    MkLabel(g_setPage[PG_THEME], L(STR_TH_HINT), 16, y + 102, 430);
 
     // --- Language (20 UI languages; Apply switches immediately, Arabic RTL)
     MkLabel(g_setPage[PG_LANG], L(STR_LA_LABEL), 16, 14, 430);
@@ -2233,9 +2592,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
             SS_LEFT, 16, 76, 430, 90);
     MkLabel(g_setPage[PG_LANG], L(STR_LA_HINT), 16, 172, 430);
 
-    MkButton(g_setWnd, L(STR_OK),     380, 380, 75);
-    MkButton(g_setWnd, L(STR_APPLY),  461, 380, 75);
-    MkButton(g_setWnd, L(STR_CANCEL), 542, 380, 75);
+    MkButton(g_setWnd, L(STR_OK),     380, 380, 75, IDB_OK);
+    MkButton(g_setWnd, L(STR_APPLY),  461, 380, 75, IDB_APPLY);
+    MkButton(g_setWnd, L(STR_CANCEL), 542, 380, 75, IDB_CANCEL);
 
     // plugin rows from the discovered set + [PluginState] overrides
     g_plRows.clear();
@@ -2293,6 +2652,7 @@ static void WriteDraftIni() {
     WInt(L"Show", L"Transparent",      s.transparent);
     WS_(L"Show", L"Priority",          s.priority);
     WS_(L"UI", L"Language",            s.langCode);
+    WS_(L"Theme", L"Name",             s.theme);
 
     WS_(L"Font", L"Name",              s.fontName);
     WInt(L"Font", L"Size",             s.fontSize);
@@ -2412,8 +2772,11 @@ static void LiveApply(HWND mainWnd) {
     else if (g_set.priority == L"high")     pc = HIGH_PRIORITY_CLASS;
     else if (g_set.priority == L"realtime") pc = REALTIME_PRIORITY_CLASS;
     SetPriorityClass(GetCurrentProcess(), pc);
-    if (g_bgBrush) { DeleteObject(g_bgBrush); g_bgBrush = nullptr; }
-    if (g_set.consoleBg >= 0) g_bgBrush = CreateSolidBrush((COLORREF)g_set.consoleBg);
+    ApplyThemeVisual();                    // effective bg/fg/accent from [Theme]/[Color]
+    g_trayErr = false;
+    FreeTrayIcons();                       // badge follows the new accent
+    SetTrayVisual();
+    LogInfo(L"theme: " + g_set.theme);
     if (g_set.trayIcon) { if (!g_nid.hWnd) AddTrayIcon(mainWnd, false); }
     else RemoveTrayIcon();
     KillTimer(mainWnd, 1);
@@ -2539,12 +2902,37 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetWindowSubclass(g_edit, EditProc, 1, (DWORD_PTR)hWnd);
         return 0;
     }
-    case WM_SIZE:
-        MoveWindow(g_edit, 2, (HIWORD(lp) - 24) / 2, LOWORD(lp) - 4, 24, TRUE);
+    case WM_SIZE: {
+        // keep the edit centered in the space ABOVE the 20px status strip
+        int above = (int)HIWORD(lp) - SB_H;
+        if (above < 16) above = 16;
+        MoveWindow(g_edit, 2, (above - 24) / 2, LOWORD(lp) - 4, 24, TRUE);
         return 0;
+    }
     case WM_TIMER:
-        if (wp == 1 && g_visible) HideBox(hWnd); // [Show] AutoHide
+        if (wp == 1 && g_visible) HideBox(hWnd);   // [Show] AutoHide
+        else if (wp == 2) {                        // clock: refresh the strip
+            RECT rc; GetClientRect(hWnd, &rc);
+            rc.top = rc.bottom - SB_H;
+            if (g_visible) InvalidateRect(hWnd, &rc, TRUE);
+        }
         return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC dc = BeginPaint(hWnd, &ps);
+        RECT rc; GetClientRect(hWnd, &rc);
+        if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
+        if (g_sbFont) PaintStatusBar(dc, rc);
+        EndPaint(hWnd, &ps);
+        return 0;
+    }
+    case WM_PRINTCLIENT: {           // PrintWindow/screenshot capture path
+        HDC dc = (HDC)wp;
+        RECT rc; GetClientRect(hWnd, &rc);
+        if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
+        if (g_sbFont) PaintStatusBar(dc, rc);
+        return 0;
+    }
     case WM_ERASEBKGND:
         if (g_bgBrush) {
             RECT rc; GetClientRect(hWnd, &rc);
@@ -2555,8 +2943,8 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CTLCOLOREDIT:
         if (g_bgBrush) {
             HDC dc = (HDC)wp;
-            if (g_set.consoleBg >= 0) SetBkColor(dc, (COLORREF)g_set.consoleBg);
-            if (g_set.consoleFg >= 0) SetTextColor(dc, (COLORREF)g_set.consoleFg);
+            SetBkColor(dc, g_effBg);
+            SetTextColor(dc, g_effFg);
             return (LRESULT)g_bgBrush;
         }
         break;
@@ -2580,6 +2968,18 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_COMMAND:
+        if (HIWORD(wp) == EN_CHANGE && g_edit && (HWND)lp == g_edit) {
+            // live traffic-light preview of what Enter will execute
+            Anchor na = ClassifyAnchor(GetEditText(g_edit));
+            if (na.lamp != g_anchor.lamp || na.labelId != g_anchor.labelId) {
+                g_anchor = na;
+                if (g_visible) {
+                    RECT rc; GetClientRect(hWnd, &rc);
+                    rc.top = rc.bottom - SB_H;
+                    InvalidateRect(hWnd, &rc, TRUE);
+                }
+            }
+        }
         if (LOWORD(wp) == 1)      g_visible ? HideBox(hWnd) : ShowBox(hWnd);
         else if (LOWORD(wp) == 2) ShellExecuteW(hWnd, L"open", g_iniPath.c_str(),
                                                 nullptr, nullptr, SW_SHOWNORMAL);
@@ -2694,8 +3094,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     else if (g_set.priority == L"high")     pc = HIGH_PRIORITY_CLASS;
     else if (g_set.priority == L"realtime") pc = REALTIME_PRIORITY_CLASS;
     SetPriorityClass(GetCurrentProcess(), pc);
-    if (g_set.consoleBg >= 0)
-        g_bgBrush = CreateSolidBrush((COLORREF)g_set.consoleBg);
+    ApplyThemeVisual();   // theme + [Color] -> g_effBg/g_effFg/g_accent + g_bgBrush
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc   = WndProc;
@@ -2710,6 +3109,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         0, 0, g_set.width, g_set.height, nullptr, nullptr, hInst, nullptr);
     if (!mainWnd) return 1;
 
+    g_sbFont = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           VARIABLE_PITCH | FF_DONTCARE, L"Segoe UI");
+    ApplyThemeVisual();
     ApplyFont(g_edit);
     CallPluginsLoad(mainWnd);
 
@@ -2735,9 +3138,12 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                     L" folders, variables: " + std::to_wstring(g_envVars.size()));
         LogInfo(L"language: " + std::wstring(kLangs[g_langIdx].code) +
                 L" (" + (g_set.langCode.empty() ? L"auto" : g_set.langCode) + L")");
+        LogInfo(L"theme: " + g_set.theme);
     }
 
     AddTrayIcon(mainWnd, true);
+    SetTrayVisual();                             // cozy badge replaces the default icon
+    SetTimer(mainWnd, 2, 15000, nullptr);   // status bar clock refresh
     if (g_set.showOnStart) ShowBox(mainWnd);
 
     if (g_testSettings) {                  // CI gate: dialog must build, pump, close
