@@ -21,7 +21,7 @@ target_link_libraries(TypeBox PRIVATE
     user32 shell32 shlwapi gdi32 comctl32 winmm)
 
 # Example plugin (TypeAndRun ABI) — ships in the release zip under Plugins\.
-add_library(calc MODULE examples/plugin_calc/calc.c)
+add_library(calc SHARED examples/plugin_calc/calc.c)
 target_link_libraries(calc PRIVATE user32)
 set_target_properties(calc PROPERTIES PREFIX "")
 
