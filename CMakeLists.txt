@@ -10,6 +10,12 @@ project(TypeBox VERSION ${TYPEBOX_VERSION} LANGUAGES CXX C)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Static C/C++ runtime for MSVC: the release zip must run without a VC++ redistributable.
+if(POLICY CMP0091)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 add_executable(TypeBox WIN32 src/main.cpp)
 
 # Version token is stringified in main.cpp via TB_STR(), keep it unquoted here.
@@ -29,5 +35,6 @@ if(MSVC)
     target_compile_options(TypeBox PRIVATE /W4)
 else()
     target_compile_options(TypeBox PRIVATE -Wall -Wextra)
-    target_link_options(TypeBox PRIVATE -municode)
+    # Static runtime: portable exe, no libgcc/libstdc++ DLLs needed (ConEmu-grade portability).
+    target_link_options(TypeBox PRIVATE -municode -static)
 endif()

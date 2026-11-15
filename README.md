@@ -85,10 +85,10 @@ MSVC directly:
 cl /EHsc /std:c++17 /DUNICODE /D_UNICODE /DTYPEBOX_VERSION=0.0.0-dev src\main.cpp /Fe:TypeBox.exe ^
    /link /SUBSYSTEM:WINDOWS user32.lib shell32.lib shlwapi.lib gdi32.lib comctl32.lib winmm.lib
 ```
-MinGW-w64 directly:
+MinGW-w64 directly (add `-static` so the exe needs no MinGW runtime DLLs):
 ```
 g++ -std=c++17 -DUNICODE -D_UNICODE -DTYPEBOX_VERSION=0.0.0-dev -O2 src/main.cpp -o TypeBox.exe ^
-    -municode -mwindows -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lwinmm
+    -municode -mwindows -static -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lwinmm
 ```
 The version comes from the `VERSION` file (CI refuses a tag that doesn't match it).
 

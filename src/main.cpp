@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 #include <fstream>
+#include <cstring>
 
 #ifndef TYPEBOX_VERSION
 #define TYPEBOX_VERSION 0.0.0-dev
@@ -82,6 +83,12 @@ struct Settings {
          savePath = true, savePlugins = true, saveUnknown = true;
     // [Sounds]
     bool enableSounds = true;
+    // [Log] — portable error log
+    bool  logEnabled = true;
+    std::wstring logFile = L"TypeBox.log";
+    long  logMaxKB = 512;      // size cap
+    int   logRewrite = 0;      // 0 rotate (.1 .2 ...), 1 truncate, 2 timestamp, 3 keep (stop)
+    int   logKeep = 3;         // rotated copies to keep
 };
 
 // Execution result types (map to [History]/[Sounds] keys, like TypeAndRun).
@@ -260,6 +267,98 @@ static std::wstring WVersion() {
     return v;
 }
 
+// ------------------------------------------------------------------- logging
+//
+// Portable error log (no Event Viewer, no %LOCALAPPDATA%): everything TypeBox
+// cannot do itself is appended to [Log] File. When the file exceeds
+// [Log] MaxSizeKB the rewrite method from [Log] Rewrite kicks in:
+//   rotate    — file -> file.1 -> file.2 ... (Keep copies kept)      [default]
+//   truncate  — keep only the newest half
+//   timestamp — rename to file-YYYYMMDD-HHMMSS.log, start a new one
+//   keep      — never rewrite; further lines are dropped
+
+static std::wstring LogPath() {
+    std::wstring f = g_set.logFile;
+    if (f.empty()) return L"";
+    return PathIsRelativeW(f.c_str()) ? ExeDir() + f : f;
+}
+
+static void LogWrite(const wchar_t* level, const std::wstring& msg) {
+    if (!g_set.logEnabled) return;
+    std::wstring path = LogPath();
+    if (path.empty()) return;
+
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+    if (GetFileAttributesExW(path.c_str(), GetFileExInfoStandard, &fad)) {
+        ULARGE_INTEGER sz;
+        sz.HighPart = fad.nFileSizeHigh; sz.LowPart = fad.nFileSizeLow;
+        if (sz.QuadPart > (ULONGLONG)g_set.logMaxKB * 1024) {
+            switch (g_set.logRewrite) {
+            case 3: // keep: stop writing, preserve the file as-is
+                return;
+            case 2: { // timestamp: seal the old file, start fresh
+                SYSTEMTIME st; GetLocalTime(&st);
+                std::wstring stem = path, ext;
+                size_t dot = path.find_last_of(L'.');
+                if (dot != std::wstring::npos && dot > path.find_last_of(L'\\')) {
+                    stem = path.substr(0, dot); ext = path.substr(dot);
+                }
+                wchar_t stamp[64];
+                wsprintfW(stamp, L"-%04d%02d%02d-%02d%02d%02d",
+                          st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+                if (!MoveFileExW(path.c_str(), (stem + stamp + ext).c_str(),
+                                 MOVEFILE_REPLACE_EXISTING)) {
+                    // file busy? degrade to truncate so the log still stays capped
+                    FILE* w = _wfopen(path.c_str(), L"wb");
+                    if (w) fclose(w);
+                }
+                break;
+            }
+            case 1: { // truncate: keep the newest half of the file
+                long half = (g_set.logMaxKB * 1024) / 2;
+                std::string tail;
+                if (FILE* r = _wfopen(path.c_str(), L"rb")) {
+                    _fseeki64(r, -(long long)half, SEEK_END);
+                    char buf[8192]; size_t n;
+                    while ((n = fread(buf, 1, sizeof(buf), r)) > 0) tail.append(buf, n);
+                    fclose(r);
+                }
+                FILE* w = _wfopen(path.c_str(), L"wb");
+                if (w) {
+                    const char* mark = "--- log truncated (old entries dropped) ---\n";
+                    fwrite(mark, 1, strlen(mark), w);
+                    if (!tail.empty()) fwrite(tail.data(), 1, tail.size(), w);
+                    fclose(w);
+                }
+                break;
+            }
+            default: { // rotate: file -> file.1 -> ... -> file.Keep
+                for (int i = g_set.logKeep; i >= 1; --i) {
+                    std::wstring from = path + (i == 1 ? L"" : L"." + std::to_wstring(i - 1));
+                    std::wstring to   = path + L"." + std::to_wstring(i);
+                    if (i == 1) MoveFileExW(path.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING);
+                    else        MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING);
+                }
+                break;
+            }
+            }
+        }
+    }
+
+    SYSTEMTIME st; GetLocalTime(&st);
+    wchar_t head[64];
+    wsprintfW(head, L"[%04d-%02d-%02d %02d:%02d:%02d] [%s] ",
+              st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, level);
+    std::string line = ToUtf8(head) + ToUtf8(msg) + "\n";
+    if (FILE* f = _wfopen(path.c_str(), L"ab")) {
+        fwrite(line.data(), 1, line.size(), f);
+        fclose(f);
+    }
+}
+
+static void LogError(const std::wstring& msg) { LogWrite(L"ERROR", msg); }
+static void LogInfo(const std::wstring& msg) { LogWrite(L"INFO", msg); }
+
 // ---------------------------------------------------------------- settings
 
 static void LoadSettings() {
@@ -307,6 +406,14 @@ static void LoadSettings() {
     g_set.saveUnknown  = ReadIniBool(L"History", L"Unknown", true);
     g_set.useUndo    = ReadIniBool(L"Undo", L"UseUndo", true);
     g_set.enableSounds = ReadIniBool(L"Sounds", L"EnableSounds", true);
+
+    g_set.logEnabled = ReadIniBool(L"Log", L"Enabled", true);
+    g_set.logFile    = ReadIniStr(L"Log", L"File", L"TypeBox.log");
+    g_set.logMaxKB   = ReadIniInt(L"Log", L"MaxSizeKB", 512);
+    g_set.logKeep    = ReadIniInt(L"Log", L"Keep", 3);
+    std::wstring rw = Lower(ReadIniStr(L"Log", L"Rewrite", L"rotate"));
+    g_set.logRewrite = rw == L"truncate" ? 1 : rw == L"timestamp" ? 2 :
+                       rw == L"keep"     ? 3 : 0;
 
     g_hotkey.key    = (WORD)ReadIniInt(L"HotKey", L"Key", VK_F2);
     g_hotkey.alt    = ReadIniBool(L"HotKey", L"AltKey",   false);
@@ -533,12 +640,20 @@ static void DiscoverPlugins() {
 
     auto tryLoad = [&](const std::wstring& file) {
         HMODULE h = LoadLibraryW(file.c_str());
-        if (!h) return;
+        if (!h) {
+            LogError(L"plugin load failed: " + file +
+                     L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
+            return;
+        }
         Plugin p;
         p.file = file;
         p.hmod = h;
         BindPlugin(p);
-        if (!p.RunString && !p.GetInfo) { FreeLibrary(h); return; } // not a TypeBox plugin
+        if (!p.RunString && !p.GetInfo) {
+            LogInfo(L"ignored non-plugin dll: " + file);
+            FreeLibrary(h);
+            return;
+        }
         g_plugins.push_back(p);
     };
 
@@ -619,7 +734,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Internal commands:\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
-            L"TypeBox additions: /export <file>  /import <file>  /undo";
+            L"TypeBox additions: /export <file>  /import <file>  /undo  /log";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
@@ -684,6 +799,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         } else {
             MessageBoxW(mainWnd, L"TypeBox: export failed (check the path).",
                         L"TypeBox — export", MB_OK | MB_ICONERROR);
+            LogError(L"/export failed to: " + dest);
         }
     } else if (c == L"/import") {
         // Import settings: restore an exported file (current ini is kept as .bak).
@@ -704,6 +820,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             } else {
                 MessageBoxW(mainWnd, L"TypeBox: import failed.",
                             L"TypeBox — import", MB_OK | MB_ICONERROR);
+                LogError(L"/import failed from: " + src);
             }
         }
     } else if (c == L"/undo") {
@@ -712,6 +829,13 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             SetWindowTextW(g_edit, g_lastRun.c_str());
             SendMessageW(g_edit, EM_SETSEL, -1, 0);
         }
+    } else if (c == L"/log") {
+        std::wstring p = LogPath();
+        if (!p.empty() && PathFileExistsW(p.c_str()))
+            ShellExecuteW(mainWnd, L"open", p.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        else
+            MessageBoxW(mainWnd, L"Log is empty or not configured ([Log] File).",
+                        L"TypeBox — log", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/hide") {
         HideBox(mainWnd);
     } else if (c == L"/show") {
@@ -758,12 +882,13 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
             std::wstring prog = FirstWord(cmd);
             std::wstring args = RestWords(cmd);
-            if (!ShellExecuteW(mainWnd, L"open", prog.c_str(),
+            HINSTANCE hres = ShellExecuteW(mainWnd, L"open", prog.c_str(),
                                args.empty() ? nullptr : args.c_str(),
                                a->dir.empty() ? nullptr : a->dir.c_str(),
-                               a->state)) {
-                // fall through to shell for shell built-ins
-            }
+                               a->state);
+            if ((INT_PTR)hres <= 32)
+                LogError(L"alias failed: " + a->name + L" -> " + cmd +
+                         L" (ShellExecute code " + std::to_wstring((int)(INT_PTR)hres) + L")");
             PlayTypeSound(L"ExecuteAliasSound", L"Sounds\\alias.wav");
             return EXC_ALIAS;
         }
@@ -934,7 +1059,7 @@ static void TabComplete(HWND edit) {
             if (g_set.etInternal) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
                      L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
-                     L"/inidir", L"/inifiles", L"/load", L"/reread", L"/settings",
+                     L"/inidir", L"/inifiles", L"/load", L"/log", L"/reread", L"/settings",
                      L"/show", L"/unload", L"/undo" })
                     add(cmd);
             }
@@ -1026,7 +1151,8 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
 static void ReloadHotkey(HWND mainWnd) {
     UnregisterHotKey(mainWnd, kHotkeyId);
     LoadSettings();
-    RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key);
+    if (!RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key))
+        LogError(L"RegisterHotKey(/reread) failed");
 }
 
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -1126,6 +1252,32 @@ static std::wstring SecondInstanceArgs() {
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetProcessDPIAware();
+
+    // Smoke-test / user friendly: `TypeBox.exe --version` prints and exits
+    // (used by CI to refuse publishing a build that cannot start).
+    {
+        int argc = 0;
+        LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+        bool wantVersion = false;
+        for (int i = 1; i < argc; ++i)
+            if (_wcsicmp(argv[i], L"--version") == 0 || _wcsicmp(argv[i], L"/version") == 0)
+                wantVersion = true;
+        if (argv) LocalFree(argv);
+        if (wantVersion) {
+            if (AttachConsole(ATTACH_PARENT_PROCESS)) {
+                std::string s = ToUtf8(L"TypeBox " + WVersion() + L"\n");
+                HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+                DWORD wr = 0;
+                DWORD mode = 0;
+                if (h && h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode))
+                    WriteFile(h, s.c_str(), (DWORD)s.size(), &wr, nullptr);
+                else
+                    OutputDebugStringA(s.c_str());
+            }
+            return 0;
+        }
+    }
+
     g_iniPath = ExeDir() + L"TypeBox.ini";
     InitCommonControls();
 
@@ -1168,11 +1320,17 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     CallPluginsLoad(mainWnd);
 
     if (!RegisterHotKey(mainWnd, kHotkeyId, g_hotkey.mods(), g_hotkey.key)) {
+        LogError(L"RegisterHotKey failed (key=" + std::to_wstring(g_hotkey.key) +
+                 L", mods=" + std::to_wstring(g_hotkey.mods()) + L")");
         MessageBoxW(mainWnd,
             L"TypeBox: failed to register the hotkey.\n"
             L"Check [HotKey] in TypeBox.ini, then run /reread.",
             L"TypeBox", MB_OK | MB_ICONERROR);
     }
+
+    LogInfo(L"TypeBox " + WVersion() + L" started; " +
+            std::to_wstring(g_aliases.size()) + L" aliases, " +
+            std::to_wstring(g_plugins.size()) + L" plugins");
 
     AddTrayIcon(mainWnd, true);
     if (g_set.showOnStart) ShowBox(mainWnd);

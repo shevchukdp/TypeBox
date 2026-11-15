@@ -25,6 +25,15 @@ Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (e
 - End-to-end ABI smoke test: host discovers a DLL in `Plugins\`, calls `Load`, routes a
   line through `RunString`, applies `TExec` — against MinGW g++ 13.2 (`-Wall -Wextra`, clean).
 
+- **Portable error log with configurable size & rewrite method** — `[Log] Enabled /
+  File / MaxSizeKB / Rewrite=rotate|truncate|timestamp|keep / Keep`; failed hotkeys,
+  plugin load errors, failing aliases and import/export errors land there;
+  open with `/log`.
+- **`TypeBox.exe --version`** console flag + CI **smoke gate**: a build that cannot
+  start or reports a wrong version never reaches a release.
+- **MSVC release is fully static** (`/MT`) — release zip needs no VC++ redistributable;
+  MinGW build documented with `-static` (no libgcc/libstdc++ DLL dependencies).
+
 ## [0.3.0] - 2026-11-15
 
 ### Added

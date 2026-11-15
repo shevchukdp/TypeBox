@@ -75,6 +75,19 @@ Internal commands wrap the portable file:
 - `/import <path>` — restores it (current config kept as `TypeBox.ini.bak`),
   then reloads settings, aliases and hotkey.
 
+### `[Log]` — portable error log
+Everything TypeBox cannot do itself (failed hotkey registration, plugin load errors,
+failing aliases, import/export errors) is appended to a log **next to the exe** —
+no Event Viewer, no `%LOCALAPPDATA%`. Open it with the internal `/log` command.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `Enabled` | master switch | `1` |
+| `File` | log file (relative paths resolve to the portable folder) | `TypeBox.log` |
+| `MaxSizeKB` | size cap before the rewrite method kicks in | `512` |
+| `Rewrite` | `rotate` (file→file.1→file.N) · `truncate` (keep newest half) · `timestamp` (seal as `file-YYYYMMDD-HHMMSS.log`) · `keep` (stop writing, never touch) | `rotate` |
+| `Keep` | rotated copies retained (`rotate`) | `3` |
+
 ### `[Plugins]`
 ```ini
 [Plugins]

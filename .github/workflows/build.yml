@@ -45,12 +45,29 @@ jobs:
         shell: cmd
         run: cmake --build build
 
-      - name: Smoke test (exe produced)
+      - name: Smoke test (exe starts, correct version)
         shell: pwsh
         run: |
-          if (-not (Test-Path build/TypeBox.exe)) { exit 1 }
-          $size = (Get-Item build/TypeBox.exe).Length
-          Write-Host "TypeBox.exe built, $size bytes"
+          if (-not (Test-Path build/TypeBox.exe)) { Write-Error "no exe"; exit 1 }
+          $ver = "${{ steps.ver.outputs.value }}"
+          & cmd /c "build\TypeBox.exe --version >nul 2>&1"
+          if ($LASTEXITCODE -ne 0) { Write-Error "exe --version exited $LASTEXITCODE"; exit 1 }
+          # GUI must stay alive (missing-DLL builds die immediately with 0xC0000135)
+          $p = Start-Process build/TypeBox.exe -PassThru
+          Start-Sleep -Seconds 3
+          if ($null -eq (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
+            Write-Error "GUI process died immediately (missing runtime DLL?)"
+            exit 1
+          }
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 1
+          # the portable log must show the correct version (proves real startup)
+          $log = Get-Content build/TypeBox.log -Raw -ErrorAction SilentlyContinue
+          if (-not $log -or $log -notmatch [regex]::Escape("TypeBox $ver started")) {
+            Write-Error "startup log missing/does not report version $ver"
+            exit 1
+          }
+          Write-Host "Smoke OK: TypeBox $ver verified via --version + startup log"
 
       - name: Package
         shell: pwsh
