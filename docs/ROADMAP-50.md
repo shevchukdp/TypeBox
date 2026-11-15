@@ -89,19 +89,19 @@ full specs and sources (PowerToys Command Palette backlash #46096/#43174, Flow 2
 Raycast-Win v0.41, Listary 6.3, Keypirinha migration wave).
 
 ### v0.12.0 batch — keyboard muscle memory + UX quick wins (**shipped 2026-11-15**)
-| Mine | Adopted | Item | Source |
-|---|---|---|---|
-| #51 | R#3 | **Alt+1…9 quick-select** in the drop-down (digits painted on rows) | Flow/Listary/Wox; UX-TOp |
-| #52 | R#4 | **Web-search quicklinks** `[WebSearch] g=…%s` (defaults g/yt/gh, i18n anchor) | Raycast Quicklinks, Listary |
-| — | U-D8/B2 | **Drop-down scroll** (`g_ddTop` + wheel) — rows past `Lines` selectable/visible | UX-REVIEW |
-| — | U-B3 | Hover-execute guard (Enter runs only keyboard-selected rows) | UX-REVIEW |
-| — | U-Top1/B10 | **Contrast guard** strip text ≥4.5:1 (Mix% auto-raised on light themes) | UX-REVIEW |
-| — | U-Top2/B1 | Cue banner hint in the edit (Tab/Enter/Esc discoverability, i18n) | UX-REVIEW |
-| — | U-A4 | Edit height = tmHeight+6 (stops 18pt clipping) | UX-REVIEW |
-| — | U-A2 | Unlit traffic-light lamps visible (Mix 32% + ring) | UX-REVIEW |
-| — | U-B1 | Tray tip + balloon show the actual hotkey | UX-REVIEW |
-| — | U-run-up | AutoHide timer resets on typing | UX-REVIEW |
-| — | U-defect | calc.c `GetInfo` → ASCII (settings-plugins garbled `в Б`) | UX-REVIEW |
+| Mine | Adopted | Item | Source | Status |
+|---|---|---|---|---|
+| #51 | R#3 | **Alt+1…9 quick-select** in the drop-down (digits painted on rows) | Flow/Listary/Wox; UX-TOp | ✅ v0.12.0 |
+| #52 | R#4 | **Web-search quicklinks** `[WebSearch] g=…%s` (defaults g/yt/gh, i18n anchor) | Raycast Quicklinks, Listary | ✅ v0.12.0 |
+| — | U-D8/B2 | **Drop-down scroll** (`g_ddTop` + wheel) — rows past `Lines` selectable/visible | UX-REVIEW | ✅ v0.12.0 |
+| — | U-B3 | Hover-execute guard (Enter runs only keyboard-selected rows) | UX-REVIEW | ✅ v0.12.0 |
+| — | U-Top1/B10 | **Contrast guard** strip text ≥4.5:1 (Mix% auto-raised on light themes) | UX-REVIEW | ✅ v0.12.0 |
+| — | U-Top2/B1 | Cue banner hint in the edit (Tab/Enter/Esc discoverability, i18n) | UX-REVIEW | ✅ v0.12.0 |
+| — | U-A4 | Edit height = tmHeight+6 (stops 18pt clipping) | UX-REVIEW | ✅ v0.12.0 |
+| — | U-A2 | Unlit traffic-light lamps visible (Mix 32% + ring) | UX-REVIEW | ✅ v0.12.0 |
+| — | U-B1 | Tray tip + balloon show the actual hotkey | UX-REVIEW | ✅ v0.12.0 |
+| — | U-run-up | AutoHide timer resets on typing | UX-REVIEW | ✅ v0.12.0 |
+| — | U-defect | calc.c `GetInfo` → ASCII (settings-plugins garbled `в Б`) | UX-REVIEW | ✅ v0.12.0 |
 
 ### v0.12.x–v0.13.x adoption queue (next after v0.12.0)
 | Mine | Adopted | Item | Effort |
