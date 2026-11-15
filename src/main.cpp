@@ -85,6 +85,8 @@ struct Settings {
     bool applyEnglish = false;   // force US-English layout when the console opens
     // [Show] Priority of the TypeBox process: idle|normal|high|realtime
     std::wstring priority = L"normal";
+    // [UI] Language: auto | en ru uk de fr es pt it zh ja ko ar tr pl vi hi id sw af am
+    std::wstring langCode = L"auto";
     // [Type] EasyType completion
     int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
     bool etInternal = true, etAlias = true, etHistory = true, etSysAlias = true;
@@ -144,6 +146,8 @@ static std::wstring ExeDir() {
     if (!dir.empty() && dir.back() != L'\\') dir += L'\\';
     return dir;
 }
+
+#include "i18n.h"   // localization: L(STR_*), language packs, RTL
 
 static std::wstring ReadIniStr(const wchar_t* sec, const wchar_t* key, const wchar_t* def) {
     wchar_t buf[4096] = {};
@@ -422,9 +426,7 @@ static const wchar_t* kSoundKeys[9] = {
     L"ExecuteInternalSound", L"ExecuteAliasSound", L"ExecuteSysAliasSound",
     L"ExecuteURLSound", L"ExecuteEmailSound", L"ExecuteFileSound",
     L"ExecuteFolderSound", L"ExecutePluginSound", L"ExecuteShellSound" };
-static const wchar_t* kSoundLabels[9] = {
-    L"Internal commands", L"Aliases", L"System aliases", L"Websites",
-    L"E-mail", L"Files", L"Folders", L"Plugins", L"Shell commands" };
+// [Sounds] per-type labels moved to i18n (STR_SO_INTERNAL + i).
 
 // [Path] one folder per key (Dir1=.., 2=..) or semicolons in "Extra=..";
 // [Variables] name=value. %VARS% are expanded, comments ignored.
@@ -498,6 +500,7 @@ static void LoadSettings() {
     g_set.fontBold = ReadIniInt(L"Font", L"Bold", 1);
     g_set.applyEnglish = ReadIniBool(L"Font", L"ApplyEnglish", false);
     g_set.priority = Lower(Trim(ReadIniStr(L"Show", L"Priority", L"normal")));
+    g_set.langCode = Trim(ReadIniStr(L"UI", L"Language", L"auto"));
 
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
     g_set.etInternal = ReadIniBool(L"Type", L"UseInternalET", true);
@@ -755,9 +758,7 @@ static void AddTrayIcon(HWND hWnd, bool balloon) {
         g_nid.uFlags |= NIF_INFO;
         g_nid.dwInfoFlags = NIIF_INFO;
         lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
-        lstrcpynW(g_nid.szInfo,
-                  L"Press the hotkey to open. Right-click the icon for the menu.",
-                  ARRAYSIZE(g_nid.szInfo));
+        lstrcpynW(g_nid.szInfo, L(STR_BALLOON_START), ARRAYSIZE(g_nid.szInfo));
     }
     Shell_NotifyIconW(NIM_ADD, &g_nid);
 }
@@ -981,7 +982,8 @@ static void ReloadHotkey(HWND mainWnd);
 static void ResetET();
 static void OpenSettings(HWND mainWnd, int page);
 enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
-       PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_ENV, PG_COUNT };
+       PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_ENV,
+       PG_LANG, PG_COUNT };
 
 // ---------------------------------------------------------------- internal commands
 //
@@ -996,8 +998,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Type an alias, app name, URL, e-mail, file or command and press Enter.\n"
             L"~commands run system actions (~lock ~logoff ~sleep ~screensave ~reboot).\n"
             L"Up/Down browse history, Esc hides, Ctrl+Z restores the last command.\n"
-            L"Shift+Enter kills the process started by the last alias.\n\n"
-            L"Internal commands:\n"
+            L"Shift+Enter kills the process started by the last alias.\n\n";
+        msg += std::wstring(L(STR_HELP_HEAD)) + L"\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
             L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
@@ -1005,13 +1007,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
-            L"TypeBox " + WVersion() + L"\n\n"
-            L"Universal hotkey console + bash + launcher for Windows.\n"
-            L"Portable INI config, aliases with %s/%1..%n, plugins.\n\n"
-            L"Roots: continues TypeAndRun by Evgeniy Galantsev\n"
-            L"(github.com/galancev/typeandrun, GPL-3.0).\n"
-            L"Inspired by PowerToys Run, Flow Launcher, Wox, Raycast, Alfred,\n"
-            L"ConEmu and drop-down terminals (Guake/Yakuake/Drop).";
+            L"TypeBox " + WVersion() + L"\n\n" +
+            std::wstring(L(STR_ABOUT_TEXT));
         MessageBoxW(mainWnd, msg.c_str(), L"About TypeBox", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/checkconfig") {
         bool iniOk = PathFileExistsW(g_iniPath.c_str());
@@ -1335,7 +1332,8 @@ static void ApplyFont(HWND edit) {
     HFONT f = CreateFontW(-MulDiv(g_set.fontSize, 96, 72), 0, 0, 0,
         g_set.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
         OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-        FIXED_PITCH | FF_MODERN, g_set.fontName.c_str());
+        FIXED_PITCH | FF_MODERN,
+        ConsoleFontSuggestion(g_set.fontName.c_str()));
     SendMessageW(edit, WM_SETFONT, (WPARAM)f, TRUE);
 }
 
@@ -1482,11 +1480,11 @@ static void TabComplete(HWND edit) {
 static void ShowTrayMenu(HWND hWnd) {
     POINT pt; GetCursorPos(&pt);
     HMENU menu = CreatePopupMenu();
-    AppendMenuW(menu, MF_STRING, 1, L"Show / Hide");
-    AppendMenuW(menu, MF_STRING, 4, L"Settings...");
-    AppendMenuW(menu, MF_STRING, 2, L"Config (TypeBox.ini)");
+    AppendMenuW(menu, MF_STRING, 1, L(STR_TRAY_SHOW));
+    AppendMenuW(menu, MF_STRING, 4, L(STR_TRAY_SETTINGS));
+    AppendMenuW(menu, MF_STRING, 2, L(STR_TRAY_CONFIG));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-    AppendMenuW(menu, MF_STRING, 3, L"Exit");
+    AppendMenuW(menu, MF_STRING, 3, L(STR_TRAY_EXIT));
     SetForegroundWindow(hWnd); // so the menu dismisses on click-away
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
     DestroyMenu(menu);
@@ -1499,10 +1497,10 @@ static void ShowTrayMenu(HWND hWnd) {
 // TypeBox.ini key-by-key (comments/unknown keys survive) and live-applies:
 // font, geometry, alpha, hotkey re-registration, priority, tray, timer, brush.
 
-static const wchar_t* kPages[PG_COUNT] = {
-    L"Appearance", L"Console", L"Font", L"Hotkey", L"Execution",
-    L"EasyType", L"History", L"Log", L"Aliases", L"Sounds", L"Plugins",
-    L"Environment" };
+static const int kPageStr[PG_COUNT] = {
+    STR_PG_APPEARANCE, STR_PG_CONSOLE, STR_PG_FONT, STR_PG_HOTKEY, STR_PG_EXEC,
+    STR_PG_EASYTYPE, STR_PG_HISTORY, STR_PG_LOG, STR_PG_ALIASES, STR_PG_SOUNDS,
+    STR_PG_PLUGINS, STR_PG_ENV, STR_PG_LANG };
 
 static HWND  g_setWnd = nullptr;
 static HWND  g_setList = nullptr;
@@ -1523,6 +1521,7 @@ static HWND g_alLb = nullptr, g_alName = nullptr, g_alAction = nullptr,
       g_alDir = nullptr, g_alState = nullptr, g_fontPreview = nullptr;
 static HWND g_plLb = nullptr, g_plLoadChk = nullptr, g_plHistChk = nullptr,
       g_plInfo = nullptr;
+static HWND g_langCombo = nullptr;
 struct PluginRow { std::wstring name; int load = 1, saveHist = 1; };
 static std::vector<PluginRow> g_plRows;
 static int g_plSel = -1;
@@ -1564,7 +1563,7 @@ static void HkRefresh() {
     std::wstring t = HotkeyText(g_draftHk);
     if (g_hkEdit)   SetWindowTextW(g_hkEdit, t.c_str());
     if (g_hkLabel)  SetWindowTextW(g_hkLabel,
-        (std::wstring(L"Current hotkey: ") + t).c_str());
+        (std::wstring(L(STR_HK_CURRENT)) + t).c_str());
     if (g_hkVk) { wchar_t b[16]; wsprintfW(b, L"%u", g_draftHk.key); SetWindowTextW(g_hkVk, b); }
 }
 
@@ -1978,13 +1977,13 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     if (sy < 0) sy = (wa.bottom - H) / 2;
 
     g_setWnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
-        L"TypeBoxSettings", (L"TypeBox Settings — " + WVersion()).c_str(),
+        L"TypeBoxSettings", (std::wstring(L(STR_DLG_TITLE)) + L" — " + WVersion()).c_str(),
         WS_CAPTION | WS_SYSMENU, sx, sy, W, H, mainWnd, nullptr, hInst, nullptr);
 
     g_setList = MkOn(g_setWnd, L"LISTBOX", L"", WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                      8, 8, 140, 360);
     for (int i = 0; i < PG_COUNT; ++i)
-        SendMessageW(g_setList, LB_ADDSTRING, 0, (LPARAM)kPages[i]);
+        SendMessageW(g_setList, LB_ADDSTRING, 0, (LPARAM)L(kPageStr[i]));
     SendMessageW(g_setList, LB_SETCURSEL, startPage, 0);
 
     for (int i = 0; i < PG_COUNT; ++i) {
@@ -1999,13 +1998,13 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     int y;
     // --- Appearance
     y = 12;
-    CkB(g_setPage[PG_APPEAR], L"Show console on start",  16, y, &Settings::showOnStart);        y += 26;
-    CkB(g_setPage[PG_APPEAR], L"Hide console when focus is lost", 16, y, &Settings::hideOnDeactivate); y += 26;
-    CkB(g_setPage[PG_APPEAR], L"Tray icon",              16, y, &Settings::trayIcon);           y += 26;
-    CkB(g_setPage[PG_APPEAR], L"Balloon tips",           16, y, &Settings::balloonTips);        y += 26;
-    CkB(g_setPage[PG_APPEAR], L"Auto-hide after idle",   16, y, &Settings::autoHide);           y += 30;
-    NumB(g_setPage[PG_APPEAR], L"Idle seconds", 16, y, &Settings::autoHideValue, 1, 3600);      y += 32;
-    MkLabel(g_setPage[PG_APPEAR], L"Process priority", 16, y + 2);
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_START),  16, y, &Settings::showOnStart);        y += 26;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_HIDEFOCUS), 16, y, &Settings::hideOnDeactivate); y += 26;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_TRAY),   16, y, &Settings::trayIcon);           y += 26;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_BALLOONS), 16, y, &Settings::balloonTips);      y += 26;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_AUTOHIDE), 16, y, &Settings::autoHide);         y += 30;
+    NumB(g_setPage[PG_APPEAR], L(STR_AP_IDLESEC), 16, y, &Settings::autoHideValue, 1, 3600); y += 32;
+    MkLabel(g_setPage[PG_APPEAR], L(STR_AP_PRIORITY), 16, y + 2);
     {
         const wchar_t* it[] = { L"idle", L"normal", L"high", L"realtime" };
         HWND c = MkCombo(g_setPage[PG_APPEAR], 175, y, 110, it, 4);
@@ -2022,15 +2021,15 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     // --- Console
     y = 12;
-    NumB(g_setPage[PG_WINDOW], L"Width (px)",   16, y, &Settings::width, 200, 7680);  y += 28;
-    NumB(g_setPage[PG_WINDOW], L"Height (px)",  16, y, &Settings::height, 24, 2160);  y += 28;
-    NumB(g_setPage[PG_WINDOW], L"X (-1 = auto)", 16, y, &Settings::x, -1, 7680, true);  y += 28;
-    NumB(g_setPage[PG_WINDOW], L"Y (-1 = auto)", 16, y, &Settings::y, -1, 2160, true);   y += 28;
-    CkB(g_setPage[PG_WINDOW], L"Center horizontally", 16, y, &Settings::centerX);     y += 26;
-    CkB(g_setPage[PG_WINDOW], L"Center vertically",   16, y, &Settings::centerY);     y += 30;
-    NumB(g_setPage[PG_WINDOW], L"Transparency 0..255", 16, y, &Settings::transparent, 30, 255); y += 32;
-    NumB(g_setPage[PG_WINDOW], L"BG color (COLORREF)", 16, y, &Settings::consoleBg, -1, 0x00FFFFFF, true); y += 28;
-    NumB(g_setPage[PG_WINDOW], L"FG color (COLORREF)", 16, y, &Settings::consoleFg, -1, 0x00FFFFFF, true);
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_WIDTH),  16, y, &Settings::width, 200, 7680);  y += 28;
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_HEIGHT), 16, y, &Settings::height, 24, 2160);  y += 28;
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_X), 16, y, &Settings::x, -1, 7680, true);      y += 28;
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_Y), 16, y, &Settings::y, -1, 2160, true);      y += 28;
+    CkB(g_setPage[PG_WINDOW], L(STR_CO_CX), 16, y, &Settings::centerX);                y += 26;
+    CkB(g_setPage[PG_WINDOW], L(STR_CO_CY),   16, y, &Settings::centerY);              y += 30;
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_ALPHA), 16, y, &Settings::transparent, 30, 255); y += 32;
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_BG), 16, y, &Settings::consoleBg, -1, 0x00FFFFFF, true); y += 28;
+    NumB(g_setPage[PG_WINDOW], L(STR_CO_FG), 16, y, &Settings::consoleFg, -1, 0x00FFFFFF, true);
 
     // --- Font
     y = 12;
@@ -2038,11 +2037,11 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_fontPreview = MkOn(g_setPage[PG_FONT], L"STATIC", L"Aa Bb Cc 0123456789",
                          SS_LEFT, 16, y + 20, 430, 40);
     y += 70;
-    TxB(g_setPage[PG_FONT], L"Font name", 16, y, &Settings::fontName);                  y += 28;
-    NumB(g_setPage[PG_FONT], L"Size", 16, y, &Settings::fontSize, 6, 72);               y += 28;
-    CkB(g_setPage[PG_FONT], L"Bold", 16, y, &Settings::fontBold);                       y += 26;
-    CkB(g_setPage[PG_FONT], L"Apply English layout on open", 16, y, &Settings::applyEnglish); y += 30;
-    MkButton(g_setPage[PG_FONT], L"Choose...", 16, y, 110);
+    TxB(g_setPage[PG_FONT], L(STR_FO_NAME), 16, y, &Settings::fontName);                y += 28;
+    NumB(g_setPage[PG_FONT], L(STR_FO_SIZE), 16, y, &Settings::fontSize, 6, 72);        y += 28;
+    CkB(g_setPage[PG_FONT], L(STR_FO_BOLD), 16, y, &Settings::fontBold);                y += 26;
+    CkB(g_setPage[PG_FONT], L(STR_FO_APPLY_EN), 16, y, &Settings::applyEnglish);        y += 30;
+    MkButton(g_setPage[PG_FONT], L(STR_FO_CHOOSE), 16, y, 110);
     Bind([]{
         static HFONT prev = nullptr;
         if (prev) { DeleteObject(prev); prev = nullptr; }
@@ -2055,62 +2054,62 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     // --- Hotkey
     y = 12;
-    MkLabel(g_setPage[PG_HOTKEY], L"Click the box and press the hotkey (Esc cancels):", 16, y, 430); y += 24;
+    MkLabel(g_setPage[PG_HOTKEY], L(STR_HK_HINT), 16, y, 430); y += 24;
     g_hkEdit = MkEdit(g_setPage[PG_HOTKEY], L"", 16, y, 300);
     SetWindowSubclass(g_hkEdit, HkCapProc, 777, 0);
     SetWindowLongW(g_hkEdit, GWL_STYLE, GetWindowLongW(g_hkEdit, GWL_STYLE) | ES_READONLY);
     y += 32;
-    g_hkLabel = MkLabel(g_setPage[PG_HOTKEY], L"Current hotkey:", 16, y, 430); y += 30;
-    MkLabel(g_setPage[PG_HOTKEY], L"VK code (advanced):", 16, y + 2, 120);
+    g_hkLabel = MkLabel(g_setPage[PG_HOTKEY], L(STR_HK_CURRENT), 16, y, 430); y += 30;
+    MkLabel(g_setPage[PG_HOTKEY], L(STR_HK_VK), 16, y + 2, 120);
     g_hkVk = MkEdit(g_setPage[PG_HOTKEY], L"", 140, y, 70, true);
     Bind([]{ wchar_t b[16]; wsprintfW(b, L"%u", g_draftHk.key);
              SetWindowTextW(g_hkVk, b); }, []{});
 
     // --- Execution
     y = 12;
-    CkB(g_setPage[PG_EXEC], L"Internal commands (/...)",   16, y, &Settings::execInternal); y += 26;
-    CkB(g_setPage[PG_EXEC], L"Aliases and ~system aliases", 16, y, &Settings::execAliases); y += 26;
-    CkB(g_setPage[PG_EXEC], L"Websites (www. / http)",     16, y, &Settings::execWww);     y += 26;
-    CkB(g_setPage[PG_EXEC], L"E-mail (mailto)",            16, y, &Settings::execEmail);   y += 26;
-    CkB(g_setPage[PG_EXEC], L"Files and folders",          16, y, &Settings::execFiles);   y += 26;
-    CkB(g_setPage[PG_EXEC], L"Shell commands (cmd /c)",    16, y, &Settings::execShell);   y += 26;
-    CkB(g_setPage[PG_EXEC], L"Plugins",                    16, y, &Settings::execPlugins);
+    CkB(g_setPage[PG_EXEC], L(STR_EX_INTERNAL),   16, y, &Settings::execInternal); y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_ALIASES),    16, y, &Settings::execAliases);  y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_WWW),        16, y, &Settings::execWww);     y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_EMAIL),      16, y, &Settings::execEmail);   y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_FILES),      16, y, &Settings::execFiles);   y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_SHELL),      16, y, &Settings::execShell);   y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_PLUGINS),    16, y, &Settings::execPlugins);
 
     // --- EasyType
     y = 12;
-    MkLabel(g_setPage[PG_TYPE], L"Completion mode", 16, y + 2);
+    MkLabel(g_setPage[PG_TYPE], L(STR_ET_MODE), 16, y + 2);
     {
-        const wchar_t* it[] = { L"off", L"easy", L"linux (Tab cycles)" };
+        const wchar_t* it[] = { L(STR_ET_OFF), L(STR_ET_EASY), L(STR_ET_LINUX) };
         HWND c = MkCombo(g_setPage[PG_TYPE], 175, y, 180, it, 3);
         Bind([c]{ SendMessageW(c, CB_SETCURSEL,
                  g_draft.easyType == 0 ? 0 : g_draft.easyType == 1 ? 1 : 2, 0); },
              [c]{ g_draft.easyType = (int)SendMessageW(c, CB_GETCURSEL, 0, 0); });
     }
     y += 34;
-    CkB(g_setPage[PG_TYPE], L"Complete internal commands", 16, y, &Settings::etInternal); y += 26;
-    CkB(g_setPage[PG_TYPE], L"Complete aliases",           16, y, &Settings::etAlias);    y += 26;
-    CkB(g_setPage[PG_TYPE], L"Complete system aliases (~)", 16, y, &Settings::etSysAlias); y += 26;
-    CkB(g_setPage[PG_TYPE], L"Complete from history",      16, y, &Settings::etHistory);
+    CkB(g_setPage[PG_TYPE], L(STR_ET_INT),     16, y, &Settings::etInternal); y += 26;
+    CkB(g_setPage[PG_TYPE], L(STR_ET_AL),      16, y, &Settings::etAlias);    y += 26;
+    CkB(g_setPage[PG_TYPE], L(STR_ET_SYS),     16, y, &Settings::etSysAlias); y += 26;
+    CkB(g_setPage[PG_TYPE], L(STR_ET_HIST),    16, y, &Settings::etHistory);
 
     // --- History
     y = 12;
-    NumB(g_setPage[PG_HISTORY], L"Max history items", 16, y, &Settings::historyMax, 10, 10000); y += 32;
-    CkB(g_setPage[PG_HISTORY], L"Ctrl+Z undo",  16, y, &Settings::useUndo);       y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save internal commands", 16, y, &Settings::saveInternal); y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save aliases",           16, y, &Settings::saveAlias);   y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save websites",          16, y, &Settings::saveWww);     y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save e-mails",           16, y, &Settings::saveEmail);   y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save paths",             16, y, &Settings::savePath);    y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save plugin commands",   16, y, &Settings::savePlugins); y += 26;
-    CkB(g_setPage[PG_HISTORY], L"Save other commands",    16, y, &Settings::saveUnknown); y += 30;
-    MkButton(g_setPage[PG_HISTORY], L"Clear history", 16, y, 130);
+    NumB(g_setPage[PG_HISTORY], L(STR_HI_MAX), 16, y, &Settings::historyMax, 10, 10000); y += 32;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_UNDO),  16, y, &Settings::useUndo);       y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_INT),   16, y, &Settings::saveInternal);  y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_AL),    16, y, &Settings::saveAlias);     y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_WWW),   16, y, &Settings::saveWww);       y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_MAIL),  16, y, &Settings::saveEmail);     y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_PATH),  16, y, &Settings::savePath);      y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_PLG),   16, y, &Settings::savePlugins);   y += 26;
+    CkB(g_setPage[PG_HISTORY], L(STR_HI_OTHER), 16, y, &Settings::saveUnknown);   y += 30;
+    MkButton(g_setPage[PG_HISTORY], L(STR_HI_CLEAR), 16, y, 130);
 
     // --- Log
     y = 12;
-    CkB(g_setPage[PG_LOG], L"Enable error log", 16, y, &Settings::logEnabled); y += 28;
-    TxB(g_setPage[PG_LOG], L"File", 16, y, &Settings::logFile);                y += 28;
-    NumB(g_setPage[PG_LOG], L"Max size KB", 16, y, &Settings::logMaxKB, 16, 65536); y += 32;
-    MkLabel(g_setPage[PG_LOG], L"On overflow", 16, y + 2);
+    CkB(g_setPage[PG_LOG], L(STR_LO_ENABLE), 16, y, &Settings::logEnabled); y += 28;
+    TxB(g_setPage[PG_LOG], L(STR_LO_FILE), 16, y, &Settings::logFile);      y += 28;
+    NumB(g_setPage[PG_LOG], L(STR_LO_MAXKB), 16, y, &Settings::logMaxKB, 16, 65536); y += 32;
+    MkLabel(g_setPage[PG_LOG], L(STR_LO_OVERFLOW), 16, y + 2);
     {
         const wchar_t* it[] = { L"rotate", L"truncate", L"timestamp", L"keep" };
         HWND c = MkCombo(g_setPage[PG_LOG], 175, y, 130, it, 4);
@@ -2118,36 +2117,36 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
              [c]{ g_draft.logRewrite = (int)SendMessageW(c, CB_GETCURSEL, 0, 0); });
     }
     y += 32;
-    NumB(g_setPage[PG_LOG], L"Keep rotated copies", 16, y, &Settings::logKeep, 1, 99);
+    NumB(g_setPage[PG_LOG], L(STR_LO_KEEP), 16, y, &Settings::logKeep, 1, 99);
 
     // --- Aliases
     g_alLb = MkOn(g_setPage[PG_ALIASES], L"LISTBOX", L"",
                   WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 150, 330);
     int ax = 170;
-    MkLabel(g_setPage[PG_ALIASES], L"Name",   ax, 10, 60);
+    MkLabel(g_setPage[PG_ALIASES], L(STR_AL_NAME),   ax, 10, 60);
     g_alName   = MkEdit(g_setPage[PG_ALIASES], L"", ax + 55, 8, 230);
-    MkLabel(g_setPage[PG_ALIASES], L"Action", ax, 40, 60);
+    MkLabel(g_setPage[PG_ALIASES], L(STR_AL_ACTION), ax, 40, 60);
     g_alAction = MkEdit(g_setPage[PG_ALIASES], L"", ax + 55, 38, 230);
-    MkLabel(g_setPage[PG_ALIASES], L"Work dir", ax, 70, 60);
+    MkLabel(g_setPage[PG_ALIASES], L(STR_AL_DIR),    ax, 70, 60);
     g_alDir    = MkEdit(g_setPage[PG_ALIASES], L"", ax + 55, 68, 230);
-    MkLabel(g_setPage[PG_ALIASES], L"Window", ax, 100, 60);
+    MkLabel(g_setPage[PG_ALIASES], L(STR_AL_WINDOW), ax, 100, 60);
     {
-        const wchar_t* it[] = { L"Normal", L"Maximized", L"Minimized", L"Hidden" };
+        const wchar_t* it[] = { L(STR_AL_WN_NORMAL), L(STR_AL_WN_MAX),
+                                L(STR_AL_WN_MIN), L(STR_AL_WN_HIDDEN) };
         g_alState = MkCombo(g_setPage[PG_ALIASES], ax + 55, 98, 130, it, 4);
     }
-    MkButton(g_setPage[PG_ALIASES], L"Add",    ax, 132, 72);
-    MkButton(g_setPage[PG_ALIASES], L"Update", ax + 80, 132, 72);
-    MkButton(g_setPage[PG_ALIASES], L"Delete", ax + 160, 132, 72);
-    MkLabel(g_setPage[PG_ALIASES],
-            L"Action supports %s and %1..%n parameters.", ax, 168, 290);
+    MkButton(g_setPage[PG_ALIASES], L(STR_AL_ADD),    ax, 132, 72);
+    MkButton(g_setPage[PG_ALIASES], L(STR_AL_UPDATE), ax + 80, 132, 72);
+    MkButton(g_setPage[PG_ALIASES], L(STR_AL_DELETE), ax + 160, 132, 72);
+    MkLabel(g_setPage[PG_ALIASES], L(STR_AL_HINT), ax, 168, 290);
 
     // --- Sounds
     y = 12;
-    CkB(g_setPage[PG_SOUNDS], L"Play sounds on execution", 16, y, &Settings::enableSounds);
+    CkB(g_setPage[PG_SOUNDS], L(STR_SO_PLAY), 16, y, &Settings::enableSounds);
     y += 30;
     for (int i = 0; i < 9; ++i) {
         int yy = y + i * 26;
-        MkLabel(g_setPage[PG_SOUNDS], kSoundLabels[i], 16, yy + 2, 130);
+        MkLabel(g_setPage[PG_SOUNDS], L(STR_SO_INTERNAL + i), 16, yy + 2, 130);
         HWND e = MkEdit(g_setPage[PG_SOUNDS], L"", 150, yy, 300);
         Bind([e, i]{ SetWindowTextW(e, g_draft.sound[i].c_str()); },
              [e, i]{ g_draft.sound[i] = Trim(GetText(e)); });
@@ -2157,20 +2156,18 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_plLb = MkOn(g_setPage[PG_PLUGINS], L"LISTBOX", L"",
                   WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 180, 250);
     int px = 200;
-    g_plLoadChk = MkCheck(g_setPage[PG_PLUGINS], L"Load on start", px, 12, 180);
-    g_plHistChk = MkCheck(g_setPage[PG_PLUGINS], L"Save to history", px, 38, 180);
+    g_plLoadChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_LOAD), px, 12, 180);
+    g_plHistChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_HIST), px, 38, 180);
     g_plInfo = MkOn(g_setPage[PG_PLUGINS], L"STATIC", L"", SS_LEFT | SS_EDITCONTROL,
                     px, 70, 260, 150);
-    MkButton(g_setPage[PG_PLUGINS], L"Rescan",  px, 240, 80);
-    MkButton(g_setPage[PG_PLUGINS], L"Unload all", px + 90, 240, 80);
-    MkButton(g_setPage[PG_PLUGINS], L"About",   px, 270, 80);
-    MkButton(g_setPage[PG_PLUGINS], L"Options", px + 90, 270, 80);
-    MkLabel(g_setPage[PG_PLUGINS],
-            L"Dlls live in the portable Plugins\\ folder.", 8, 268, 190);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_RESCAN),  px, 240, 80);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_UNLOAD),  px + 90, 240, 80);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_ABOUT),   px, 270, 80);
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_OPTIONS), px + 90, 270, 80);
+    MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 268, 190);
 
     // --- Environment (own PATH folders + %variables%, like the OS dialog)
-    MkLabel(g_setPage[PG_ENV], L"Own PATH folders (one per line, %VAR% allowed):",
-            16, 10, 430);
+    MkLabel(g_setPage[PG_ENV], L(STR_EN_PATHHINT), 16, 10, 430);
     g_envPathEdit = MkOn(g_setPage[PG_ENV], L"EDIT", L"",
                          WS_BORDER | WS_VSCROLL | ES_MULTILINE | ES_AUTOHSCROLL,
                          16, 30, 430, 100);
@@ -2193,25 +2190,52 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
         std::wstring t = Trim(cur);
         if (!t.empty()) g_draftPath.push_back(t);
     });
-    MkLabel(g_setPage[PG_ENV], L"Variables (typed %NAME% expands to the value):",
-            16, 140, 430);
+    MkLabel(g_setPage[PG_ENV], L(STR_EN_VARSHINT), 16, 140, 430);
     g_varLb = MkOn(g_setPage[PG_ENV], L"LISTBOX", L"",
                    WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 16, 160, 200, 170);
     int vx = 226;
-    MkLabel(g_setPage[PG_ENV], L"Name",  vx, 162, 50);
+    MkLabel(g_setPage[PG_ENV], L(STR_AL_NAME),  vx, 162, 50);
     g_varName  = MkEdit(g_setPage[PG_ENV], L"", vx + 45, 160, 175);
-    MkLabel(g_setPage[PG_ENV], L"Value", vx, 192, 50);
+    MkLabel(g_setPage[PG_ENV], L(STR_EN_VALUE), vx, 192, 50);
     g_varValue = MkEdit(g_setPage[PG_ENV], L"", vx + 45, 190, 175);
-    MkButton(g_setPage[PG_ENV], L"Add var",    vx, 222, 84);
-    MkButton(g_setPage[PG_ENV], L"Update var", vx + 90, 222, 84);
-    MkButton(g_setPage[PG_ENV], L"Delete var", vx, 252, 84);
-    MkLabel(g_setPage[PG_ENV],
-            L"Folders extend PATH for aliases, shell\nlines and every started program.",
-            vx, 286, 210);
+    MkButton(g_setPage[PG_ENV], L(STR_EN_ADDVAR), vx, 222, 84);
+    MkButton(g_setPage[PG_ENV], L(STR_EN_UPDVAR), vx + 90, 222, 84);
+    MkButton(g_setPage[PG_ENV], L(STR_EN_DELVAR), vx, 252, 84);
+    MkLabel(g_setPage[PG_ENV], L(STR_EN_NOTE), vx, 286, 210);
 
-    MkButton(g_setWnd, L"OK",     380, 380, 75);
-    MkButton(g_setWnd, L"Apply",  461, 380, 75);
-    MkButton(g_setWnd, L"Cancel", 542, 380, 75);
+    // --- Language (20 UI languages; Apply switches immediately, Arabic RTL)
+    MkLabel(g_setPage[PG_LANG], L(STR_LA_LABEL), 16, 14, 430);
+    {
+        const wchar_t* it[LANG_COUNT + 1];
+        it[0] = L(STR_LA_AUTO);
+        for (int i = 0; i < LANG_COUNT; ++i) it[i + 1] = kLangs[i].native;
+        g_langCombo = MkCombo(g_setPage[PG_LANG], 16, 38, 220, it, LANG_COUNT + 1);
+        Bind([]{
+            int sel = 0;
+            std::wstring c = g_draft.langCode;
+            if (!c.empty() && _wcsicmp(c.c_str(), L"auto") != 0) {
+                size_t dash = c.find(L'-');
+                if (dash != std::wstring::npos) c = c.substr(0, dash);
+                for (int i = 0; i < LANG_COUNT; ++i)
+                    if (_wcsicmp(c.c_str(), kLangs[i].code) == 0) { sel = i + 1; break; }
+            }
+            SendMessageW(g_langCombo, CB_SETCURSEL, sel, 0);
+        }, []{
+            int sel = (int)SendMessageW(g_langCombo, CB_GETCURSEL, 0, 0);
+            g_draft.langCode = (sel <= 0) ? L"auto" : kLangs[sel - 1].code;
+        });
+    }
+    MkOn(g_setPage[PG_LANG], L"STATIC",
+            L"English · Русский · Українська · Deutsch · Français ·\n"
+            L"Español · Português · Italiano · 中文 · 日本語 · 한국어 ·\n"
+            L"العربية · Türkçe · Polski · Tiếng Việt · हिन्दी ·\n"
+            L"Bahasa Indonesia · Kiswahili · Afrikaans · አማርኛ",
+            SS_LEFT, 16, 76, 430, 72);
+    MkLabel(g_setPage[PG_LANG], L(STR_LA_HINT), 16, 152, 430);
+
+    MkButton(g_setWnd, L(STR_OK),     380, 380, 75);
+    MkButton(g_setWnd, L(STR_APPLY),  461, 380, 75);
+    MkButton(g_setWnd, L(STR_CANCEL), 542, 380, 75);
 
     // plugin rows from the discovered set + [PluginState] overrides
     g_plRows.clear();
@@ -2268,6 +2292,7 @@ static void WriteDraftIni() {
     WB(L"Show", L"CenterScreenY",      s.centerY);
     WInt(L"Show", L"Transparent",      s.transparent);
     WS_(L"Show", L"Priority",          s.priority);
+    WS_(L"UI", L"Language",            s.langCode);
 
     WS_(L"Font", L"Name",              s.fontName);
     WInt(L"Font", L"Size",             s.fontSize);
@@ -2360,6 +2385,21 @@ static void WriteDraftIni() {
 static void LiveApply(HWND mainWnd) {
     ReloadHotkey(mainWnd);                 // LoadSettings + RegisterHotKey
     LoadAliases();                         // LoadSettings covers sys-aliases/ignores
+    // language: re-resolve pack + RTL before fonts (CJK/RTL suggestion)
+    {
+        bool wasRtl = (GetWindowLongW(mainWnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
+        SetLanguage(LangFromCode(g_set.langCode));
+        bool isRtl = LangRtl();
+        SetProcessDefaultLayout(isRtl ? LAYOUT_RTL : 0);
+        if (isRtl != wasRtl) {
+            SetWindowLongW(mainWnd, GWL_EXSTYLE,
+                           GetWindowLongW(mainWnd, GWL_EXSTYLE) ^ WS_EX_LAYOUTRTL);
+            SetWindowPos(mainWnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+        }
+        LogInfo(L"language: " + std::wstring(kLangs[g_langIdx].code) +
+                (isRtl ? L" (rtl)" : L""));
+    }
     // honour [PluginState] immediately: unload the ones just disabled
     for (auto& p : g_plugins)
         if (p.loaded && !PluginLoadAllowed(p)) {
@@ -2642,6 +2682,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     }
 
     LoadSettings();
+    SetLanguage(LangFromCode(g_set.langCode));   // L(STR_*) from here on
+    SetProcessDefaultLayout(LangRtl() ? LAYOUT_RTL : 0);   // Arabic mirror (LTR = 0)
     LoadAliases();
     LoadHistory();
     DiscoverPlugins();
@@ -2662,7 +2704,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
     RegisterClassW(&wc);
 
-    HWND mainWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
+    DWORD exStyle = WS_EX_TOPMOST | WS_EX_TOOLWINDOW;
+    HWND mainWnd = CreateWindowExW(exStyle,
         kClassName, L"TypeBox", WS_POPUP,
         0, 0, g_set.width, g_set.height, nullptr, nullptr, hInst, nullptr);
     if (!mainWnd) return 1;
@@ -2690,6 +2733,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         if (!g_pathDirs.empty() || !g_envVars.empty())
             LogInfo(L"own PATH: " + std::to_wstring(g_pathDirs.size()) +
                     L" folders, variables: " + std::to_wstring(g_envVars.size()));
+        LogInfo(L"language: " + std::wstring(kLangs[g_langIdx].code) +
+                L" (" + (g_set.langCode.empty() ? L"auto" : g_set.langCode) + L")");
     }
 
     AddTrayIcon(mainWnd, true);

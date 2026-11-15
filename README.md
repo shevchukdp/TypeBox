@@ -47,15 +47,20 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.8.0):
+Working today (v0.9.0):
+- ✅ **Localization — 20 languages, everywhere** (en ru uk de fr es pt it complete +
+  zh ja ko ar tr pl vi hi id sw af am core): tray, balloons, help/about, whole settings
+  dialog; `[UI] Language`, Language page, Arabic RTL, CJK/RTL font auto-suggestion,
+  portable `lang\<code>.ini` overrides — [docs/LANGUAGE.md](docs/LANGUAGE.md)
 - ✅ **Own PATH & variables** — `[Path]` folders + `[Variables]` like the Windows
   *Environment Variables* dialog, but portable: typed names launch from your folders,
   PATH is injected for aliases/shell/children, `%NAME%` expands everywhere — `/path`,
   Settings → Environment
-- ✅ **Settings dialog** — 12 pages (Appearance · Console · Font · Hotkey · Execution ·
-  EasyType · History · Log · Aliases editor · Sounds · Plugin manager), scratch copy + Cancel,
+- ✅ **Settings dialog** — 13 pages (Appearance · Console · Font · Hotkey · Execution ·
+  EasyType · History · Log · Aliases editor · Sounds · Plugin manager · Environment ·
+  Language), scratch copy + Cancel,
   live-apply on OK/Apply (hotkey re-registration, font, geometry, alpha, priority, tray,
-  plugin load state) — `/settings`, tray menu
+  plugin load state, UI language) — `/settings`, tray menu
 - ✅ Global hotkey (`[HotKey] Key / AltKey / CtrlKey / ShiftKey / WinKey`)
 - ✅ Console-like popup (top-most, centered, transparent, font from INI, DPI-aware, AutoHide)
 - ✅ Command engine: aliases with `%s` / `%1..%n`, env vars (`%VAR%`, `%TYPEBOXDIR%`),
@@ -91,6 +96,7 @@ info modules, ConPTY terminal mode, profiles) — is in **[docs/FEATURES.md](doc
 - [docs/FEATURES.md](docs/FEATURES.md) — parity checklist vs TypeAndRun + additions
 - [docs/PLAN.md](docs/PLAN.md) — roadmap (MVP → plugins → info → bash/terminal)
 - [docs/CONFIG.md](docs/CONFIG.md) — INI schema, portability, import/export, migration
+- [docs/LANGUAGE.md](docs/LANGUAGE.md) — 20 UI languages, RTL, portable translation packs
 - [docs/PLUGIN_API.md](docs/PLUGIN_API.md) — TypeAndRun-compatible plugin ABI
 
 ## Config & portability

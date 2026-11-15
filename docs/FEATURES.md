@@ -27,7 +27,8 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 | Sounds | enable + 9 per-type WAV fields (`fraSounds`) | ✅ |
 | Plugins | list + info (GetInfo) + Load-on-start/SaveHistory + Rescan/Unload/About/Options (`fraPlugins`) | ✅ |
 | Environment | own PATH folders + %variables% editor (TypeBox addition, OS-style) | ✅ |
-| Hint / DropDown / Registry / Language / dead-alias checker | — | 📋 Phase 2 |
+| Hint / DropDown / Registry / dead-alias checker | — | 📋 Phase 2 |
+| Language 20 UI languages + RTL + portable packs | `[UI] Language`, `lang\<code>.ini` | ✅ 0.9.0 |
 
 Scratch-copy editing (Cancel discards), OK/Apply → per-key INI write (comments
 survive) → live apply (hotkey re-register, font, geometry, alpha, priority, tray,
@@ -107,8 +108,12 @@ Scheme 0 console `ConsoleBG`/`ConsoleFG` — ✅ · 3 schemes (No-ET / EasyType 
 EnableSounds + 9 per-execution-type sounds (internal/alias/sysalias/url/email/folder/file/plugin/shell)
 — ✅ (paths relative to portable `Sounds\` folder) · bundled WAV files — 📋
 
-## Language  `[Language]`
-External `.lng` string tables, `.chm` help, 10 shipped translations — 📋
+## Language  `[Language]` / `[UI]`
+TypeAndRun shipped external `.lng` tables + `.chm` help for 10 languages. TypeBox 0.9.0:
+20 languages compiled in (8 complete European + 12 core, English fallback per string),
+`[UI] Language` + Language settings page, `auto` UI-language detection, Arabic RTL,
+script-capable font suggestion; portable `lang\<code>.ini` overrides replace the `.lng`
+idea without extra downloads — ✅ (`.chm` help — 📋, `/help` covers the basics)
 
 ## Registry integration  `[Registry]`
 AutoRun (HKLM/HKCU), "Add to context menu" (ShellInt), MultiUser — 📋

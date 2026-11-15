@@ -134,6 +134,16 @@ directly — the process stays killable with Shift+Enter (log: `path started: na
 The folders are also prepended to the process PATH, so aliases, `cmd /c` shell lines
 and every child program find your tools.
 
+### `[UI]` — interface language (TypeBox 0.9.0)
+```ini
+[UI]
+Language = auto   ; auto | en ru uk de fr es pt it zh ja ko ar tr pl vi hi id sw af am
+```
+`auto` detects the Windows UI language. The **Language** page of the settings dialog
+writes this key; Apply switches the whole UI immediately (Arabic also mirrors the
+drop-down RTL). Portable community overrides live in `lang\<code>.ini` next to the
+exe — see [LANGUAGE.md](LANGUAGE.md).
+
 ### `[SysAliases]` — system commands (TypeAndRun parity)
 
 `~name = action` lines, e.g. `~notes = notepad.exe`. An empty/absent section loads

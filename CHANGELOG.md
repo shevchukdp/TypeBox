@@ -3,6 +3,34 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.9.0] - 2026-11-15
+
+### Added
+- **Full UI localization — 20 languages, everywhere**: tray menu and balloon, help/about,
+  the settings dialog (all 13 pages, buttons, labels) speak your language.
+  - Compiled-in packs: **8 complete European** (en · ru · uk · de · fr · es · pt · it) and
+    **12 core** (zh · ja · ko · ar · tr · pl · vi · hi · id · sw · af · am — anything missing
+    falls back to English transparently).
+  - `[UI] Language = auto | code` in the portable INI; `auto` detects the Windows UI language
+    (`GetUserDefaultUILanguage`, user-locale fallback). New **Language** page in the settings
+    dialog: pick from the list, Apply switches the UI immediately.
+  - **Arabic is right-to-left**: the drop-down mirrors (`SetProcessDefaultLayout` +
+    `WS_EX_LAYOUTRTL`), the console font auto-falls back to a script-capable face
+    (Microsoft YaHei UI / Yu Gothic UI / Malgun Gothic / Segoe UI / Nirmala UI) when the
+    default Courier New would not render CJK/Devanagari/Ge'ez.
+  - **Portable community packs**: `lang\<code>.ini` (key=value, UTF-8/UTF-16, `;` comments)
+    overrides any string on top of the compiled pack — no rebuild needed.
+    Key names: [src/i18n.h](src/i18n.h) `kKeyNames`.
+
+### Fixed
+- Apply re-runs language + RTL layout live without a restart.
+
+### Verified
+- `test-v090` (17 checks): `Language=ru` → Russian page names via the settings listbox dump;
+  `de` → Konsole/Sprache, no RTL; `ar` → `WS_EX_LAYOUTRTL` set, Arabic page names;
+  Language-page combo + Apply round-trip (`Language=ru` in INI, log `language: ru`);
+  `lang\ru.ini` override wins over the pack; `--test-settings` survives Arabic RTL.
+
 ## [0.8.0] - 2026-11-15
 
 ### Added
