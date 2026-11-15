@@ -11,3 +11,5 @@ mingw.7z
 mingw/
 .cache/
 build-test/
+build-test*/
+TypeBox.log*

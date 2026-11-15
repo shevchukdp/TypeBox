@@ -74,7 +74,7 @@ jobs:
             Write-Error "example plugin calc.dll failed to load`n$log"
             exit 1
           }
-          if ($log -notmatch "started; \d+ aliases, [1-9]\d* plugins") {
+          if ($log -notmatch "started; \d+ aliases, [1-9]\d* plugins, \d+ enabled") {
             Write-Error "example plugin not discovered by host`n$log"
             exit 1
           }

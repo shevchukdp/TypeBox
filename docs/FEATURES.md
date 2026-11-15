@@ -24,7 +24,9 @@ of the ancestor project [galancev/typeandrun](https://github.com/galancev/typean
 | History | max + per-type toggles + Clear history | ✅ |
 | Log | enabled/file/max KB/rewrite/keep | ✅ |
 | Aliases | editor: list + name/action/dir/state, Add/Update/Delete | ✅ |
-| Hint / DropDown / Sounds / Registry / Language / dead-alias checker | — | 📋 Phase 2 |
+| Sounds | enable + 9 per-type WAV fields (`fraSounds`) | ✅ |
+| Plugins | list + info (GetInfo) + Load-on-start/SaveHistory + Rescan/Unload/About/Options (`fraPlugins`) | ✅ |
+| Hint / DropDown / Registry / Language / dead-alias checker | — | 📋 Phase 2 |
 
 Scratch-copy editing (Cancel discards), OK/Apply → per-key INI write (comments
 survive) → live apply (hotkey re-register, font, geometry, alpha, priority, tray,

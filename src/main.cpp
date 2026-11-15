@@ -21,6 +21,7 @@
 #include <mmsystem.h>
 #include <string>
 #include <vector>
+#include <map>
 #include <fstream>
 #include <cstring>
 #include <cwctype>
@@ -96,6 +97,7 @@ struct Settings {
          savePath = true, savePlugins = true, saveUnknown = true;
     // [Sounds]
     bool enableSounds = true;
+    std::wstring sound[9];     // per-type wav paths (see kSoundKeys), "" = none
     // [Log] — portable error log
     bool  logEnabled = true;
     std::wstring logFile = L"TypeBox.log";
@@ -116,6 +118,7 @@ static bool                      g_visible = false;
 static HWND                      g_edit    = nullptr;
 static bool                      g_testSettings = false;
 static std::wstring              g_iniPath;
+static std::map<std::wstring, int> g_pluginState; // "Name_Load"/"Name_SaveHistory" -> 0/1
 static std::vector<std::wstring> g_history;
 static size_t                    g_histPos = 0;
 static std::vector<Alias>        g_aliases;
@@ -382,6 +385,15 @@ static void LogInfo(const std::wstring& msg) { LogWrite(L"INFO", msg); }
 static void LoadSysAliases();
 static void LoadIgnores();
 
+// The 9 per-execution-type sounds of TypeAndRun, in [Sounds] key order.
+static const wchar_t* kSoundKeys[9] = {
+    L"ExecuteInternalSound", L"ExecuteAliasSound", L"ExecuteSysAliasSound",
+    L"ExecuteURLSound", L"ExecuteEmailSound", L"ExecuteFileSound",
+    L"ExecuteFolderSound", L"ExecutePluginSound", L"ExecuteShellSound" };
+static const wchar_t* kSoundLabels[9] = {
+    L"Internal commands", L"Aliases", L"System aliases", L"Websites",
+    L"E-mail", L"Files", L"Folders", L"Plugins", L"Shell commands" };
+
 static void LoadSettings() {
     g_set.width             = ReadIniInt(L"Show", L"Width", 720);
     g_set.height            = ReadIniInt(L"Show", L"Height", 40);
@@ -430,7 +442,27 @@ static void LoadSettings() {
     g_set.saveUnknown  = ReadIniBool(L"History", L"Unknown", true);
     g_set.useUndo    = ReadIniBool(L"Undo", L"UseUndo", true);
     g_set.enableSounds = ReadIniBool(L"Sounds", L"EnableSounds", true);
-
+    for (int i = 0; i < 9; ++i) {
+        std::wstring def = std::wstring(L"Sounds\\") +
+            (i == 0 ? L"internal" : i == 1 ? L"alias" : i == 2 ? L"sysalias" :
+             i == 3 ? L"url" : i == 4 ? L"email" : i == 5 ? L"file" :
+             i == 6 ? L"folder" : i == 7 ? L"plugin" : L"shell") + L".wav";
+        g_set.sound[i] = ReadIniStr(L"Sounds", kSoundKeys[i], def.c_str());
+    }
+    // [PluginState]: per-plugin "Name_Load" / "Name_SaveHistory" flags (0/1)
+    {
+        std::vector<wchar_t> buf(64 * 1024);
+        DWORD n = GetPrivateProfileSectionW(L"PluginState", buf.data(), (DWORD)buf.size(), g_iniPath.c_str());
+        g_pluginState.clear();
+        for (wchar_t* q = buf.data(); q < buf.data() + n; ) {
+            std::wstring ln(q);
+            q += ln.size() + 1;
+            if (ln.empty() || ln[0] == L';') continue;
+            size_t eq = ln.find(L'=');
+            if (eq == std::wstring::npos) continue;
+            g_pluginState[Trim(ln.substr(0, eq))] = _wtoi(ln.substr(eq + 1).c_str());
+        }
+    }
     g_set.logEnabled = ReadIniBool(L"Log", L"Enabled", true);
     g_set.logFile    = ReadIniStr(L"Log", L"File", L"TypeBox.log");
     g_set.logMaxKB   = ReadIniInt(L"Log", L"MaxSizeKB", 512);
@@ -615,11 +647,13 @@ static void SaveHistory() {
 
 // ---------------------------------------------------------------- sounds
 
-// Play the per-execution-type sound from [Sounds] (TypeAndRun parity).
-// Values may be absolute or relative to the TypeBox folder (bundled Sounds\).
-static void PlayTypeSound(const wchar_t* key, const wchar_t* fallback) {
-    if (!g_set.enableSounds) return;
-    std::wstring s = ReadIniStr(L"Sounds", key, fallback);
+// The 9 per-execution-type sounds of TypeAndRun, in [Sounds] key order.
+
+// Play the per-execution-type sound (TypeAndRun parity). Paths are absolute or
+// relative to the portable TypeBox folder (bundled Sounds\).
+static void PlayTypeSound(int idx) {
+    if (!g_set.enableSounds || idx < 0 || idx > 8) return;
+    std::wstring s = g_set.sound[idx];
     if (s.empty() || _wcsicmp(s.c_str(), L"none") == 0) return;
     std::wstring path = s;
     if (PathIsRelativeW(path.c_str())) path = ExeDir() + path;
@@ -714,6 +748,7 @@ struct Plugin {
 };
 
 static std::vector<Plugin> g_plugins;
+static std::wstring g_lastPluginName;             // plugin that handled the last line
 
 static std::string ToAnsi(const std::wstring& w) {
     int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), nullptr, 0, nullptr, nullptr);
@@ -759,6 +794,21 @@ static void BindPlugin(Plugin& p) {
     p.Options       = GetProc<POptions>(p.hmod, "Options");
     p.FastConfig    = GetProc<PFastConfig>(p.hmod, "FastConfig");
     p.HookKey       = GetProc<PHookKey>(p.hmod, "HookKey");
+}
+
+// Plugin identity = dll base name without extension (calc.dll -> "calc").
+static std::wstring PluginKey(const Plugin& p) {
+    std::wstring base = PathFindFileNameW(p.file.c_str());
+    size_t dot = base.find_last_of(L'.');
+    if (dot != std::wstring::npos) base.resize(dot);
+    return base;
+}
+static bool PluginStateOn(const std::wstring& key, bool def) {
+    auto it = g_pluginState.find(key);
+    return it == g_pluginState.end() ? def : it->second != 0;
+}
+static bool PluginLoadAllowed(const Plugin& p) {
+    return PluginStateOn(PluginKey(p) + L"_Load", true);
 }
 
 // Scan the portable Plugins\ folder for *.dll. [Plugins] "Name"="path" entries
@@ -814,7 +864,7 @@ static void DiscoverPlugins() {
 
 static void CallPluginsLoad(HWND mainWnd) {
     for (auto& p : g_plugins)
-        if (p.Load && !p.loaded) { p.Load(mainWnd); p.loaded = true; }
+        if (p.Load && !p.loaded && PluginLoadAllowed(p)) { p.Load(mainWnd); p.loaded = true; }
 }
 
 static void CallPluginsUnload() {
@@ -826,7 +876,7 @@ static void CallPluginsUnload() {
 static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
     std::string ansi = ToAnsi(line);
     for (auto& p : g_plugins) {
-        if (!p.RunString) continue;
+        if (!p.RunString || !PluginLoadAllowed(p)) continue;
         if (!p.loaded && p.Load) { p.Load(mainWnd); p.loaded = true; }
         TExec ex = p.RunString(ansi.c_str());
         if (ex.size == (int)sizeof(TExec) && ex.run) {
@@ -836,7 +886,8 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
                 SendMessageW(g_edit, EM_SETSEL, ex.con_sel_start,
                              ex.con_sel_start + (ex.con_sel_length < 0 ? 0 : ex.con_sel_length));
             }
-            PlayTypeSound(L"ExecutePluginSound", L"Sounds\\plugin.wav");
+            g_lastPluginName = PluginKey(p);
+            PlayTypeSound(7);
             return EXC_PLUGIN;
         }
     }
@@ -852,7 +903,7 @@ static void ReloadHotkey(HWND mainWnd);
 static void ResetET();
 static void OpenSettings(HWND mainWnd, int page);
 enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
-       PG_HISTORY, PG_LOG, PG_ALIASES, PG_COUNT };
+       PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_COUNT };
 
 // ---------------------------------------------------------------- internal commands
 //
@@ -1031,7 +1082,8 @@ static bool HistoryAllows(ExecType t) {
     case EXC_EMAIL:    return g_set.saveEmail;
     case EXC_FILE:
     case EXC_FOLDER:   return g_set.savePath;
-    case EXC_PLUGIN:   return g_set.savePlugins;
+    case EXC_PLUGIN:   return g_set.savePlugins &&
+                                PluginStateOn(g_lastPluginName + L"_SaveHistory", true);
     default:           return g_set.saveUnknown;
     }
 }
@@ -1040,7 +1092,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
     if (line.empty()) return EXC_NONE;
 
     if (line[0] == L'/' && g_set.execInternal) {
-        PlayTypeSound(L"ExecuteInternalSound", L"Sounds\\internal.wav");
+        PlayTypeSound(0);
         RunInternal(line, mainWnd);
         return EXC_INTERNAL;
     }
@@ -1073,7 +1125,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                 LogError(L"alias failed: " + a->name + L" -> " + cmd +
                          L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
             }
-            PlayTypeSound(L"ExecuteAliasSound", L"Sounds\\alias.wav");
+            PlayTypeSound(1);
             return EXC_ALIAS;
         }
     }
@@ -1099,7 +1151,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                 LogError(L"sysalias failed: " + sa->name + L" -> " + cmd +
                          L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
             }
-            PlayTypeSound(L"ExecuteSysAliasSound", L"Sounds\\sysalias.wav");
+            PlayTypeSound(2);
             return EXC_SYSALIAS;
         }
     }
@@ -1116,7 +1168,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         std::wstring url = expanded;
         if (_wcsnicmp(url.c_str(), L"www.", 4) == 0) url = L"http://" + url;
         ShellExecuteW(mainWnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-        PlayTypeSound(L"ExecuteURLSound", L"Sounds\\url.wav");
+        PlayTypeSound(3);
         return EXC_URL;
     }
 
@@ -1127,7 +1179,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         while ((sp = mail.find(L' ')) != std::wstring::npos) mail.replace(sp, 1, L"%20");
         ShellExecuteW(mainWnd, L"open", (L"mailto:" + mail).c_str(),
                       nullptr, nullptr, SW_SHOWNORMAL);
-        PlayTypeSound(L"ExecuteEmailSound", L"Sounds\\email.wav");
+        PlayTypeSound(4);
         return EXC_EMAIL;
     }
 
@@ -1137,8 +1189,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         if (attr != INVALID_FILE_ATTRIBUTES) {
             bool dir = (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
             ShellExecuteW(mainWnd, L"open", expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-            PlayTypeSound(dir ? L"ExecuteFolderSound" : L"ExecuteFileSound",
-                          dir ? L"Sounds\\folder.wav" : L"Sounds\\file.wav");
+            PlayTypeSound(dir ? 6 : 5);
             return dir ? EXC_FOLDER : EXC_FILE;
         }
     }
@@ -1149,7 +1200,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         std::wstring shellArgs = ReadIniStr(L"Shell", L"Args", L"/c");
         ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
                       (shellArgs + L" " + expanded).c_str(), nullptr, SW_SHOWNORMAL);
-        PlayTypeSound(L"ExecuteShellSound", L"Sounds\\shell.wav");
+        PlayTypeSound(8);
         return EXC_SHELL;
     }
 
@@ -1328,7 +1379,7 @@ static void ShowTrayMenu(HWND hWnd) {
 
 static const wchar_t* kPages[PG_COUNT] = {
     L"Appearance", L"Console", L"Font", L"Hotkey", L"Execution",
-    L"EasyType", L"History", L"Log", L"Aliases" };
+    L"EasyType", L"History", L"Log", L"Aliases", L"Sounds", L"Plugins" };
 
 static HWND  g_setWnd = nullptr;
 static HWND  g_setList = nullptr;
@@ -1347,6 +1398,11 @@ static int       g_aliasSel = -1;
 static HWND g_hkEdit = nullptr, g_hkLabel = nullptr, g_hkVk = nullptr;
 static HWND g_alLb = nullptr, g_alName = nullptr, g_alAction = nullptr,
       g_alDir = nullptr, g_alState = nullptr, g_fontPreview = nullptr;
+static HWND g_plLb = nullptr, g_plLoadChk = nullptr, g_plHistChk = nullptr,
+      g_plInfo = nullptr;
+struct PluginRow { std::wstring name; int load = 1, saveHist = 1; };
+static std::vector<PluginRow> g_plRows;
+static int g_plSel = -1;
 
 static std::wstring HotkeyText(const Hotkey& hk) {
     std::wstring s;
@@ -1504,6 +1560,44 @@ static void AliasesReadRow(int idx) {
     AliasesFillList();
     SendMessageW(g_alLb, LB_SETCURSEL, idx, 0);
 }
+// ---------------------------------------------------------------- plugins page
+static void PluginsFillList() {
+    if (!g_plLb) return;
+    SendMessageW(g_plLb, LB_RESETCONTENT, 0, 0);
+    for (auto& r : g_plRows)
+        SendMessageW(g_plLb, LB_ADDSTRING, 0, (LPARAM)r.name.c_str());
+    if (g_plSel >= 0 && g_plSel < (int)g_plRows.size())
+        SendMessageW(g_plLb, LB_SETCURSEL, g_plSel, 0);
+}
+static void PluginsEditRow(int idx) {
+    g_plSel = idx;
+    if (idx < 0 || idx >= (int)g_plRows.size()) return;
+    PluginRow& r = g_plRows[idx];
+    SendMessageW(g_plLoadChk, BM_SETCHECK, r.load ? BST_CHECKED : BST_UNCHECKED, 0);
+    SendMessageW(g_plHistChk, BM_SETCHECK, r.saveHist ? BST_CHECKED : BST_UNCHECKED, 0);
+    std::wstring info;
+    for (auto& p : g_plugins)
+        if (PluginKey(p) == r.name && p.GetInfo) {
+            TInfo ti = p.GetInfo();
+            auto add = [&info](const wchar_t* label, const char* v) {
+                if (v && *v) info += std::wstring(label) + L": " + FromAnsi(v) + L"\n";
+            };
+            add(L"Name", ti.name); add(L"Version", ti.version);
+            add(L"Description", ti.description); add(L"Author", ti.author);
+            add(L"Copyright", ti.copyright); add(L"Homepage", ti.homepage);
+            info += PluginLoadAllowed(p) ? L"Status: loaded" : L"Status: disabled";
+            break;
+        }
+    if (info.empty()) info = L"(plugin not present on disk)";
+    SetWindowTextW(g_plInfo, info.c_str());
+}
+static void PluginsReadRow() {
+    if (g_plSel < 0 || g_plSel >= (int)g_plRows.size()) return;
+    PluginRow& r = g_plRows[g_plSel];
+    r.load     = SendMessageW(g_plLoadChk, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    r.saveHist = SendMessageW(g_plHistChk, BM_GETCHECK, 0, 0) == BST_CHECKED;
+}
+
 static void AliasesAdd() {
     size_t before = g_draftAliases.size();
     g_draftAliases.push_back({});
@@ -1590,11 +1684,61 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     LogInfo(L"settings: history cleared");
                     return 0;
                 }
+                HWND parent = (HWND)GetWindowLongPtrW(h, GWLP_HWNDPARENT);
+                if (!wcscmp(t, L"Rescan")) {
+                    PluginsReadRow();
+                    CallPluginsUnload();
+                    DiscoverPlugins();
+                    CallPluginsLoad(parent);
+                    g_plRows.clear();
+                    for (auto& p : g_plugins) {
+                        PluginRow r;
+                        r.name     = PluginKey(p);
+                        r.load     = PluginStateOn(r.name + L"_Load", true) ? 1 : 0;
+                        r.saveHist = PluginStateOn(r.name + L"_SaveHistory", true) ? 1 : 0;
+                        g_plRows.push_back(r);
+                    }
+                    g_plSel = 0;
+                    PluginsFillList();
+                    PluginsEditRow(0);
+                    LogInfo(L"settings: plugins rescanned, " +
+                            std::to_wstring(g_plugins.size()) + L" found");
+                    return 0;
+                }
+                if (!wcscmp(t, L"Unload all")) {
+                    PluginsReadRow();
+                    CallPluginsUnload();
+                    LogInfo(L"settings: all plugins unloaded");
+                    return 0;
+                }
+                if (!wcscmp(t, L"About") || !wcscmp(t, L"Options")) {
+                    PluginsReadRow();
+                    if (g_plSel >= 0 && g_plSel < (int)g_plRows.size()) {
+                        for (auto& p : g_plugins)
+                            if (PluginKey(p) == g_plRows[g_plSel].name) {
+                                if (!wcscmp(t, L"About")) {
+                                    if (p.About) p.About();
+                                    else LogInfo(L"plugin has no About: " + g_plRows[g_plSel].name);
+                                } else {
+                                    if (p.Options) p.Options();
+                                    else LogInfo(L"plugin has no Options: " + g_plRows[g_plSel].name);
+                                }
+                                break;
+                            }
+                    }
+                    return 0;
+                }
             }
         }
         if (code == LBN_SELCHANGE && src == g_alLb) {
             int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
             if (s >= 0) AliasesEditRow(s);
+            return 0;
+        }
+        if (code == LBN_SELCHANGE && src == g_plLb) {
+            PluginsReadRow();
+            int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
+            if (s >= 0) PluginsEditRow(s);
             return 0;
         }
         return 0;
@@ -1611,6 +1755,14 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
+}
+
+// Page windows are DefWindowProc containers; forward their child notifications
+// (BN_CLICKED, LBN_SELCHANGE, EN_CHANGE...) to the settings window proc.
+static LRESULT CALLBACK PageProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+    if (m == WM_COMMAND)
+        return SendMessageW(GetParent(h), WM_COMMAND, w, l);
+    return DefSubclassProc(h, m, w, l);
 }
 
 static void SettingsCreate(HWND mainWnd, int startPage) {
@@ -1654,6 +1806,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
         g_setPage[i] = CreateWindowExW(0, L"TypeBoxPage", L"",
             WS_CHILD | WS_CLIPCHILDREN, 156, 8, 470, 360, g_setWnd, nullptr, hInst, nullptr);
         SendMessageW(g_setPage[i], WM_SETFONT, (WPARAM)g_uiFont, TRUE);
+        SetWindowSubclass(g_setPage[i], PageProc, 6, 0);
     }
     g_setAll.push_back(g_setList);
     for (int i = 0; i < PG_COUNT; ++i) g_setAll.push_back(g_setPage[i]);
@@ -1803,9 +1956,49 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     MkLabel(g_setPage[PG_ALIASES],
             L"Action supports %s and %1..%n parameters.", ax, 168, 290);
 
+    // --- Sounds
+    y = 12;
+    CkB(g_setPage[PG_SOUNDS], L"Play sounds on execution", 16, y, &Settings::enableSounds);
+    y += 30;
+    for (int i = 0; i < 9; ++i) {
+        int yy = y + i * 26;
+        MkLabel(g_setPage[PG_SOUNDS], kSoundLabels[i], 16, yy + 2, 130);
+        HWND e = MkEdit(g_setPage[PG_SOUNDS], L"", 150, yy, 300);
+        Bind([e, i]{ SetWindowTextW(e, g_draft.sound[i].c_str()); },
+             [e, i]{ g_draft.sound[i] = Trim(GetText(e)); });
+    }
+
+    // --- Plugins
+    g_plLb = MkOn(g_setPage[PG_PLUGINS], L"LISTBOX", L"",
+                  WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 180, 250);
+    int px = 200;
+    g_plLoadChk = MkCheck(g_setPage[PG_PLUGINS], L"Load on start", px, 12, 180);
+    g_plHistChk = MkCheck(g_setPage[PG_PLUGINS], L"Save to history", px, 38, 180);
+    g_plInfo = MkOn(g_setPage[PG_PLUGINS], L"STATIC", L"", SS_LEFT | SS_EDITCONTROL,
+                    px, 70, 260, 150);
+    MkButton(g_setPage[PG_PLUGINS], L"Rescan",  px, 240, 80);
+    MkButton(g_setPage[PG_PLUGINS], L"Unload all", px + 90, 240, 80);
+    MkButton(g_setPage[PG_PLUGINS], L"About",   px, 270, 80);
+    MkButton(g_setPage[PG_PLUGINS], L"Options", px + 90, 270, 80);
+    MkLabel(g_setPage[PG_PLUGINS],
+            L"Dlls live in the portable Plugins\\ folder.", 8, 268, 190);
+
     MkButton(g_setWnd, L"OK",     380, 380, 75);
     MkButton(g_setWnd, L"Apply",  461, 380, 75);
     MkButton(g_setWnd, L"Cancel", 542, 380, 75);
+
+    // plugin rows from the discovered set + [PluginState] overrides
+    g_plRows.clear();
+    g_plSel = 0;
+    for (auto& p : g_plugins) {
+        PluginRow r;
+        r.name     = PluginKey(p);
+        r.load     = PluginStateOn(r.name + L"_Load", true) ? 1 : 0;
+        r.saveHist = PluginStateOn(r.name + L"_SaveHistory", true) ? 1 : 0;
+        g_plRows.push_back(r);
+    }
+    PluginsFillList();
+    PluginsEditRow(g_plSel);
 
     UiLoad();
     SettingsShowPage(startPage);
@@ -1891,6 +2084,18 @@ static void WriteDraftIni() {
     if (s.consoleFg >= 0) WInt(L"Color", L"ConsoleFG", s.consoleFg);
     else WritePrivateProfileStringW(L"Color", L"ConsoleFG", nullptr, g_iniPath.c_str());
 
+    WB(L"Sounds", L"EnableSounds",     s.enableSounds);
+    for (int i = 0; i < 9; ++i)
+        WS_(L"Sounds", kSoundKeys[i],  s.sound[i]);
+
+    // [PluginState]: rewrite with the checkbox state of every known plugin
+    PluginsReadRow();
+    WritePrivateProfileStringW(L"PluginState", nullptr, nullptr, g_iniPath.c_str());
+    for (auto& r : g_plRows) {
+        WS_(L"PluginState", (r.name + L"_Load").c_str(),        r.load     ? L"1" : L"0");
+        WS_(L"PluginState", (r.name + L"_SaveHistory").c_str(), r.saveHist ? L"1" : L"0");
+    }
+
     // [Aliases]: rewrite section in canonical form
     WritePrivateProfileStringW(L"Aliases", nullptr, nullptr, g_iniPath.c_str());
     for (auto& a : g_draftAliases) {
@@ -1914,6 +2119,12 @@ static void WriteDraftIni() {
 static void LiveApply(HWND mainWnd) {
     ReloadHotkey(mainWnd);                 // LoadSettings + RegisterHotKey
     LoadAliases();                         // LoadSettings covers sys-aliases/ignores
+    // honour [PluginState] immediately: unload the ones just disabled
+    for (auto& p : g_plugins)
+        if (p.loaded && !PluginLoadAllowed(p)) {
+            if (p.Unload) p.Unload();
+            p.loaded = false;
+        }
     ApplyFont(g_edit);
     DWORD pc = NORMAL_PRIORITY_CLASS;
     if      (g_set.priority == L"idle")     pc = IDLE_PRIORITY_CLASS;
@@ -2227,9 +2438,15 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
             L"TypeBox", MB_OK | MB_ICONERROR);
     }
 
-    LogInfo(L"TypeBox " + WVersion() + L" started; " +
-            std::to_wstring(g_aliases.size()) + L" aliases, " +
-            std::to_wstring(g_plugins.size()) + L" plugins");
+    {
+        size_t enabled = 0;
+        for (auto& p : g_plugins)
+            if (PluginLoadAllowed(p)) ++enabled;
+        LogInfo(L"TypeBox " + WVersion() + L" started; " +
+                std::to_wstring(g_aliases.size()) + L" aliases, " +
+                std::to_wstring(g_plugins.size()) + L" plugins, " +
+                std::to_wstring(enabled) + L" enabled");
+    }
 
     AddTrayIcon(mainWnd, true);
     if (g_set.showOnStart) ShowBox(mainWnd);

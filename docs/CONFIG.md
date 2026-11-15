@@ -102,6 +102,14 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 `[Exec] Plugins=0` disables the whole stage. See
 [PLUGIN_API.md](PLUGIN_API.md) and [`examples/plugin_calc`](../examples/plugin_calc/calc.c).
 
+### `[PluginState]` — per-plugin switches (TypeBox extension)
+Written by the **Plugins** page of the settings dialog, read at startup. Keys are the
+dll base name (no extension):
+`<name>_Load=1|0` — whether `Load()` runs at start and commands are routed to the
+plugin; `<name>_SaveHistory=1|0` — whether its commands go to the history.
+Example: `calc_Load=0` keeps `calc.dll` unloaded until re-enabled. The section is
+rewritten on every OK/Apply (like `[Aliases]`), so keep manual notes elsewhere.
+
 ### `[Sounds]`
 `EnableSounds=1` plus per-execution-type files (TypeAndRun parity):
 `ExecuteInternalSound`, `ExecuteAliasSound`, `ExecuteSysAliasSound`, `ExecuteURLSound`,
@@ -129,8 +137,8 @@ in galancev/typeandrun) and activated as features land.
 ## Settings dialog
 
 `/settings` (or tray → **Settings...**) opens a portable settings window —
-9 pages (Appearance, Console, Font, Hotkey, Execution, EasyType, History, Log,
-Aliases). It edits a scratch copy: **Cancel discards**; **OK/Apply** write
+11 pages (Appearance, Console, Font, Hotkey, Execution, EasyType, History, Log,
+Aliases, Sounds, Plugins). It edits a scratch copy: **Cancel discards**; **OK/Apply** write
 `TypeBox.ini` key-by-key (your comments and unknown keys survive; `[Aliases]`
 is rewritten in canonical form) and apply live — hotkey re-registration with a
 log entry on conflict, font, geometry, alpha, priority, tray, AutoHide timer.

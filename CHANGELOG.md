@@ -3,6 +3,38 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.7.0] - 2026-11-15
+
+### Added
+- **Sounds page** in the settings dialog (TypeAndRun `fraSounds` parity): enable toggle
+  plus all nine per-execution-type WAV fields (`ExecuteInternalSound`,
+  `ExecuteAliasSound`, `ExecuteSysAliasSound`, `ExecuteURLSound`, `ExecuteEmailSound`,
+  `ExecuteFileSound`, `ExecuteFolderSound`, `ExecutePluginSound`, `ExecuteShellSound`);
+  paths are absolute or relative to the portable folder and are written back to `[Sounds]`.
+- **Plugins page** (TypeAndRun `fraPlugins` parity, TypeBox-style per-plugin state):
+  list of discovered plugins with info panel (name/version/description/author/copyright/
+  homepage read live from the plugin's `GetInfo`), **Load on start** and **Save to history**
+  checkboxes, and **Rescan / Unload all / About / Options** buttons (the last two call the
+  plugin's own exports when present).
+- **`[PluginState]` INI section** — my extension over TypeAndRun's Plugins.ini:
+  `<dllname>_Load=0|1` skips Load()/command routing for a plugin,
+  `<dllname>_SaveHistory=0|1` keeps its commands out of the history.
+  Live-apply: disabling a plugin in the dialog unloads it immediately; the startup log
+  now reports `N plugins, M enabled`.
+
+### Fixed
+- Page-local controls (alias editor buttons, Clear history, Choose font, new plugin
+  buttons) never reached the dialog proc — page windows now forward `WM_COMMAND`
+  to the settings window, so in-page buttons and list selections work.
+- `PluginKey` embedded-NUL truncation made `[PluginState]` keys collapse to the dll
+  name without the `_Load`/`_SaveHistory` suffix.
+
+### Verified
+- Harness (`btns`/`clickbtn`/`getcheck`) against a live dialog: plugin checkbox defaults,
+  Load-off + OK → `calc_Load=0`/`calc_SaveHistory=1` in the INI, restart →
+  `1 plugins, 0 enabled`, sounds toggle → `EnableSounds=0`, sound path keys written,
+  Rescan → `plugins rescanned, 1 found`, Cancel discards a re-toggled checkbox.
+
 ## [0.6.0] - 2026-11-15
 
 ### Added
