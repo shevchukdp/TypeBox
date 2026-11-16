@@ -3,6 +3,60 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.18.0] - 2026-11-16
+
+![su chip](docs/screenshots/console-su-chip.png)
+*Type `su taskmgr` and the console already knows: the status strip lights the
+**admin** chip before Enter, and Enter really raises UAC — Task Manager opens
+elevated. `su`, `/su` and `sudo` all work, and the prefix works in front of
+everything TypeBox runs: aliases, `Scripts\` scripts, files, own-PATH programs
+and shell lines.*
+
+![su hint](docs/screenshots/console-su-hint.png)
+*Bare `su` launches nothing — the console answers with the usage hint
+(localized in 17 languages).*
+
+![exec page](docs/screenshots/settings-exec-v018.png)
+*The Execution page grew the third switch: **Use UAC elevation for su
+commands** (`[Security] Elevate`) — the headless-automation kill-switch.*
+
+### Added
+- ⚡ **Run as administrator** (RI #81): `su <line>`, `/su <line>`, `sudo <line>`
+  strip the prefix, classify the rest through the **normal chain** (internal →
+  alias → plugin → script → file → PATH → shell) and perform the final
+  `ShellExecuteEx`/`ShellExecute` with the **runas** verb — so aliases,
+  `Scripts\` scripts, plain files, own-PATH programs and shell catch-all lines
+  can all be elevated. URLs/e-mails/quicklinks stay at user level (runas on a
+  mailto handler is meaningless). While you type, the traffic-light chip reads
+  **admin**. Bare `su` shows a console usage hint. Cancelling UAC fails only
+  that launch (`GetLastError=1223`); the host never blocks or dies.
+- 🔐 `[Security] Elevate` (default 1, checkbox on the Execution page): `0` runs
+  su-prefixed lines normally — the documented automation/CI switch, in the same
+  spirit as the plugin `Popup=0` keys. Every elevation is logged
+  (`elevate: <line>`).
+
+### Under the hood
+- `SuSplit()` + one-shot `g_elevateNext` in `Submit` (history keeps the typed
+  line re-runnable; `Usage.dat` records the real command word, never `su`);
+  verb swap at the six process-spawning sites of `RunLine`; `ClassifyAnchor`
+  classifies the stripped line and overrides the chip label.
+- i18n: 3 new keys (`so_admin`, `su_hint`, `se_elevate`) in 17 languages;
+  `--check-i18n` now also dumps them, so CI verifies the su strings in every
+  language pack.
+
+### Verified
+- `test-v0180` **20/20**: all three prefixes actually run the target (marker
+  file) with `Elevate=0` and log the elevation decision; bare-`su` hint stays
+  on screen; `Usage.dat` gains `hex`/`sutest` but never `su`; plugins receive
+  the stripped line (`sudo hex 16` → `10`); `su del …` still fires the danger
+  tripwire on the stripped command; the plain line without the prefix never
+  logs an elevation. On the real UAC path all three prefixes were confirmed to
+  raise `consent.exe` before launch.
+- Full regression suite green: v0170 · v0160 · v0150 · v0140 · v0130 · v0120 ·
+  v0110 · v0100 · v091 · v090.
+- `--check-i18n` + `--test-settings` gates pass; downloaded release re-run
+  before publishing.
+
 ## [0.17.0] - 2026-11-16
 
 ![frecency](docs/screenshots/dropdown-frecency.png)

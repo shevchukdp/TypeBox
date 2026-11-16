@@ -84,6 +84,7 @@ struct Settings {
     bool execScripts = true;         // [Exec] Scripts: portable Scripts\ folder (v0.16)
     bool confirmSuspicious = true;   // [Security] ConfirmSuspicious: safe Run box (v0.16)
     bool confirmDanger = true;       // [Security] ConfirmDanger: destructive commands (v0.17)
+    bool elevate = true;             // [Security] Elevate: su actually uses runas (v0.18)
     bool frecency = true;            // [Type] FrecencyRanking: most-used wins ties (v0.17)
     // [Font]
     std::wstring fontName = L"Courier New";
@@ -690,6 +691,7 @@ static void LoadSettings() {
     g_set.execScripts  = ReadIniBool(L"Exec", L"Scripts",  true);
     g_set.confirmSuspicious = ReadIniBool(L"Security", L"ConfirmSuspicious", true);
     g_set.confirmDanger     = ReadIniBool(L"Security", L"ConfirmDanger", true);
+    g_set.elevate             = ReadIniBool(L"Security", L"Elevate", true);
     g_set.frecency          = ReadIniBool(L"Type", L"FrecencyRanking", true);
     g_set.execPlugins  = ReadIniBool(L"Exec", L"Plugins",  true);
 
@@ -1454,6 +1456,25 @@ static bool HistoryAllows(ExecType t) {
     }
 }
 
+// v0.18: `su notepad` / `/su regedit` / `sudo netstat` run the resolved target
+// elevated (ShellExecute "runas" → UAC). Submit strips the prefix, raises the
+// one-shot flag and hands the rest of the line to the normal chain; the chip
+// and the anchor classify the stripped command with an "admin" label.
+// URLs/emails/quicklinks deliberately stay at user level — runas on a mailto
+// handler is meaningless.
+static bool g_elevateNext = false;
+
+static bool SuSplit(const std::wstring& line, std::wstring& rest) {
+    std::wstring t = Trim(line);
+    if (t.empty()) return false;
+    size_t i = 0;
+    while (i < t.size() && t[i] != L' ' && t[i] != L'\t') ++i;
+    std::wstring w = Lower(t.substr(0, i));
+    if (w != L"su" && w != L"sudo" && w != L"/su" && w != L"/sudo") return false;
+    rest = Trim(t.substr(i));
+    return true;
+}
+
 static int RunLine(const std::wstring& line, HWND mainWnd) {
     if (line.empty()) return EXC_NONE;
 
@@ -1480,7 +1501,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             SHELLEXECUTEINFOW sei = { sizeof(sei) };
             sei.fMask       = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
             sei.hwnd        = mainWnd;
-            sei.lpVerb      = L"open";
+            sei.lpVerb      = g_elevateNext ? L"runas" : L"open";   // v0.18 su
             sei.lpFile      = prog.c_str();
             sei.lpParameters = args.empty() ? nullptr : args.c_str();
             sei.lpDirectory = a->dir.empty() ? nullptr : a->dir.c_str();
@@ -1509,7 +1530,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             SHELLEXECUTEINFOW sei = { sizeof(sei) };
             sei.fMask        = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
             sei.hwnd         = mainWnd;
-            sei.lpVerb       = L"open";
+            sei.lpVerb       = g_elevateNext ? L"runas" : L"open";   // v0.18 su
             sei.lpFile       = prog.c_str();
             sei.lpParameters = args.empty() ? nullptr : args.c_str();
             sei.nShow        = SW_SHOWNORMAL;
@@ -1574,7 +1595,8 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         DWORD attr = GetFileAttributesW(expanded.c_str());
         if (attr != INVALID_FILE_ATTRIBUTES) {
             bool dir = (attr & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            ShellExecuteW(mainWnd, L"open", expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            ShellExecuteW(mainWnd, g_elevateNext ? L"runas" : L"open",
+                          expanded.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             PlayTypeSound(dir ? 6 : 5);
             return dir ? EXC_FOLDER : EXC_FILE;
         }
@@ -1593,7 +1615,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                 SHELLEXECUTEINFOW sei = { sizeof(sei) };
                 sei.fMask        = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
                 sei.hwnd         = mainWnd;
-                sei.lpVerb       = L"open";
+                sei.lpVerb       = g_elevateNext ? L"runas" : L"open";   // v0.18 su
                 sei.lpFile       = cand.c_str();
                 sei.lpParameters = rest.empty() ? nullptr : rest.c_str();
                 sei.lpDirectory  = d.c_str();
@@ -1646,7 +1668,8 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                 file = sc->path;
                 args = rest;
             }
-            HINSTANCE r = ShellExecuteW(mainWnd, L"open", file.c_str(),
+            HINSTANCE r = ShellExecuteW(mainWnd, g_elevateNext ? L"runas" : L"open",
+                                        file.c_str(),
                                         args.empty() ? nullptr : args.c_str(),
                                         nullptr, SW_SHOWNORMAL);
             if ((INT_PTR)r > 32) {
@@ -1677,7 +1700,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             !ConfirmDangerLine(expanded, mainWnd)) return EXC_NONE;
         std::wstring shellCmd  = ReadIniStr(L"Shell", L"Command", L"cmd.exe");
         std::wstring shellArgs = ReadIniStr(L"Shell", L"Args", L"/c");
-        ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
+        ShellExecuteW(mainWnd, g_elevateNext ? L"runas" : L"open", shellCmd.c_str(),
                       (shellArgs + L" " + expanded).c_str(), nullptr, SW_SHOWNORMAL);
         PlayTypeSound(8);
         return EXC_SHELL;
@@ -1707,6 +1730,17 @@ static Anchor ClassifyAnchor(const std::wstring& lineRaw) {
     Anchor a;
     std::wstring line = Trim(lineRaw);
     if (line.empty()) return a;
+
+    // v0.18: su prefix — classify what actually runs, chip says "admin".
+    {
+        std::wstring suRest;
+        if (SuSplit(line, suRest)) {
+            if (suRest.empty()) { a.lamp = 0; a.labelId = STR_SO_ADMIN; return a; }
+            Anchor b = ClassifyAnchor(suRest);
+            if (b.labelId >= 0) b.labelId = STR_SO_ADMIN;
+            return b;
+        }
+    }
 
     if (line[0] == L'/') {
         if (!g_set.execInternal) { a.lamp = 2; a.labelId = STR_AN_OFF; return a; }
@@ -2172,8 +2206,30 @@ static void Submit(HWND mainWnd) {
     if (line.empty()) return;
     DdClose();
     g_lastRun = line;
-    ExecType t = (ExecType)RunLine(line, mainWnd);
-    if (t != EXC_NONE) RecordUsage(line);   // v0.17 frecency (independent of history rules)
+    // v0.18: su/sudo//su prefix -> run the rest elevated. History keeps the
+    // typed line (re-runnable), Usage records the real command word.
+    std::wstring run = line;
+    {
+        std::wstring suRest;
+        if (SuSplit(line, suRest)) {
+            if (suRest.empty()) {                       // bare `su`: console hint
+                LogInfo(L"su: usage hint shown");
+                SetWindowTextW(g_edit, L(STR_SU_HINT));
+                SendMessageW(g_edit, EM_SETSEL, 0, -1);
+                return;                                 // console stays open
+            }
+            run = suRest;
+            if (g_set.elevate) {            // [Security] Elevate=0 runs it normally
+                g_elevateNext = true;       // (headless automation), documented
+                LogInfo(L"elevate: " + run);
+            } else {
+                LogInfo(L"elevate: " + run + L" (normal, [Security] Elevate=0)");
+            }
+        }
+    }
+    ExecType t = (ExecType)RunLine(run, mainWnd);
+    g_elevateNext = false;
+    if (t != EXC_NONE) RecordUsage(run);   // v0.17 frecency (independent of history rules)
     if (t != EXC_NONE && HistoryAllows(t)) {
         g_history.push_back(line);
         if ((int)g_history.size() > g_set.historyMax)
@@ -3599,7 +3655,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_EXEC], L(STR_EX_PLUGINS),    16, y, &Settings::execPlugins); y += 26;
     CkB(g_setPage[PG_EXEC], L(STR_EX_SCRIPTS),    16, y, &Settings::execScripts); y += 26;
     CkB(g_setPage[PG_EXEC], L(STR_SE_SUSPICIOUS), 16, y, &Settings::confirmSuspicious); y += 26;
-    CkB(g_setPage[PG_EXEC], L(STR_SE_DANGER),     16, y, &Settings::confirmDanger);
+    CkB(g_setPage[PG_EXEC], L(STR_SE_DANGER),     16, y, &Settings::confirmDanger);   y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_SE_ELEVATE),    16, y, &Settings::elevate);
 
     // --- EasyType
     y = 12;
@@ -3900,6 +3957,7 @@ static void WriteDraftIni() {
     WB(L"Exec", L"Scripts",  s.execScripts);
     WB(L"Security", L"ConfirmSuspicious", s.confirmSuspicious);
     WB(L"Security", L"ConfirmDanger",     s.confirmDanger);
+    WB(L"Security", L"Elevate",           s.elevate);
     WB(L"Exec", L"Plugins",  s.execPlugins);
 
     WInt(L"Type", L"EasyType",     s.easyType);
@@ -4495,6 +4553,9 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 + std::wstring(L(STR_PG_THEME)) + L"\r\n"
                 + std::wstring(L(STR_SE_DANGER)) + L"\r\n"      // v0.17 tail (side table)
                 + std::wstring(L(STR_TY_FRECENCY)) + L"\r\n"
+                + std::wstring(L(STR_SO_ADMIN)) + L"\r\n"       // v0.18 su chip + hint
+                + std::wstring(L(STR_SU_HINT)) + L"\r\n"
+                + std::wstring(L(STR_SE_ELEVATE)) + L"\r\n"
                 + std::wstring(L(STR_HK_HINT));
             std::string bytes = ToUtf8(out);
             auto tryWrite = [&bytes](const std::wstring& p) -> bool {

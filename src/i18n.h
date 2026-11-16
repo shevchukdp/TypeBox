@@ -69,6 +69,10 @@ enum StrId {
     STR_EX_SCRIPTS, STR_SE_SUSPICIOUS, STR_SO_SCRIPT,
     // v0.17: danger-confirm + frecency ranking (same side table, columns 4-5).
     STR_SE_DANGER, STR_TY_FRECENCY,
+    // v0.18: su / run-as-administrator chip + bare-su usage hint (columns 6-7).
+    STR_SO_ADMIN, STR_SU_HINT,
+    // v0.18b: Elevate checkbox on the Exec page (column 8).
+    STR_SE_ELEVATE,
     STR_LAST
 };
 
@@ -113,7 +117,9 @@ static const char* const kKeyNames[STR_LAST] = {
     "th_bg", "th_text", "th_accent", "th_border", "th_borderw",
     "th_name", "th_saveas", "th_del", "th_portnote",
     "ex_scripts", "se_suspicious", "so_script",
-    "se_danger", "ty_frecency"
+    "se_danger", "ty_frecency",
+    "so_admin", "su_hint",
+    "se_elevate"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -1063,46 +1069,81 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 /* am */ { C, C, C, C, C, C, C, C, C },
 };
 
-// v0.16 Scripts folder + payload guard, v0.17 danger-confirm + frecency.
-// Columns == STR_EX_SCRIPTS .. STR_TY_FRECENCY.
-static const wchar_t* const kExItems[LANG_COUNT][5] = {
+// v0.16 Scripts folder + payload guard, v0.17 danger-confirm + frecency,
+// v0.18 su chip + usage hint + Elevate checkbox.
+// Columns == STR_EX_SCRIPTS .. STR_SE_ELEVATE.
+static const wchar_t* const kExItems[LANG_COUNT][8] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
-           L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)" },
+           L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
+           L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
+           L"Use UAC elevation for su commands" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
-           L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)" },
+           L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
+           L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
+           L"Использовать UAC-повышение для su-команд" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
-           L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)" },
+           L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
+           L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
+           L"Використовувати UAC-підвищення для su-команд" },
 /* de */ { L"Ordner Scripts\\ = Befehle", L"Verdächtige Befehle vor dem Ausführen bestätigen", L"Skript",
-           L"Gefährliche Befehle (Löschen/format/shutdown) bestätigen", L"Häufigkeits-Ranking (meistgenutzte zuerst)" },
+           L"Gefährliche Befehle (Löschen/format/shutdown) bestätigen", L"Häufigkeits-Ranking (meistgenutzte zuerst)",
+           L"Admin", L"su <Befehl> - als Administrator ausführen (UAC). Auch: /su, sudo.",
+           L"UAC-Elevation für su-Befehle verwenden" },
 /* fr */ { L"Dossier Scripts\\ = commandes", L"Confirmer les commandes suspectes avant l'exécution", L"script",
-           L"Confirmer les commandes dangereuses (suppression/format/shutdown)", L"Classement par fréquence (les plus utilisés d'abord)" },
+           L"Confirmer les commandes dangereuses (suppression/format/shutdown)", L"Classement par fréquence (les plus utilisés d'abord)",
+           L"admin", L"su <commande> - exécuter en administrateur (UAC). Aussi : /su, sudo.",
+           L"Utiliser l'élévation UAC pour les commandes su" },
 /* es */ { L"Carpeta Scripts\\ = comandos", L"Confirmar comandos sospechosos antes de ejecutar", L"script",
-           L"Confirmar comandos peligrosos (borrado/format/shutdown)", L"Clasificación por uso (los más usados primero)" },
+           L"Confirmar comandos peligrosos (borrado/format/shutdown)", L"Clasificación por uso (los más usados primero)",
+           L"admin", L"su <comando> - ejecutar como administrador (UAC). También: /su, sudo.",
+           L"Usar elevación UAC para comandos su" },
 /* pt */ { L"Pasta Scripts\\ = comandos", L"Confirmar comandos suspeitos antes de executar", L"script",
-           L"Confirmar comandos perigosos (exclusão/format/shutdown)", L"Classificação por uso (os mais usados primeiro)" },
+           L"Confirmar comandos perigosos (exclusão/format/shutdown)", L"Classificação por uso (os mais usados primeiro)",
+           L"admin", L"su <comando> - executar como administrador (UAC). Também: /su, sudo.",
+           L"Usar elevação UAC para comandos su" },
 /* it */ { L"Cartella Scripts\\ = comandi", L"Conferma i comandi sospetti prima dell'esecuzione", L"script",
-           L"Conferma i comandi pericolosi (eliminazione/format/shutdown)", L"Classifica per utilizzo (i più usati prima)" },
+           L"Conferma i comandi pericolosi (eliminazione/format/shutdown)", L"Classifica per utilizzo (i più usati prima)",
+           L"admin", L"su <comando> - esegui come amministratore (UAC). Anche: /su, sudo.",
+           L"Usa elevazione UAC per i comandi su" },
 /* zh */ { L"Scripts\\ 文件夹 = 命令", L"运行前确认可疑命令", L"脚本",
-           L"确认危险命令（删除/format/shutdown）", L"按使用频率排序（最常用优先）" },
+           L"确认危险命令（删除/format/shutdown）", L"按使用频率排序（最常用优先）",
+           L"管理员", L"su <命令> - 以管理员身份运行（UAC）。也可用 /su、sudo。",
+           L"su 命令使用 UAC 提权" },
 /* ja */ { L"Scripts\\ フォルダ = コマンド", L"不審なコマンドは実行前に確認", L"スクリプト",
-           L"危険なコマンド（削除/format/shutdown）を確認", L"使用頻度で並べ替え（よく使うものが上に）" },
+           L"危険なコマンド（削除/format/shutdown）を確認", L"使用頻度で並べ替え（よく使うものが上に）",
+           L"管理者", L"su <コマンド> - 管理者として実行 (UAC)。/su、sudo も可。",
+           L"su コマンドに UAC 昇格を使用" },
 /* ko */ { L"Scripts\\ 폴더 = 명령", L"의심스러운 명령은 실행 전 확인", L"스크립트",
-           L"위험한 명령(삭제/format/shutdown) 확인", L"사용 빈도 순 정렬(자주 쓰는 것 우선)" },
+           L"위험한 명령(삭제/format/shutdown) 확인", L"사용 빈도 순 정렬(자주 쓰는 것 우선)",
+           L"관리자", L"su <명령> - 관리자로 실행(UAC). /su, sudo도 가능.",
+           L"su 명령에 UAC 권한 상승 사용" },
 /* ar */ { L"مجلد Scripts\\ = أوامر", L"تأكيد الأوامر المشبوهة قبل التشغيل", L"نص برمجي",
-           L"تأكيد الأوامر الخطرة (الحذف/format/shutdown)", L"ترتيب حسب الاستخدام (الأكثر استخدامًا أولاً)" },
+           L"تأكيد الأوامر الخطرة (الحذف/format/shutdown)", L"ترتيب حسب الاستخدام (الأكثر استخدامًا أولاً)",
+           L"مدير", L"su <أمر> - تشغيل كمسؤول (UAC). أيضًا: /su، sudo.",
+           L"استخدام رفع صلاحيات UAC لأوامر su" },
 /* tr */ { L"Scripts\\ klasörü = komutlar", L"Şüpheli komutları çalıştırmadan önce onayla", L"betik",
-           L"Tehlikeli komutları (silme/format/shutdown) onayla", L"Sıklığa göre sırala (en çok kullanılan önce)" },
+           L"Tehlikeli komutları (silme/format/shutdown) onayla", L"Sıklığa göre sırala (en çok kullanılan önce)",
+           L"yönetici", L"su <komut> - yönetici olarak çalıştır (UAC). Ayrıca: /su, sudo.",
+           L"su komutları için UAC ile yetki yükselt" },
 /* pl */ { L"Folder Scripts\\ = polecenia", L"Potwierdzaj podejrzane polecenia przed uruchomieniem", L"skrypt",
-           L"Potwierdzaj niebezpieczne polecenia (usuwanie/format/shutdown)", L"Sortowanie po częstości (najczęściej używane na górze)" },
+           L"Potwierdzaj niebezpieczne polecenia (usuwanie/format/shutdown)", L"Sortowanie po częstości (najczęściej używane na górze)",
+           L"admin", L"su <polecenie> - uruchom jako administrator (UAC). Także: /su, sudo.",
+           L"Używaj podwyższania UAC dla poleceń su" },
 /* vi */ { L"Thư mục Scripts\\ = lệnh", L"Xác nhận lệnh đáng ngờ trước khi chạy", L"tập lệnh",
-           L"Xác nhận lệnh nguy hiểm (xóa/format/shutdown)", L"Xếp hạng theo tần suất (dùng nhiều lên đầu)" },
+           L"Xác nhận lệnh nguy hiểm (xóa/format/shutdown)", L"Xếp hạng theo tần suất (dùng nhiều lên đầu)",
+           L"quản trị", L"su <lệnh> - chạy với quyền quản trị (UAC). Ngoài ra: /su, sudo.",
+           L"Dùng nâng quyền UAC cho lệnh su" },
 /* hi */ { L"Scripts\\ फ़ोल्डर = कमांड", L"चलाने से पहले संदिग्ध कमांड की पुष्टि करें", L"स्क्रिप्ट",
-           L"खतरनाक कमांड (हटाना/format/shutdown) की पुष्टि करें", L"उपयोग आवृत्ति रैंकिंग (सबसे अधिक उपयोग ऊपर)" },
+           L"खतरनाक कमांड (हटाना/format/shutdown) की पुष्टि करें", L"उपयोग आवृत्ति रैंकिंग (सबसे अधिक उपयोग ऊपर)",
+           L"एडमिन", L"su <कमांड> - प्रशासक के रूप में चलाएँ (UAC). साथ ही /su, sudo.",
+           L"su कमांड के लिए UAC एलिवेशन प्रयोग करें" },
 /* id */ { L"Folder Scripts\\ = perintah", L"Konfirmasi perintah mencurigakan sebelum dijalankan", L"skrip",
-           L"Konfirmasi perintah berbahaya (hapus/format/shutdown)", L"Peringkat frekuensi (paling sering dipakai teratas)" },
-/* sw */ { C, C, C, C, C },
-/* af */ { C, C, C, C, C },
-/* am */ { C, C, C, C, C },
+           L"Konfirmasi perintah berbahaya (hapus/format/shutdown)", L"Peringkat frekuensi (paling sering dipakai teratas)",
+           L"admin", L"su <perintah> - jalankan sebagai administrator (UAC). Juga: /su, sudo.",
+           L"Gunakan eskalasi UAC untuk perintah su" },
+/* sw */ { C, C, C, C, C, C, C, C },
+/* af */ { C, C, C, C, C, C, C, C },
+/* am */ { C, C, C, C, C, C, C, C },
 };
 
 // ---------------------------------------------------------------- runtime state
@@ -1211,7 +1252,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_TY_FRECENCY) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_SE_ELEVATE) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16 tail

@@ -110,6 +110,10 @@ Working today (v0.12.0):
   confirmation before the shell runs them (`[Security] ConfirmSuspicious`, on by default);
   destructive commands (`del`/`format`/`shutdown`/`reg delete`/`rm -r`…) ask too
   (`[Security] ConfirmDanger`) — on aliases, scripts and the shell alike
+- ⚡ **Run as administrator** (v0.18) — start any line with `su`, `/su` or `sudo`
+  (`su taskmgr`, `sudo regedit`, `su backup`) and it launches elevated through UAC;
+  aliases, `Scripts\` scripts, files and shell commands all support it, the
+  status strip shows an **admin** chip while you type
 - 🏆 **Frecency ranking** (v0.17) — the drop-down learns what you actually run
   (`Usage.dat`), most-used commands win ties; `[Type] FrecencyRanking`
 - 🗂️ **TypeBox.local.ini** (v0.17) — per-machine overrides merged over the portable

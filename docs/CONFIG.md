@@ -64,15 +64,41 @@ Arguments are passed through (`cmd /c` for bat/cmd, `powershell -File` for ps1,
 **script** chip before Enter. Re-scan: `/reread` or Apply in settings
 (startup logs `scripts: N registered`).
 
-### `[Security]` — the safe Run box (TypeBox 0.16.0, danger-confirm 0.17.0)
+### `[Security]` — the safe Run box (TypeBox 0.16.0, danger-confirm 0.17.0, su 0.18.0)
 | Key | Meaning | Default |
 |---|---|---|
 | `ConfirmSuspicious` | `1` = confirm before running lines that look like encoded payloads/fileless one-liners (`powershell -enc`, base64 blobs, `certutil`/`bitsadmin`/`mshta`, curl-pipe-shell, …) — the ClickFix lesson | `1` |
 | `ConfirmDanger` | `1` = confirm destructive commands (`del`/`erase`/`rd`/`format`/`diskpart`/`shutdown`/`reg delete`/`net user`/`vssadmin delete`/`cipher /w`/`rm -r`/`Remove-Item -Recurse -Force`/`dd if=`/…) — token-based, so paths like `C:\del\report.pdf` stay quiet | `1` |
+| `Elevate` | `1` = `su …` really requests UAC elevation (`runas`). `0` runs su-prefixed lines normally — the automation/CI switch (no interactive consent prompt) | `1` |
 
 Both tripwires cover the shell catch-all, script arguments **and** alias expansions
 (an alias that expands to `del …` is just as dangerous). Answer **No** and nothing
 runs; every decision is logged (`security: blocked/confirmed … command`).
+
+### `su` — run as administrator (TypeBox 0.18.0)
+
+Type `su` (or `/su`, `sudo`) before anything else you would type:
+
+```
+su taskmgr              ->  elevated Task Manager (UAC prompt)
+/su regedit             ->  elevated Registry Editor
+sudo netstat -an        ->  elevated  cmd /c netstat -an
+su backup               ->  your elevated Scripts\backup.bat
+su sutest               ->  your alias, launched with runas
+```
+
+The prefix is stripped, the rest of the line runs through the **exact same
+stages** as without it (alias → plugin → script → file → shell), only the final
+launch uses the ShellExecute `runas` verb — so aliases, `Scripts\` scripts,
+files and shell commands can all be elevated, while the status strip shows an
+**admin** chip while you type. URLs, e-mails and web quicklinks stay at user
+level (runas on a mailto handler is meaningless). Bare `su` answers with a usage
+hint instead of launching anything. History keeps the typed line (re-runnable);
+frecency/`Usage.dat` records the real command word, never `su`. Every elevation
+is logged (`elevate: <line>`); cancelling the UAC prompt simply fails that one
+launch (`GetLastError=1223` in the log) and TypeBox keeps running. Set
+`[Security] Elevate=0` (or uncheck it on the Execution settings page) to make
+su-prefixed lines run without UAC — intended for headless automation.
 
 ### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
 

@@ -187,6 +187,7 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
 
 | # | Feature | Size |
 |---|---|---|
+| 81 | ✅ `su` / `sudo` / `/su` — run any command, alias, script or file elevated (UAC runas), admin chip + `[Security] Elevate` switch | M |
 | 79 | cliphist pin-to-keep + `clip <n>` also pastes at caret via Ctrl+V emulation | S |
 | 80 | taskman `restart <name>` (wait + relaunch main window) and CPU column in `task` output | S |
 | 6 | timer — timers & stopwatch plugin (gallery #7): `timer 10m tea`, `stopwatch`, console-first ticker | M |
