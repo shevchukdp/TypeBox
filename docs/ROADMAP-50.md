@@ -174,13 +174,22 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
 | 72 | ✅ ClickFix-style payload guard — confirm encoded one-liners before the shell runs them | S |
 | 73 | ✅ `Scripts\` folder auto-registration (any `.bat/.ps1/.py` becomes a command) | S |
 
-## v0.17.0 — ranking & trust backlog
+## v0.17.0 — ranking & trust backlog — **shipped**
 
 | # | Feature | Size |
 |---|---|---|
-| 75 | frecency ranking in the drop-down (count + lastUsed in `Usage.dat`) | M |
-| 76 | `TypeBox.local.ini` — per-machine override merged over `TypeBox.ini` (portable + roaming) | S |
-| 77 | danger-confirm for destructive aliases (`rm`, `del`, `format` patterns) reusing the v0.16 guard UI | S |
+| 75 | ✅ frecency ranking in the drop-down (count + lastUsed in `Usage.dat`) | M |
+| 76 | ✅ `TypeBox.local.ini` — per-machine override merged over `TypeBox.ini` (portable + roaming) | S |
+| 77 | ✅ danger-confirm for destructive commands (`del`, `format`, `shutdown`, `reg delete`, `rm -r`…) reusing the v0.16 guard UI — aliases, script args and shell alike | S |
+| 78 | ✅ winlist — window switcher plugin (gallery #6): `win <title>`, `win <n>`, `[Winlist] AltTrick/Titles` | M |
+
+## v0.18.0 — third plugin wave backlog
+
+| # | Feature | Size |
+|---|---|---|
 | 79 | cliphist pin-to-keep + `clip <n>` also pastes at caret via Ctrl+V emulation | S |
 | 80 | taskman `restart <name>` (wait + relaunch main window) and CPU column in `task` output | S |
+| 6 | timer — timers & stopwatch plugin (gallery #7): `timer 10m tea`, `stopwatch`, console-first ticker | M |
+| 7 | sysmon — CPU / RAM / battery / disk plugin (gallery #8): `cpu`, `ram`, `battery`, `disk` | M |
+| 8 | pwgen — password generator (gallery #9): `pwgen 16 4`, clipboard hand-off | S |
 

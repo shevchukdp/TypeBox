@@ -64,12 +64,34 @@ Arguments are passed through (`cmd /c` for bat/cmd, `powershell -File` for ps1,
 **script** chip before Enter. Re-scan: `/reread` or Apply in settings
 (startup logs `scripts: N registered`).
 
-### `[Security]` — the safe Run box (TypeBox 0.16.0)
+### `[Security]` — the safe Run box (TypeBox 0.16.0, danger-confirm 0.17.0)
 | Key | Meaning | Default |
 |---|---|---|
 | `ConfirmSuspicious` | `1` = confirm before running lines that look like encoded payloads/fileless one-liners (`powershell -enc`, base64 blobs, `certutil`/`bitsadmin`/`mshta`, curl-pipe-shell, …) — the ClickFix lesson | `1` |
-The check covers the shell catch-all and script arguments. Answer **No** and
-nothing runs; the decision is logged (`security: blocked suspicious command`).
+| `ConfirmDanger` | `1` = confirm destructive commands (`del`/`erase`/`rd`/`format`/`diskpart`/`shutdown`/`reg delete`/`net user`/`vssadmin delete`/`cipher /w`/`rm -r`/`Remove-Item -Recurse -Force`/`dd if=`/…) — token-based, so paths like `C:\del\report.pdf` stay quiet | `1` |
+
+Both tripwires cover the shell catch-all, script arguments **and** alias expansions
+(an alias that expands to `del …` is just as dangerous). Answer **No** and nothing
+runs; every decision is logged (`security: blocked/confirmed … command`).
+
+### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
+
+Drop an INI named `TypeBox.local.ini` next to `TypeBox.ini` and it wins on every
+key it contains — same sections, same keys. The classic use: a team-maintained
+portable `TypeBox.ini` on a shared folder + a personal `TypeBox.local.ini` that
+overrides position, theme or language on *this* machine:
+
+```ini
+; TypeBox.local.ini — only the keys you care about
+[Show]
+Width = 900
+[UI]
+Language = uk
+```
+
+The settings dialog keeps writing the main `TypeBox.ini` (defaults stay shared);
+startup logs `local config: on (TypeBox.local.ini)`. Note: plugins read
+`TypeBox.ini` directly, so plugin sections are not overridable by the local file.
 
 ### `[Show]`
 | Key | Meaning | Default |
@@ -90,6 +112,7 @@ nothing runs; the decision is logged (`security: blocked suspicious command`).
 | `EasyType` | `0` off · `1` easy · `2` linux-style (Tab completes, repeat Tab cycles) | `2` |
 | `UseInternalET` / `UseAliasET` / `UseHistoryET` / `UseSysAliasET` | completion sources | `1` |
 | `Fuzzy` | `1` subsequence scoring — `cl` finds `calc` (Tab + drop-down, hits accented); `0` = TypeAndRun prefix mode (TypeBox 0.11.0) | `1` |
+| `FrecencyRanking` | `1` (TypeBox 0.17.0) — drop-down ties are won by the commands you use most: `Usage.dat` next to the exe keeps `word · count · last-used` per command; delete the file to reset the ranking | `1` |
 
 ### `[DropDown]` — suggestions list (TypeBox 0.10.0, TypeAndRun DropDown parity)
 A themed list snaps under the console (flips above at the screen edge): candidates for the word
@@ -178,6 +201,7 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `vol` | `vol +` · `vol -` · `vol mute` · `vol 3` | `[Vol] Step=1 Beeps=0` |
 | `cliphist` | `clip` (list) · `clip <n>` re-copy · `clip clear` — CF_UNICODETEXT watcher in RAM | `[Clipboard] Max=20 PollMs=500 RowChars=48 Popup=1 Persist=0 Balloons=0` |
 | `taskman` | `task <substr>` (list) · `kill <name|pid>` | `[Taskman] Confirm=1 ListMax=300` |
+| `winlist` | `win <title>` activate · `win` (list) · `win <n>` (pick last filter) | `[Winlist] AltTrick=1 Titles=9` |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per

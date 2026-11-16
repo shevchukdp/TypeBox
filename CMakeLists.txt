@@ -41,8 +41,9 @@ foreach(P units codec vol)
     set_target_properties(${P} PROPERTIES PREFIX "")
 endforeach()
 
-# Gallery wave two (v0.16.0): cliphist needs shell32 for its optional balloon.
-foreach(P cliphist taskman)
+# Gallery waves two+three (v0.16.0/v0.17.0): cliphist needs shell32 for its
+# optional balloon; winlist (v0.17) is pure user32.
+foreach(P cliphist taskman winlist)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)

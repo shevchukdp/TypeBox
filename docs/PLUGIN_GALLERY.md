@@ -429,6 +429,11 @@ the first word is `kill`/`task`).
 
 ## 6. winlist — window switcher (`winlist.dll`)
 
+> **Status: shipped in v0.17.0** — implemented as `examples/plugin_winlist/winlist.c`
+> (console-first: activation, `flashed` fallback and every error are console lines,
+> zero dialogs; `[Winlist] AltTrick/Titles` configure the foreground-lock trick
+> and the list cap).
+
 | Field | Value |
 |---|---|
 | DLL | `Plugins\winlist.dll` |

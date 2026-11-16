@@ -3,6 +3,67 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.17.0] - 2026-11-16
+
+![frecency](docs/screenshots/dropdown-frecency.png)
+*Type `cal` and the drop-down no longer asks which one you meant last time — it
+**knows**: `calc` (run 5× today) sits above `calk` (1×). The ranking comes from
+`Usage.dat` next to the exe (`word · count · last-used`), delete the file to
+start over, `[Type] FrecencyRanking=0` to switch it off.*
+
+![danger check](docs/screenshots/security-danger.png)
+**Danger confirm** (v0.16 guard UI, new tripwire): `del`, `erase`, `rd`,
+`format`, `diskpart`, `shutdown`, `reg delete`, `net user`, `vssadmin delete`,
+`cipher /w`, `rm -r`, `dd if=`, `Remove-Item -Recurse -Force` … now stop and ask
+before anything runs — token-based, so a path like `C:\del\report.pdf` stays
+quiet. It fires on the **shell catch-all, script arguments and alias expansions**
+an `alias → del …` chain is still a wiper. One key: `[Security] ConfirmDanger`.
+
+![exec page](docs/screenshots/settings-exec-v017.png)
+*Both tripwires plus the Scripts toggle live on the Execution page; the EasyType
+page grew the FrecencyRanking switch.*
+
+### Added
+- 🏆 **Frecency ranking** (RI #75): every executed command line records its first
+  word into `Usage.dat` (`word\tcount\tunix`); drop-down ties are won by
+  frequently-used commands (count 3× per use, capped, +2 if used in the last
+  24 h, total boost ≤17 so real match quality always dominates). Works in fuzzy
+  and prefix modes; `[Type] FrecencyRanking` (default 1), checkbox on the
+  EasyType page, startup logs `usage: N commands ranked`.
+- 🗂️ **`TypeBox.local.ini`** (RI #76): an optional file next to `TypeBox.ini`
+  whose keys win over the main config — keep the portable/team `TypeBox.ini` on
+  a roaming folder and your personal position/theme/language locally. The
+  settings dialog still writes the shared file; startup logs `local config: on`.
+- 🛡️ **Danger-confirm** (RI #77): destructive-command tripwire with YESNO dialog
+  reusing the v0.16 safe-Run UX (`[Security] ConfirmDanger`, default 1). Every
+  decision is logged (`security: blocked/confirmed dangerous command`).
+- 🔌 **winlist — window switcher** (gallery #6) ships in the zip, so it now
+  carries **7 plugins**: `win notepad` raises (or flashes) the window,
+  `win <n>` picks from the last filter, `win` lists. `[Winlist] AltTrick/Titles`,
+  console-first, zero dialogs.
+
+### Under the hood
+- `UsageRec/LoadUsage/SaveUsage/RecordUsage/FrecencyBoost` after the history
+  section; `DdUpdate` adds the boost in `add()` and `stable_sort` now also runs
+  in prefix mode. `DdSyncTitle` exposes the top row for tests.
+- `g_localIni` consulted first in `ReadIniStr/ReadIniInt`; plugins still read
+  `TypeBox.ini` directly (documented).
+- `LooksDangerous()` token scanner + shared `ConfirmDangerLine()` hooked at the
+  alias expansion, script-args and shell stages.
+- i18n: 2 new keys (`se_danger`, `ty_frecency`) in 17 languages.
+
+### Verified
+- `test-v0170` **26/26**: usage file format, tie-swap proves ranking
+  (`calk` on top → run `calc` 3× → `calc` on top), danger dialog blocks (No) /
+  runs (Yes) / stays quiet on `dir`, alias expansion covered, local-ini beats
+  main ini (`Language=ru` override + `local config: on`), winlist activate/no-hit/
+  completion rows, guard + scripts + cliphist + units regressions.
+- Full regression suite green on the 0.17 host: v0160 26/26 · v0150 21/21 ·
+  v0140 18/18 · v0130 11/11 · v0120 9/9 · v0110 12/12 · v0100 13/13 ·
+  v091 11/11 · v090 15/15.
+- `--check-i18n` + `--test-settings` gates pass; downloaded release re-run
+  before publishing.
+
 ## [0.16.0] - 2026-11-16
 
 ![scripts](docs/screenshots/console-script-chip.png)

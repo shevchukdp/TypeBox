@@ -28,6 +28,7 @@
 #include <cmath>
 #include <algorithm>
 #include <functional>
+#include <ctime>
 
 #ifndef TYPEBOX_VERSION
 #define TYPEBOX_VERSION 0.0.0-dev
@@ -82,6 +83,8 @@ struct Settings {
          execEmail = true, execFiles = true, execShell = true, execPlugins = true;
     bool execScripts = true;         // [Exec] Scripts: portable Scripts\ folder (v0.16)
     bool confirmSuspicious = true;   // [Security] ConfirmSuspicious: safe Run box (v0.16)
+    bool confirmDanger = true;       // [Security] ConfirmDanger: destructive commands (v0.17)
+    bool frecency = true;            // [Type] FrecencyRanking: most-used wins ties (v0.17)
     // [Font]
     std::wstring fontName = L"Courier New";
     int  fontSize = 18;
@@ -161,13 +164,26 @@ static std::wstring ExeDir() {
 
 #include "i18n.h"   // localization: L(STR_*), language packs, RTL
 
+// v0.17: TypeBox.local.ini — per-machine overrides merged over TypeBox.ini.
+// Exists => every ReadIni* consults it first; settings UI still WRITES the main
+// ini only (a roaming folder keeps the team defaults, the local file the host).
+static std::wstring g_localIni;   // empty = absent
+
 static std::wstring ReadIniStr(const wchar_t* sec, const wchar_t* key, const wchar_t* def) {
+    if (!g_localIni.empty()) {
+        wchar_t buf[4096] = {};
+        if (GetPrivateProfileStringW(sec, key, L"", buf, 4096, g_localIni.c_str()) > 0)
+            return buf;
+    }
     wchar_t buf[4096] = {};
     GetPrivateProfileStringW(sec, key, def, buf, 4096, g_iniPath.c_str());
     return buf;
 }
 
 static int ReadIniInt(const wchar_t* sec, const wchar_t* key, int def) {
+    if (!g_localIni.empty() &&
+        GetPrivateProfileIntW(sec, key, -2147483647 - 1, g_localIni.c_str()) != -2147483647 - 1)
+        return GetPrivateProfileIntW(sec, key, def, g_localIni.c_str());
     return GetPrivateProfileIntW(sec, key, def, g_iniPath.c_str());
 }
 
@@ -338,6 +354,58 @@ static bool LooksSuspicious(const std::wstring& line) {
         } else run = 0;
     }
     return false;
+}
+
+// v0.17: destructive-command tripwire. Token-based (not substring) so paths
+// like C:\del\report.pdf stay quiet; covers the classic disk/user/boot wipers.
+static bool LooksDangerous(const std::wstring& line) {
+    std::wstring s = Lower(Trim(line));
+    if (s.empty()) return false;
+    std::vector<std::wstring> tok; std::wstring cur;
+    for (wchar_t ch : s) {
+        if (ch == L' ' || ch == L'\t') { if (!cur.empty()) { tok.push_back(cur); cur.clear(); } }
+        else cur += ch;
+    }
+    if (!cur.empty()) tok.push_back(cur);
+    if (tok.empty()) return false;
+    auto has = [&](const wchar_t* t) {
+        for (auto& x : tok) if (x == t) return true; return false; };
+    const std::wstring& t0 = tok[0];
+    if (t0 == L"del" || t0 == L"erase" || t0 == L"rd" || t0 == L"rmdir" ||
+        t0 == L"format" || t0 == L"diskpart" || t0 == L"shutdown" || t0 == L"takeown" ||
+        t0 == L"mkfs")
+        return true;
+    if (t0 == L"reg" && tok.size() > 1 && tok[1] == L"delete") return true;
+    if (t0 == L"net" && tok.size() > 1 &&
+        (tok[1] == L"user" || tok[1] == L"localgroup" || tok[1] == L"share")) return true;
+    if (t0 == L"vssadmin" && has(L"delete")) return true;
+    if (t0 == L"cipher" && has(L"/w")) return true;
+    if (t0 == L"sc" && tok.size() > 1 && tok[1] == L"delete") return true;
+    if (t0 == L"schtasks" && has(L"/delete")) return true;
+    if (t0 == L"wmic" && s.find(L"shadowcopy") != std::wstring::npos && has(L"delete")) return true;
+    if (t0 == L"icacls" && has(L"/reset")) return true;
+    if (t0 == L"rm" && (has(L"-r") || has(L"-rf") || has(L"-fr") || has(L"--recursive")))
+        return true;
+    if (t0 == L"dd") { for (auto& x : tok) if (x.rfind(L"if=", 0) == 0) return true; }
+    if ((t0 == L"powershell" || t0 == L"pwsh" || t0 == L"powershell.exe" || t0 == L"pwsh.exe") &&
+        s.find(L"remove-item") != std::wstring::npos &&
+        (s.find(L"-recurse") != std::wstring::npos || s.find(L"-r ") != std::wstring::npos) &&
+        (s.find(L"-force") != std::wstring::npos || s.find(L"-f ") != std::wstring::npos))
+        return true;
+    return false;
+}
+// Shared YESNO for both security tripwires. true = user allowed, false = blocked.
+static void LogInfo(const std::wstring&);       // defined with the logging section
+static bool ConfirmDangerLine(const std::wstring& what, HWND owner) {
+    std::wstring msg = L"TypeBox \u2014 danger check\n\nThis looks like a destructive command:\n\n"
+                       + what + L"\n\nRun it anyway?";
+    if (MessageBoxW(owner, msg.c_str(), L"TypeBox",
+                    MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+        LogInfo(L"security: blocked dangerous command");
+        return false;
+    }
+    LogInfo(L"security: confirmed dangerous command");
+    return true;
 }
 
 // Prepend our folders to PATH. Called at startup and whenever settings apply.
@@ -621,6 +689,8 @@ static void LoadSettings() {
     g_set.execShell    = ReadIniBool(L"Exec", L"Shell",    true);
     g_set.execScripts  = ReadIniBool(L"Exec", L"Scripts",  true);
     g_set.confirmSuspicious = ReadIniBool(L"Security", L"ConfirmSuspicious", true);
+    g_set.confirmDanger     = ReadIniBool(L"Security", L"ConfirmDanger", true);
+    g_set.frecency          = ReadIniBool(L"Type", L"FrecencyRanking", true);
     g_set.execPlugins  = ReadIniBool(L"Exec", L"Plugins",  true);
 
     g_set.fontName = ReadIniStr(L"Font", L"Name", L"Courier New");
@@ -859,6 +929,65 @@ static void SaveHistory() {
     std::ofstream f(HistoryFile().c_str(), std::ios::binary | std::ios::trunc);
     if (!f) return;
     for (const auto& h : g_history) f << ToUtf8(h) << '\n';
+}
+
+// ---------------------------------------------------------------- usage / frecency (v0.17)
+// Usage.dat lines: word<TAB>count<TAB>unix-seconds (word = lower-cased command
+// name, never a path or /command). The drop-down ranks fuzzy ties by this:
+// the tools you actually use float to the top, quality still dominates.
+struct UsageRec { int count = 0; long long last = 0; };
+static std::map<std::wstring, UsageRec> g_usage;   // key: lower command word
+
+static std::wstring UsageFile() { return ExeDir() + L"Usage.dat"; }
+
+static void LoadUsage() {
+    g_usage.clear();
+    std::ifstream f(UsageFile().c_str(), std::ios::binary);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t t1 = line.find('\t');
+        if (t1 == std::string::npos) continue;
+        size_t t2 = line.find('\t', t1 + 1);
+        if (t2 == std::string::npos) continue;
+        UsageRec r;
+        r.count = atoi(line.substr(t1 + 1, t2 - t1 - 1).c_str());
+        r.last  = atoll(line.substr(t2 + 1).c_str());
+        if (r.count >= 1) g_usage[FromUtf8(line.substr(0, t1))] = r;
+    }
+}
+static void SaveUsage() {
+    std::ofstream f(UsageFile().c_str(), std::ios::binary | std::ios::trunc);
+    if (!f) return;
+    for (auto& kv : g_usage)
+        f << ToUtf8(kv.first) << '\t' << kv.second.count << '\t' << kv.second.last << '\n';
+}
+static void RecordUsage(const std::wstring& line) {
+    std::wstring w = Trim(line);
+    size_t sp = w.find_first_of(L" \t");
+    if (sp != std::wstring::npos) w = w.substr(0, sp);
+    if (w.empty() || w[0] == L'/' || w[0] == L'\\') return;
+    if (w.find_first_of(L"\\/:;|<>\"'=%") != std::wstring::npos) return;   // paths/url/vars
+    bool wordish = false;
+    for (wchar_t ch : w) if (iswalnum(ch)) { wordish = true; break; }
+    if (!wordish || w.size() > 32) return;
+    UsageRec& r = g_usage[Lower(w)];
+    r.count += 1;
+    r.last   = (long long)time(nullptr);
+    SaveUsage();                              // tiny file; deterministic for tests
+}
+// 0..17 — smaller than any real fuzzy delta, still decides ties.
+static int FrecencyBoost(const std::wstring& row) {
+    if (!g_set.frecency) return 0;
+    std::wstring w = row;
+    size_t sp = w.find_first_of(L" \t");
+    if (sp != std::wstring::npos) w = w.substr(0, sp);
+    auto it = g_usage.find(Lower(w));
+    if (it == g_usage.end()) return 0;
+    int b = it->second.count < 5 ? it->second.count * 3 : 15;
+    if ((long long)time(nullptr) - it->second.last < 86400) b += 2;
+    return b;
 }
 
 // ---------------------------------------------------------------- sounds
@@ -1341,6 +1470,9 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
     if (g_set.execAliases) {
         if (const Alias* a = FindAlias(word)) {
             std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
+            // v0.17: an alias that expands to a wiper is still a wiper.
+            if (g_set.confirmDanger && LooksDangerous(cmd) &&
+                !ConfirmDangerLine(cmd, mainWnd)) return EXC_NONE;
             std::wstring prog = FirstWord(cmd);
             std::wstring args = RestWords(cmd);
             // ShellExecuteEx with NOCLOSEPROCESS so Shift+Enter can kill the app;
@@ -1494,6 +1626,9 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                     return EXC_NONE;
                 }
             }
+            // v0.17: destructive arguments to a script are just as dangerous.
+            if (g_set.confirmDanger && LooksDangerous(rest) &&
+                !ConfirmDangerLine(rest, mainWnd)) return EXC_NONE;
             std::wstring file, args;
             if (sc->ext == L".ps1") {
                 file = L"powershell.exe";
@@ -1537,6 +1672,9 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                 return EXC_NONE;
             }
         }
+        // v0.17: destructive commands (del/format/shutdown/reg delete …) confirm too.
+        if (g_set.confirmDanger && LooksDangerous(expanded) &&
+            !ConfirmDangerLine(expanded, mainWnd)) return EXC_NONE;
         std::wstring shellCmd  = ReadIniStr(L"Shell", L"Command", L"cmd.exe");
         std::wstring shellArgs = ReadIniStr(L"Shell", L"Args", L"/c");
         ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
@@ -2035,6 +2173,7 @@ static void Submit(HWND mainWnd) {
     DdClose();
     g_lastRun = line;
     ExecType t = (ExecType)RunLine(line, mainWnd);
+    if (t != EXC_NONE) RecordUsage(line);   // v0.17 frecency (independent of history rules)
     if (t != EXC_NONE && HistoryAllows(t)) {
         g_history.push_back(line);
         if ((int)g_history.size() > g_set.historyMax)
@@ -2212,9 +2351,15 @@ static bool DdVisible() { return g_ddWnd && IsWindowVisible(g_ddWnd); }
 
 static void DdSyncTitle() {   // cheap state probe for the test harness
     if (!g_ddWnd) return;
+    std::wstring top;                          // v0.17: top row too (frecency asserts)
+    if (!g_ddItems.empty()) {
+        top = g_ddItems[0];
+        for (auto& ch : top) if (ch == L'|' || ch == L'\r' || ch == L'\n') ch = L' ';
+        if (top.size() > 40) top = top.substr(0, 40);
+    }
     SetWindowTextW(g_ddWnd, (std::wstring(L"TypeBoxDropDown|") +
         std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel) +
-        L"|" + std::to_wstring(g_ddTop)).c_str());
+        L"|" + std::to_wstring(g_ddTop) + L"|" + top).c_str());
 }
 
 static int DdVisibleRows() {
@@ -2393,6 +2538,7 @@ static void DdUpdate(HWND mainWnd) {
             if (g_set.fuzzy) { sc = FuzzyScore(c, word, &mk); if (sc <= 0) return; }
             else if (!StartsWithNoCase(c, word)) return;
             else for (size_t i = 0; i < word.size(); ++i) mk.push_back(i);
+            sc += FrecencyBoost(c);                       // v0.17: used-more wins ties
         }
         for (auto& x : items)
             if (_wcsicmp(x.c_str(), c.c_str()) == 0) return;
@@ -2426,7 +2572,7 @@ static void DdUpdate(HWND mainWnd) {
                 }
     }
     if (items.empty()) { DdClose(); return; }
-    if (g_set.fuzzy && !word.empty()) {          // best match on top, ties keep source order
+    if (!word.empty() && (g_set.fuzzy || g_set.frecency)) {   // best match on top, ties keep source order
         std::vector<size_t> ord(items.size());
         for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
         std::stable_sort(ord.begin(), ord.end(),
@@ -3452,7 +3598,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_EXEC], L(STR_EX_SHELL),      16, y, &Settings::execShell);   y += 26;
     CkB(g_setPage[PG_EXEC], L(STR_EX_PLUGINS),    16, y, &Settings::execPlugins); y += 26;
     CkB(g_setPage[PG_EXEC], L(STR_EX_SCRIPTS),    16, y, &Settings::execScripts); y += 26;
-    CkB(g_setPage[PG_EXEC], L(STR_SE_SUSPICIOUS), 16, y, &Settings::confirmSuspicious);
+    CkB(g_setPage[PG_EXEC], L(STR_SE_SUSPICIOUS), 16, y, &Settings::confirmSuspicious); y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_SE_DANGER),     16, y, &Settings::confirmDanger);
 
     // --- EasyType
     y = 12;
@@ -3472,7 +3619,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_TYPE], L(STR_DD_SHOW),    16, y, &Settings::dropDown);  y += 26;
     NumB(g_setPage[PG_TYPE], L(STR_DD_ROWS),   16, y, &Settings::ddLines, 1, 20); y += 34;
     CkB(g_setPage[PG_TYPE], L(STR_DD_EMPTY),   16, y, &Settings::ddOnEmpty); y += 26;
-    CkB(g_setPage[PG_TYPE], L(STR_FT_FUZZY),   16, y, &Settings::fuzzy);
+    CkB(g_setPage[PG_TYPE], L(STR_FT_FUZZY),   16, y, &Settings::fuzzy);      y += 26;
+    CkB(g_setPage[PG_TYPE], L(STR_TY_FRECENCY), 16, y, &Settings::frecency);
 
     // --- History
     y = 12;
@@ -3751,6 +3899,7 @@ static void WriteDraftIni() {
     WB(L"Exec", L"Shell",    s.execShell);
     WB(L"Exec", L"Scripts",  s.execScripts);
     WB(L"Security", L"ConfirmSuspicious", s.confirmSuspicious);
+    WB(L"Security", L"ConfirmDanger",     s.confirmDanger);
     WB(L"Exec", L"Plugins",  s.execPlugins);
 
     WInt(L"Type", L"EasyType",     s.easyType);
@@ -3762,6 +3911,7 @@ static void WriteDraftIni() {
     WB(L"Type", L"UseAliasET",     s.etAlias);
     WB(L"Type", L"UseHistoryET",   s.etHistory);
     WB(L"Type", L"UseSysAliasET",  s.etSysAlias);
+    WB(L"Type", L"FrecencyRanking", s.frecency);
 
     WInt(L"History", L"Max",        s.historyMax);
     WB(L"History", L"Internal",     s.saveInternal);
@@ -4343,6 +4493,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 + std::wstring(L(STR_APPLY)) + L"\r\n"
                 + std::wstring(L(STR_PG_APPEARANCE)) + L"\r\n"
                 + std::wstring(L(STR_PG_THEME)) + L"\r\n"
+                + std::wstring(L(STR_SE_DANGER)) + L"\r\n"      // v0.17 tail (side table)
+                + std::wstring(L(STR_TY_FRECENCY)) + L"\r\n"
                 + std::wstring(L(STR_HK_HINT));
             std::string bytes = ToUtf8(out);
             auto tryWrite = [&bytes](const std::wstring& p) -> bool {
@@ -4377,6 +4529,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     }
 
     g_iniPath = ExeDir() + L"TypeBox.ini";
+    {   // v0.17: optional per-machine override file next to the portable config
+        std::wstring loc = ExeDir() + L"TypeBox.local.ini";
+        if (GetFileAttributesW(loc.c_str()) != INVALID_FILE_ATTRIBUTES) g_localIni = loc;
+    }
     InitCommonControls();
 
     // Single instance: forward the command line to the running one.
@@ -4402,6 +4558,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     LoadWebSearch();
     LoadScripts();      // v0.16: Scripts\ folder auto-registration
     LoadHistory();
+    LoadUsage();        // v0.17: Usage.dat powers the drop-down's frecency ranking
     DiscoverPlugins();
 
     // [Show] Priority — process class of TypeBox itself
@@ -4458,6 +4615,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         LogInfo(L"scripts: " + (g_scripts.empty()
                  ? std::wstring(L"none (Scripts\\ folder)")
                  : std::to_wstring(g_scripts.size()) + L" registered"));
+        LogInfo(L"local config: " + (g_localIni.empty()
+                 ? std::wstring(L"absent") : std::wstring(L"on (TypeBox.local.ini)")));
+        if (!g_usage.empty())
+            LogInfo(L"usage: " + std::to_wstring(g_usage.size()) + L" commands ranked");
     }
 
     AddTrayIcon(mainWnd, true);
