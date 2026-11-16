@@ -201,16 +201,41 @@ writes this key; Apply switches the whole UI immediately (Arabic also mirrors th
 drop-down RTL). Portable community overrides live in `lang\<code>.ini` next to the
 exe — see [LANGUAGE.md](LANGUAGE.md).
 
-### `[Theme]` — cozy color schemes (TypeBox 0.9.1)
+### `[Theme]` — cozy color schemes + custom themes (TypeBox 0.9.1, studio in 0.15.0)
 ```ini
 [Theme]
 Name = cozy-dark   ; cozy-dark | paper-light | midnight-blue | nord-frost
                    ; | solarized-dark | solarized-light | forest-night
+                   ; …or the name of your own themes\<name>.theme.ini
 ```
 A preset paints the console, the status strip and the tray badge in one go
 (the accent tints the badge rim and the chips). **Theme** page of the settings
 dialog has a live preview; **Apply** re-skins live (log `theme: …`). Explicit
 `[Color] ConsoleBG/ConsoleFG` values always override the preset.
+
+**Your own themes** (v0.15 theme studio): press **Save as…** on the Theme page or drop a
+file into the portable `themes\` folder — one INI per theme, listed in the scheme combo:
+
+`themes\sunset-glow.theme.ini`
+```ini
+[Theme]
+Bg=241028          ; RRGGBB (no 0x needed)
+Fg=F2E9FF
+Accent=FF7A45
+Border=FF7A45      ; optional; unset = the accent
+BorderWidth=3      ; 0..24 px frame around the console (built-ins: none)
+Alpha=200          ; optional 30..255; pushed to [Show] Transparent when picked
+FontName=Consolas  ; optional; pushed to [Font] Name when picked
+FontSize=22        ; optional 6..72
+FontBold=1         ; optional 0/1
+Width=810          ; optional; pushed to [Show] Width when picked
+Height=92          ; optional; pushed to [Show] Height when picked
+```
+Only `Bg/Fg/Accent` are required — the rest stay whatever the console currently is
+(shared fields are one-time pushes on pick, persisted as ordinary `[Show]`/`[Font]`).
+Built-ins are compiled in: they cannot be deleted, and a custom saving under a built-in
+name gets a `-copy` suffix instead of shadowing it. `/reread` rescans `themes\` live.
+Delete a custom theme with the **Delete** button (or just delete the file).
 
 ### `[SysAliases]` — system commands (TypeAndRun parity)
 

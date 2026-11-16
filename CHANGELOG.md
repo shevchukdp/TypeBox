@@ -3,6 +3,52 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.15.0] - 2026-11-16
+
+![theme studio](docs/screenshots/settings-theme-studio.png)
+*The Theme page is now a **theme studio**: color scheme combo (built-ins + your own), four
+click-to-pick color patches (native color dialog), border thickness, transparency, console
+size, font family/size/bold — and a live preview that paints your draft as you edit.*
+
+![custom theme](docs/screenshots/console-theme-custom.png)
+*The console wearing a custom theme: deep-purple background, lavender text, 3 px orange
+frame, and the theme name in the status-strip chip.*
+
+### Added
+- 🎨 **Create your own themes** (the user asked: «создание своих тем, настройка цвета,
+  шрифтов, прозрачности, ширины, толщины»): the Theme page grew a studio —
+  - **colors** — Background / Text / Accent / Border patches open the native
+    `ChooseColorW` dialog; each shows its hex; the preview card repaints live.
+  - **border thickness** — 0..24 px frame drawn around the console (custom themes only;
+    built-ins stay frameless). Border color defaults to the accent when unset.
+  - **transparency, console width/height, font family/size/bold** — editable right on the
+    Theme page; picking a theme pushes its look into the ordinary `[Show]`/`[Font]` keys.
+  - **Save as… / Delete** — a theme is a portable `themes\<name>.theme.ini` next to the exe:
+    `[Theme] Bg Fg Accent Border BorderWidth Alpha FontName FontSize FontBold Width Height`
+    (colors as `RRGGBB`). Copy the `themes\` folder → your looks travel with TypeBox.
+  - The combo lists built-ins + customs; built-ins cannot be deleted or shadowed
+    (saving as `cozy-dark` becomes `cozy-dark-copy`); deleting a custom is instant
+    (the file is re-creatable with one click).
+- 🧵 `/reread` now reloads `themes\` too — edit a `.theme.ini` in any editor, hit `/reread`,
+  the console re-skins without a restart.
+
+### Under the hood
+- `Theme` grew from 4 fields to 12 (name/bg/fg/accent + border/borderW/alpha/font/geometry,
+  sentinels `-1`/`CLR_NONE`/`""` = unset); `ApplyThemeVisual` also computes the effective
+  frame; the edit control is inset by the border width in `WM_SIZE`; frame is painted in
+  `WM_PAINT`/`WM_PRINTCLIENT`/`WM_ERASEBKGND` (screenshots capture it).
+- Explicit `[Color] ConsoleBG/ConsoleFG` still win over theme colors (unchanged rule).
+- New localized strings (`th_bg`..`th_portnote`) in 17 languages with English fallback.
+
+### Verified
+- `test-v0150` **23/23**: Save-as writes the right hex colors, built-in shadowing refused,
+  combo lists customs, picking a custom pushes Alpha/Width/Height/Font into `[Show]`/`[Font]`,
+  `[Theme] Name` persists across restart, `/reread` survives, Delete removes the file,
+  built-in delete is a no-op.
+- Full regression suite green: v0140 20/20, v0130 12/12, v0120, v0110, v0100, v091,
+  v090 15/15 (language combo re-indexed for the two new studio combos).
+- `--check-i18n` + `--test-settings` gates pass on the built exe.
+
 ## [0.14.0] - 2026-11-15
 
 ![console context menu](docs/screenshots/context-menu.png)

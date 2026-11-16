@@ -1054,6 +1054,8 @@ static void ShowBox(HWND mainWnd);
 static void HideBox(HWND mainWnd);
 static int  RunLine(const std::wstring& line, HWND mainWnd);
 static void ReloadHotkey(HWND mainWnd);
+static void LoadThemes();       // v0.15 (/reread uses these before their definitions)
+static void ApplyThemeVisual();
 static void ResetET();
 static void OpenSettings(HWND mainWnd, int page);
 enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
@@ -1133,6 +1135,12 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         LoadAliases();
         LoadWebSearch();
         ReloadHotkey(mainWnd);
+        LoadThemes();               // v0.15: themes\*.theme.ini picked up too
+        ApplyThemeVisual();
+        if (mainWnd) { InvalidateRect(mainWnd, nullptr, TRUE);
+                       RECT rc; GetClientRect(mainWnd, &rc);
+                       SendMessageW(mainWnd, WM_SIZE, 0,
+                                    MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top)); }
     } else if (c == L"/load") {
         // (Re)scan Plugins\ and [Plugins]; call Load(HWND) on each.
         size_t before = g_plugins.size();
@@ -1561,7 +1569,22 @@ static void HideBox(HWND mainWnd) {
 // Seven warm presets paint the console, the status strip and the tray badge.
 // Explicit [Color] ConsoleBG/ConsoleFG always win; the theme accent tints
 // the tray rim and the status chips so tray and console match.
-struct Theme { const wchar_t* name; COLORREF bg, fg, accent; };
+// v0.15: users add their own — themes\<name>.theme.ini, portable with the folder.
+// Shared fields (alpha/font/geometry) are a one-time push when the theme is
+// picked; they persist as ordinary [Show]/[Font] keys afterwards.
+struct Theme {
+    std::wstring name;
+    COLORREF bg     = RGB(0x2B, 0x26, 0x22);
+    COLORREF fg     = RGB(0xF5, 0xE9, 0xDC);
+    COLORREF accent = RGB(0xFF, 0xB8, 0x6C);
+    COLORREF border = CLR_NONE;   // CLR_NONE = follow the accent
+    int  borderW  = -1;           // -1 = unset (built-ins: frameless)
+    int  alpha    = -1;           // [Show] Transparent push on pick, -1 = unset
+    std::wstring fontName;        // "" = unset
+    int  fontSize = -1, fontBold = -1;
+    int  w = -1, h = -1;          // [Show] geometry push, -1 = unset
+    bool custom   = false;        // loaded from themes\<name>.theme.ini
+};
 static const Theme kThemes[] = {
     { L"cozy-dark",       RGB(0x2B, 0x26, 0x22), RGB(0xF5, 0xE9, 0xDC), RGB(0xFF, 0xB8, 0x6C) },
     { L"paper-light",     RGB(0xFB, 0xF5, 0xEA), RGB(0x3A, 0x33, 0x2B), RGB(0xC2, 0x66, 0x2D) },
@@ -1572,10 +1595,75 @@ static const Theme kThemes[] = {
     { L"forest-night",    RGB(0x1F, 0x28, 0x23), RGB(0xDC, 0xE5, 0xDC), RGB(0xA3, 0xC9, 0xA8) },
 };
 static const int kThemeCount = (int)(sizeof(kThemes) / sizeof(kThemes[0]));
+static std::vector<Theme> g_customThemes;      // themes\*.theme.ini (sorted by name)
 
+static std::wstring ThemeDirW()  { return ExeDir() + L"themes\\"; }
+static std::wstring ThemeFileW(const std::wstring& n) { return ThemeDirW() + n + L".theme.ini"; }
+
+static COLORREF ParseThColor(const wchar_t* b) {   // "RRGGBB" / "0xRRGGBB" -> COLORREF
+    COLORREF v = (COLORREF)wcstol(b, nullptr, 16);
+    return RGB(GetBValue(v), GetGValue(v), GetRValue(v));   // file is human RRGGBB
+}
+static COLORREF ThColor(const wchar_t* key, COLORREF def, const std::wstring& f) {
+    wchar_t b[32] = {};
+    if (!GetPrivateProfileStringW(L"Theme", key, L"", b, 31, f.c_str()) || !b[0])
+        return def;
+    return ParseThColor(b);
+}
+static bool LoadCustomTheme(const std::wstring& name, Theme& t) {
+    std::wstring f = ThemeFileW(name);
+    if (!PathFileExistsW(f.c_str())) return false;
+    t = Theme();
+    t.name = name; t.custom = true;
+    t.bg     = ThColor(L"Bg",     t.bg,     f);
+    t.fg     = ThColor(L"Fg",     t.fg,     f);
+    t.accent = ThColor(L"Accent", t.accent, f);
+    wchar_t b[32] = {};
+    if (GetPrivateProfileStringW(L"Theme", L"Border", L"", b, 31, f.c_str()) && b[0])
+        t.border = ParseThColor(b);
+    t.borderW  = (int)GetPrivateProfileIntW(L"Theme", L"BorderWidth", -1, f.c_str());
+    t.alpha    = (int)GetPrivateProfileIntW(L"Theme", L"Alpha",    -1, f.c_str());
+    wchar_t fn[LF_FACESIZE] = {};
+    GetPrivateProfileStringW(L"Theme", L"FontName", L"", fn, LF_FACESIZE, f.c_str());
+    if (fn[0]) t.fontName = fn;
+    t.fontSize = (int)GetPrivateProfileIntW(L"Theme", L"FontSize", -1, f.c_str());
+    t.fontBold = (int)GetPrivateProfileIntW(L"Theme", L"FontBold", -1, f.c_str());
+    t.w        = (int)GetPrivateProfileIntW(L"Theme", L"Width",    -1, f.c_str());
+    t.h        = (int)GetPrivateProfileIntW(L"Theme", L"Height",   -1, f.c_str());
+    return true;
+}
+static void LoadThemes() {
+    g_customThemes.clear();
+    WIN32_FIND_DATAW fd;
+    HANDLE hf = FindFirstFileW((ThemeDirW() + L"*.theme.ini").c_str(), &fd);
+    if (hf != INVALID_HANDLE_VALUE) {
+        do {
+            std::wstring fn = fd.cFileName;               // "<name>.theme.ini"
+            const size_t suffix = 10;                     // strlen(".theme.ini")
+            if (fn.size() <= suffix) continue;
+            Theme t;
+            if (LoadCustomTheme(fn.substr(0, fn.size() - suffix), t))
+                g_customThemes.push_back(t);
+        } while (FindNextFileW(hf, &fd));
+        FindClose(hf);
+    }
+    std::sort(g_customThemes.begin(), g_customThemes.end(),
+              [](const Theme& a, const Theme& b) {
+                  return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0; });
+}
+static int ThemeCount() { return kThemeCount + (int)g_customThemes.size(); }
+static const Theme& ThemeAt(int i) {
+    if (i >= 0 && i < kThemeCount) return kThemes[i];
+    int c = i - kThemeCount;
+    if (c >= 0 && c < (int)g_customThemes.size()) return g_customThemes[c];
+    return kThemes[0];
+}
 static int ThemeFromName(const std::wstring& name) {
     for (int i = 0; i < kThemeCount; ++i)
-        if (_wcsicmp(kThemes[i].name, name.c_str()) == 0) return i;
+        if (_wcsicmp(kThemes[i].name.c_str(), name.c_str()) == 0) return i;
+    for (int i = 0; i < (int)g_customThemes.size(); ++i)
+        if (_wcsicmp(g_customThemes[i].name.c_str(), name.c_str()) == 0)
+            return kThemeCount + i;
     return 0;   // cozy-dark
 }
 
@@ -1613,6 +1701,8 @@ static COLORREF ReadableMix(COLORREF bg, COLORREF fg, int startPct) {
 static COLORREF g_effBg  = RGB(0x2B, 0x26, 0x22);
 static COLORREF g_effFg  = RGB(0xF5, 0xE9, 0xDC);
 static COLORREF g_accent = RGB(0xFF, 0xB8, 0x6C);
+static COLORREF g_effBorder = CLR_NONE;   // v0.15 theme studio: custom frame
+static int      g_borderW   = 0;          // px; 0 = frameless (all built-ins)
 
 // Cozy tray badge: charcoal circle, accent rim, ">_" glyph, state dot.
 // Drawn with GDI into a 32bpp DIB; alpha is the circle mask we compute
@@ -1699,13 +1789,30 @@ static void SetTrayVisual() {
 }
 
 // Effective console colors: explicit [Color] values win, else the theme.
+// Custom themes may also carry a client-side frame (Border + BorderWidth).
 static void ApplyThemeVisual() {
-    const Theme& t = kThemes[ThemeFromName(g_set.theme)];
+    const Theme& t = ThemeAt(ThemeFromName(g_set.theme));
     g_effBg  = g_set.consoleBg >= 0 ? (COLORREF)g_set.consoleBg : t.bg;
     g_effFg  = g_set.consoleFg >= 0 ? (COLORREF)g_set.consoleFg : t.fg;
     g_accent = t.accent;
+    g_borderW = (t.borderW > 0) ? t.borderW : 0;
+    g_effBorder = CLR_NONE;
+    if (g_borderW) g_effBorder = (t.border != CLR_NONE) ? t.border : t.accent;
     if (g_bgBrush) { DeleteObject(g_bgBrush); g_bgBrush = nullptr; }
     g_bgBrush = CreateSolidBrush(g_effBg);
+}
+
+// N-px frame inside the client area (the window is WS_POPUP, no NC border).
+static void PaintFrame(HDC dc, const RECT& rc) {
+    if (g_borderW <= 0 || g_effBorder == CLR_NONE) return;
+    HBRUSH b = CreateSolidBrush(g_effBorder);
+    RECT r = rc;
+    for (int i = 0; i < g_borderW; ++i) {
+        if (r.left >= r.right - 1 || r.top >= r.bottom - 1) break;
+        FrameRect(dc, &r, b);
+        InflateRect(&r, -1, -1);
+    }
+    DeleteObject(b);
 }
 
 // ---------------------------------------------------------------- status strip
@@ -1773,8 +1880,9 @@ static void PaintStatusBar(HDC dc, RECT rc) {
 
     const wchar_t* mode = g_set.easyType == 0 ? L(STR_ET_OFF)
                         : g_set.easyType == 1 ? L(STR_ET_EASY) : L(STR_ET_LINUX);
+    std::wstring themeName = ThemeAt(ThemeFromName(g_set.theme)).name;   // v0.15: customs too
     for (int pass = 0; pass < 2; ++pass) {
-        const wchar_t* chip = pass == 0 ? mode : kThemes[ThemeFromName(g_set.theme)].name;
+        const wchar_t* chip = pass == 0 ? mode : themeName.c_str();
         SIZE cs; GetTextExtentPoint32W(dc, chip, (int)wcslen(chip), &cs);
         COLORREF chipBg = MixColor(g_effBg, g_accent, 18);
         HBRUSH cb = CreateSolidBrush(chipBg);
@@ -2338,6 +2446,13 @@ static HWND g_plLb = nullptr, g_plLoadChk = nullptr, g_plHistChk = nullptr,
       g_plInfo = nullptr;
 static HWND g_langCombo = nullptr;
 static HWND g_themeCombo = nullptr, g_themePrev = nullptr;
+// v0.15 theme studio: edits the pending custom theme (saved to themes\<name>.theme.ini).
+// Shared fields (alpha/font/geometry) live in g_draft — picked theme pushes them there.
+static Theme g_draftTheme;
+static HWND  g_thSw[4] = {};              // Bg / Fg / Accent / Border color patches
+static HWND  g_thName = nullptr, g_thBorderW = nullptr, g_thFontCombo = nullptr;
+static HWND  g_thAlpha = nullptr, g_thW = nullptr, g_thH = nullptr;
+static HWND  g_thSize = nullptr, g_thBold = nullptr;
 static HWND g_fontCombo = nullptr;   // v0.13: font is picked, not typed
 struct PluginRow { std::wstring name; int load = 1, saveHist = 1; };
 static std::vector<PluginRow> g_plRows;
@@ -2535,7 +2650,8 @@ enum { IDB_OK = 101, IDB_APPLY, IDB_CANCEL,
        IDB_AL_ADD, IDB_AL_UPDATE, IDB_AL_DELETE,
        IDB_FONT_CHOOSE, IDB_HI_CLEAR,
        IDB_PL_RESCAN, IDB_PL_UNLOAD, IDB_PL_ABOUT, IDB_PL_OPTIONS,
-       IDB_EN_ADDVAR, IDB_EN_UPDATEVAR, IDB_EN_DELETEVAR };
+       IDB_EN_ADDVAR, IDB_EN_UPDATEVAR, IDB_EN_DELETEVAR,
+       IDB_TH_SAVEAS, IDB_TH_DEL, IDT_TH_COMBO, IDT_TH_NAME };
 
 static std::wstring GetText(HWND h) {
     int n = GetWindowTextLengthW(h);
@@ -2548,27 +2664,132 @@ static void Bind(std::function<void()> load, std::function<void()> store) {
 }
 
 // checkbox bound to a Settings bool member
-static void CkB(HWND host, const wchar_t* label, int x, int y, bool Settings::*mem) {
+static HWND CkB(HWND host, const wchar_t* label, int x, int y, bool Settings::*mem) {
     HWND c = MkCheck(host, label, x, y, 380);
     Bind([c, mem]{ SendMessageW(c, BM_SETCHECK, (g_draft.*mem) ? BST_CHECKED : BST_UNCHECKED, 0); },
          [c, mem]{ g_draft.*mem = SendMessageW(c, BM_GETCHECK, 0, 0) == BST_CHECKED; });
+    return c;
 }
-static void NumB(HWND host, const wchar_t* label, int x, int y, int Settings::*mem,
-                 int minv, int maxv, bool allowNeg = false) {
-    MkLabel(host, label, x, y + 2, 150);
-    HWND e = MkEdit(host, L"", x + 155, y, 80, !allowNeg);
+// numeric bound to a Settings int member; returns the edit so pages can resync it
+// (v0.15 theme studio pushes alpha/font/geometry into g_draft on theme pick)
+static HWND NumB(HWND host, const wchar_t* label, int x, int y, int Settings::*mem,
+                 int minv, int maxv, bool allowNeg = false, int labelW = 150, int editW = 80) {
+    MkLabel(host, label, x, y + 2, labelW);
+    HWND e = MkEdit(host, L"", x + labelW + 5, y, editW, !allowNeg);
     Bind([e, mem]{ wchar_t b[24]; wsprintfW(b, L"%d", g_draft.*mem); SetWindowTextW(e, b); },
          [e, mem, minv, maxv]{
              int v = GetWindowTextLengthW(e) ? _wtoi(GetText(e).c_str()) : g_draft.*mem;
              if (v < minv) v = minv; if (v > maxv) v = maxv;
              g_draft.*mem = v;
          });
+    return e;
 }
 static void TxB(HWND host, const wchar_t* label, int x, int y, std::wstring Settings::*mem) {
     MkLabel(host, label, x, y + 2, 150);
     HWND e = MkEdit(host, L"", x + 155, y, 260);
     Bind([e, mem]{ SetWindowTextW(e, (g_draft.*mem).c_str()); },
          [e, mem]{ g_draft.*mem = Trim(GetText(e)); });
+}
+
+// numeric bound to a pending Theme field (theme file, not [Show]/[Font])
+static HWND NumT(HWND host, const wchar_t* label, int x, int y, int Theme::*mem,
+                 int minv, int maxv, int labelW = 150, int editW = 60) {
+    MkLabel(host, label, x, y + 2, labelW);
+    HWND e = MkEdit(host, L"", x + labelW + 5, y, editW, true);
+    Bind([e, mem]{ wchar_t b[24]; wsprintfW(b, L"%d", (g_draftTheme.*mem > 0) ? g_draftTheme.*mem : 0);
+                   SetWindowTextW(e, b); },
+         [e, mem, minv, maxv]{
+             int v = GetWindowTextLengthW(e) ? _wtoi(GetText(e).c_str()) : 0;
+             if (v < minv) v = minv; if (v > maxv) v = maxv;
+             g_draftTheme.*mem = v;
+         });
+    return e;
+}
+
+// ---------------------------------------------------------------- v0.15 theme studio
+// Built-ins stay compiled-in; customs are themes\<name>.theme.ini (portable).
+// Pick a theme -> colors/border go to g_draftTheme, and the shared look fields
+// (alpha, font, geometry) push into g_draft so Apply persists them as [Show]/[Font].
+static void ThFillCombo() {
+    if (!g_themeCombo) return;
+    SendMessageW(g_themeCombo, CB_RESETCONTENT, 0, 0);
+    for (int i = 0; i < ThemeCount(); ++i)
+        SendMessageW(g_themeCombo, CB_ADDSTRING, 0, (LPARAM)ThemeAt(i).name.c_str());
+    SendMessageW(g_themeCombo, CB_SETCURSEL, ThemeFromName(g_draft.theme), 0);
+}
+static void ThResync() {                       // push state into the studio controls
+    if (!g_thName) return;
+    SetWindowTextW(g_thName, g_draftTheme.name.c_str());
+    if (g_thBorderW) { wchar_t b[16]; wsprintfW(b, L"%d", g_draftTheme.borderW > 0 ? g_draftTheme.borderW : 0);
+                       SetWindowTextW(g_thBorderW, b); }
+    if (g_thAlpha)   { wchar_t b[16]; wsprintfW(b, L"%d", g_draft.transparent); SetWindowTextW(g_thAlpha, b); }
+    if (g_thW)       { wchar_t b[16]; wsprintfW(b, L"%d", g_draft.width);       SetWindowTextW(g_thW, b); }
+    if (g_thH)       { wchar_t b[16]; wsprintfW(b, L"%d", g_draft.height);      SetWindowTextW(g_thH, b); }
+    if (g_thSize)    { wchar_t b[16]; wsprintfW(b, L"%d", g_draft.fontSize);    SetWindowTextW(g_thSize, b); }
+    if (g_thBold)    SendMessageW(g_thBold, BM_SETCHECK, g_draft.fontBold ? BST_CHECKED : BST_UNCHECKED, 0);
+    if (g_thFontCombo) {   // keep a custom family visible, never fight the user
+        int s = (int)SendMessageW(g_thFontCombo, CB_FINDSTRING, (WPARAM)-1,
+                                  (LPARAM)g_draft.fontName.c_str());
+        if (s != CB_ERR) SendMessageW(g_thFontCombo, CB_SETCURSEL, s, 0);
+    }
+    for (int i = 0; i < 4; ++i) if (g_thSw[i]) InvalidateRect(g_thSw[i], nullptr, TRUE);
+    if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE);
+}
+static void ThPick(const Theme& t) {           // combo selection -> editor + shared push
+    g_draftTheme = t;
+    if (t.alpha >= 0)      g_draft.transparent = t.alpha;
+    if (!t.fontName.empty()) g_draft.fontName = t.fontName;
+    if (t.fontSize > 0)    g_draft.fontSize = t.fontSize;
+    if (t.fontBold >= 0)   g_draft.fontBold = t.fontBold != 0;
+    if (t.w > 0)           g_draft.width = t.w;
+    if (t.h > 0)           g_draft.height = t.h;
+    g_draft.theme = t.name;
+    ThResync();
+}
+static void ThSaveAs(std::wstring name) {
+    name = Trim(name);
+    for (auto& c : name) if (wcschr(L"\\/:*?\"<>|", c)) c = L'_';
+    if (name.empty()) { MessageBeep(MB_ICONWARNING); return; }
+    for (int i = 0; i < kThemeCount; ++i)      // never shadow a built-in
+        if (_wcsicmp(kThemes[i].name.c_str(), name.c_str()) == 0) { name += L"-copy"; break; }
+    CreateDirectoryW(ThemeDirW().c_str(), nullptr);
+    std::wstring f = ThemeFileW(name);
+    WritePrivateProfileStringW(L"Theme", nullptr, nullptr, f.c_str());   // clean slate
+    auto W = [&](const wchar_t* k, const wchar_t* v) {
+        WritePrivateProfileStringW(L"Theme", k, v, f.c_str()); };
+    auto hex = [](COLORREF c) {                // static per call-site: fine here
+        static wchar_t s[8][16]; static int n = 0; n = (n + 1) & 7;
+        swprintf(s[n], 16, L"%06X", (unsigned)GetRValue(c) << 16 |
+                                   (unsigned)GetGValue(c) << 8 | (unsigned)GetBValue(c));
+        return s[n]; };
+    W(L"Bg", hex(g_draftTheme.bg));
+    W(L"Fg", hex(g_draftTheme.fg));
+    W(L"Accent", hex(g_draftTheme.accent));
+    if (g_draftTheme.border != CLR_NONE) W(L"Border", hex(g_draftTheme.border));
+    wchar_t b[24];
+    if (g_draftTheme.borderW >= 0) { swprintf(b, 24, L"%d", g_draftTheme.borderW); W(L"BorderWidth", b); }
+    if (g_draftTheme.alpha   >= 0) { swprintf(b, 24, L"%d", g_draftTheme.alpha);   W(L"Alpha", b); }
+    if (!g_draftTheme.fontName.empty()) W(L"FontName", g_draftTheme.fontName.c_str());
+    if (g_draftTheme.fontSize  >  0) { swprintf(b, 24, L"%d", g_draftTheme.fontSize); W(L"FontSize", b); }
+    if (g_draftTheme.fontBold  >= 0) { swprintf(b, 24, L"%d", g_draftTheme.fontBold); W(L"FontBold", b); }
+    if (g_draftTheme.w         >  0) { swprintf(b, 24, L"%d", g_draftTheme.w); W(L"Width", b); }
+    if (g_draftTheme.h         >  0) { swprintf(b, 24, L"%d", g_draftTheme.h); W(L"Height", b); }
+    LoadThemes();
+    g_draftTheme.name = name;
+    g_draft.theme = name;
+    ThFillCombo(); ThResync();
+    LogInfo(L"theme: saved themes\\" + name + L".theme.ini");
+}
+static void ThDeleteSel() {
+    int sel = (int)SendMessageW(g_themeCombo, CB_GETCURSEL, 0, 0);
+    if (sel < kThemeCount) { MessageBeep(MB_ICONWARNING); return; }   // built-ins are permanent
+    std::wstring name = ThemeAt(sel).name;
+    DeleteFileW(ThemeFileW(name).c_str());
+    LoadThemes();                                                      // file is re-creatable
+    g_draftTheme = ThemeAt(0);
+    g_draft.theme = kThemes[0].name;
+    ThFillCombo(); ThResync();
+    LogInfo(L"theme: deleted themes\\" + name + L".theme.ini");
 }
 
 // ---------------------------------------------------------------- aliases page
@@ -2717,7 +2938,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_DRAWITEM: {
         LPDRAWITEMSTRUCT di = (LPDRAWITEMSTRUCT)l;
         if (g_themePrev && di->hwndItem == g_themePrev) {   // theme preview card
-            const Theme& t = kThemes[ThemeFromName(g_draft.theme)];
+            const Theme& t = g_draftTheme;                 // v0.15: live studio draft
             HBRUSH b = CreateSolidBrush(t.bg);
             FillRect(di->hDC, &di->rcItem, b);
             DeleteObject(b);
@@ -2725,11 +2946,24 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             bar.bottom = bar.top + 4;
             HBRUSH ab = CreateSolidBrush(t.accent);
             FillRect(di->hDC, &bar, ab);
-            FrameRect(di->hDC, &di->rcItem, ab);
             DeleteObject(ab);
-            HFONT f = CreateFontW(-16, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+            if (t.borderW > 0) {                           // frame the theme asks for
+                COLORREF bc = (t.border != CLR_NONE) ? t.border : t.accent;
+                HBRUSH fb = CreateSolidBrush(bc);
+                RECT fr = di->rcItem;
+                int bw = t.borderW > 4 ? 4 : t.borderW;
+                for (int i = 0; i < bw; ++i) { FrameRect(di->hDC, &fr, fb); InflateRect(&fr, -1, -1); }
+                DeleteObject(fb);
+            } else {
+                FrameRect(di->hDC, &di->rcItem, ab);
+            }
+            const wchar_t* fam = t.fontName.empty() ? L"Consolas" : t.fontName.c_str();
+            int px = 16;
+            if (t.fontSize > 0) { px = MulDiv(t.fontSize, 96, 72); if (px > 30) px = 30; if (px < 10) px = 10; }
+            HFONT f = CreateFontW(-px, 0, 0, 0,
+                                  (t.fontBold > 0) ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                                   OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
-                                  FIXED_PITCH | FF_MODERN, L"Consolas");
+                                  FIXED_PITCH | FF_MODERN, fam);
             HFONT oldF = (HFONT)SelectObject(di->hDC, f);
             SetBkMode(di->hDC, TRANSPARENT);
             int tx = di->rcItem.left + 12, ty = di->rcItem.top + 24;
@@ -2740,6 +2974,26 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             TextOutW(di->hDC, tx + 22, ty, s.c_str(), (int)s.size());
             SelectObject(di->hDC, oldF);
             DeleteObject(f);
+            return TRUE;
+        }
+        for (int i = 0; i < 4; ++i) {                       // color patch buttons
+            if (!g_thSw[i] || di->hwndItem != g_thSw[i]) continue;
+            COLORREF c = i == 0 ? g_draftTheme.bg : i == 1 ? g_draftTheme.fg :
+                         i == 2 ? g_draftTheme.accent : g_draftTheme.border;
+            if (c == CLR_NONE) c = RGB(0x80, 0x80, 0x80);   // "Border" unset = gray
+            HBRUSH b = CreateSolidBrush(c);
+            FillRect(di->hDC, &di->rcItem, b);
+            DeleteObject(b);
+            wchar_t hx[16];
+            if (i == 3 && g_draftTheme.border == CLR_NONE) lstrcpyW(hx, L"\u2014");
+            else swprintf(hx, 16, L"%02X%02X%02X", GetRValue(c), GetGValue(c), GetBValue(c));
+            SetBkMode(di->hDC, TRANSPARENT);
+            SetTextColor(di->hDC, ReadableMix(c, RGB(0, 0, 0), 88));
+            SIZE sz; GetTextExtentPoint32W(di->hDC, hx, (int)wcslen(hx), &sz);
+            TextOutW(di->hDC, di->rcItem.left + (di->rcItem.right - di->rcItem.left - sz.cx) / 2,
+                     di->rcItem.top + (di->rcItem.bottom - di->rcItem.top - sz.cy) / 2,
+                     hx, (int)wcslen(hx));
+            FrameRect(di->hDC, &di->rcItem, (HBRUSH)GetStockObject(GRAY_BRUSH));
             return TRUE;
         }
         break;
@@ -2753,12 +3007,11 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         // v0.13: previews must follow the combo instantly - the user tries
         // schemes/fonts out BEFORE pressing Apply (store() alone was too late).
+        // v0.15: picking a theme also loads it into the studio (colors/border)
+        // and pushes alpha/font/geometry into g_draft.
         if (src == g_themeCombo && code == CBN_SELCHANGE) {
             int sel = (int)SendMessageW(src, CB_GETCURSEL, 0, 0);
-            if (sel >= 0 && sel < kThemeCount) {
-                g_draft.theme = kThemes[sel].name;
-                if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE);
-            }
+            ThPick(ThemeAt(sel < 0 ? 0 : sel));
             return 0;
         }
         if (src == g_fontCombo && code == CBN_SELCHANGE) {
@@ -2771,9 +3024,33 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         }
         if (code == BN_CLICKED) {
+            // v0.15 theme studio: click a color patch -> ChooseColorW
+            for (int i = 0; i < 4; ++i) {
+                if (src != g_thSw[i]) continue;
+                COLORREF init = i == 0 ? g_draftTheme.bg : i == 1 ? g_draftTheme.fg :
+                                i == 2 ? g_draftTheme.accent :
+                                (g_draftTheme.border != CLR_NONE ? g_draftTheme.border : g_draftTheme.accent);
+                static COLORREF cust[16] = {};
+                CHOOSECOLORW cc = { sizeof(cc) };
+                cc.hwndOwner = h;
+                cc.Flags = CC_RGBINIT | CC_FULLOPEN;
+                cc.lpCustColors = cust;
+                cc.rgbResult = init;
+                if (ChooseColorW(&cc)) {
+                    if (i == 0) g_draftTheme.bg = cc.rgbResult;
+                    else if (i == 1) g_draftTheme.fg = cc.rgbResult;
+                    else if (i == 2) g_draftTheme.accent = cc.rgbResult;
+                    else g_draftTheme.border = cc.rgbResult;
+                    InvalidateRect(g_thSw[i], nullptr, TRUE);
+                    if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE);
+                }
+                return 0;
+            }
             if (src == g_alLb) return 0;
             if (src) {
                 int bid = (int)GetWindowLongW(src, GWLP_ID);   // locale-proof dispatch
+                if (bid == IDB_TH_SAVEAS) { ThSaveAs(g_thName ? GetText(g_thName) : L""); return 0; }
+                if (bid == IDB_TH_DEL)    { ThDeleteSel(); return 0; }
                 if (bid == IDB_OK || bid == IDB_APPLY) {
                     UiCollect();
                     WriteDraftIni();
@@ -2927,7 +3204,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     wc.lpfnWndProc = DefWindowProcW;
     RegisterClassW(&wc);
 
+    LoadThemes();   // v0.15: the studio combo must see fresh themes\*.theme.ini
     g_draft = g_set; g_draftHk = g_hotkey; g_draftAliases = g_aliases;
+    g_draftTheme = ThemeAt(ThemeFromName(g_set.theme));
     g_aliasSel = 0;
 
     NONCLIENTMETRICSW ncm = { sizeof(ncm) };
@@ -3184,24 +3463,59 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     MkButton(g_setPage[PG_ENV], L(STR_EN_DELVAR), vx, 252, 84, IDB_EN_DELETEVAR);
     MkLabel(g_setPage[PG_ENV], L(STR_EN_NOTE), vx, 286, 210);
 
-    // --- Theme (cozy look: console + status strip + tray badge colors)
+    // --- Theme (v0.15 theme studio: colors, border thickness, alpha, font, size)
     y = 12;
     MkLabel(g_setPage[PG_THEME], L(STR_TH_SCHEME), 16, y + 2, 110);
-    {
-        const wchar_t* it[kThemeCount];
-        for (int i = 0; i < kThemeCount; ++i) it[i] = kThemes[i].name;
-        g_themeCombo = MkCombo(g_setPage[PG_THEME], 130, y, 180, it, kThemeCount);
-        Bind([]{ SendMessageW(g_themeCombo, CB_SETCURSEL,
-                              ThemeFromName(g_draft.theme), 0);
-                 if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE); },
-             []{ int sel = (int)SendMessageW(g_themeCombo, CB_GETCURSEL, 0, 0);
-                 if (sel < 0) sel = 0;
-                 g_draft.theme = kThemes[sel].name;
-                 if (g_themePrev) InvalidateRect(g_themePrev, nullptr, TRUE); });
-    }
+    g_themeCombo = MkOn(g_setPage[PG_THEME], L"COMBOBOX", L"",
+                        WS_VSCROLL | CBS_DROPDOWNLIST, 130, y, 150, 200);
+    SetWindowLongPtrW(g_themeCombo, GWLP_ID, IDT_TH_COMBO);   // testable by id
+    MkButton(g_setPage[PG_THEME], L(STR_TH_SAVEAS), 292, y, 104, IDB_TH_SAVEAS);
+    MkButton(g_setPage[PG_THEME], L(STR_TH_DEL), 402, y, 52, IDB_TH_DEL);
+    ThFillCombo();
+    Bind([]{ ThFillCombo(); ThResync(); },
+         []{ int sel = (int)SendMessageW(g_themeCombo, CB_GETCURSEL, 0, 0);
+             if (sel < 0) sel = 0;
+             g_draft.theme = ThemeAt(sel).name; });
     y += 30;
-    g_themePrev = MkOn(g_setPage[PG_THEME], L"STATIC", L"", SS_OWNERDRAW, 16, y, 430, 96);
-    MkLabel(g_setPage[PG_THEME], L(STR_TH_HINT), 16, y + 102, 430);
+    g_themePrev = MkOn(g_setPage[PG_THEME], L"STATIC", L"", SS_OWNERDRAW, 16, y, 438, 56);
+    y += 62;                                                     // 104
+    MkLabel(g_setPage[PG_THEME], L(STR_TH_NAMELBL), 16, y + 2, 150);
+    g_thName = MkEdit(g_setPage[PG_THEME], L"", 171, y, 150);    // "Save as..." target
+    SetWindowLongPtrW(g_thName, GWLP_ID, IDT_TH_NAME);            // testable by id
+    {
+        const int rows[4] = { 130, 154, 178, 202 };              // color patches
+        const StrId strs[4] = { STR_TH_BG, STR_TH_TEXT, STR_TH_ACCENT, STR_TH_BORDER };
+        for (int i = 0; i < 4; ++i) {
+            MkLabel(g_setPage[PG_THEME], L(strs[i]), 16, rows[i] + 2, 150);
+            g_thSw[i] = MkOn(g_setPage[PG_THEME], L"STATIC", L"",
+                             SS_OWNERDRAW | SS_NOTIFY, 175, rows[i], 110, 20);
+        }
+    }
+    // border thickness belongs to the theme file; alpha/font/geometry are the
+    // shared look fields — Apply persists them as plain [Show]/[Font] keys.
+    g_thBorderW = NumT(g_setPage[PG_THEME], L(STR_TH_BORDERW), 16, 226, &Theme::borderW, 0, 24);
+    g_thBold    = CkB(g_setPage[PG_THEME], L(STR_FO_BOLD), 262, 228, &Settings::fontBold);
+    g_thAlpha   = NumB(g_setPage[PG_THEME], L(STR_CO_ALPHA), 16, 252, &Settings::transparent, 30, 255);
+    g_thW       = NumB(g_setPage[PG_THEME], L(STR_CO_WIDTH), 262, 252, &Settings::width, 200, 7680, false, 90, 56);
+    g_thH       = NumB(g_setPage[PG_THEME], L(STR_CO_HEIGHT), 16, 278, &Settings::height, 24, 2160, false, 90, 56);
+    MkLabel(g_setPage[PG_THEME], L(STR_FO_NAME), 16, 302, 150);
+    g_thFontCombo = MkOn(g_setPage[PG_THEME], L"COMBOBOX", L"",
+                         CBS_DROPDOWNLIST | WS_VSCROLL, 171, 300, 150, 300);
+    Bind([=]{
+        SendMessageW(g_thFontCombo, CB_RESETCONTENT, 0, 0);
+        for (auto& f : FontFamilies())
+            SendMessageW(g_thFontCombo, CB_ADDSTRING, 0, (LPARAM)f.c_str());
+        int i = (int)SendMessageW(g_thFontCombo, CB_FINDSTRINGEXACT, -1,
+                                  (LPARAM)g_draft.fontName.c_str());
+        if (i == CB_ERR)
+            i = (int)SendMessageW(g_thFontCombo, CB_ADDSTRING, 0, (LPARAM)g_draft.fontName.c_str());
+        SendMessageW(g_thFontCombo, CB_SETCURSEL, i, 0); },
+    [=]{ wchar_t b[LF_FACESIZE] = {};
+         int s = (int)SendMessageW(g_thFontCombo, CB_GETCURSEL, 0, 0);
+         if (s != CB_ERR && SendMessageW(g_thFontCombo, CB_GETLBTEXT, s, (LPARAM)b) > 0)
+             g_draft.fontName = b; });
+    g_thSize = NumB(g_setPage[PG_THEME], L(STR_FO_SIZE), 330, 302, &Settings::fontSize, 6, 72, false, 60, 50);
+    MkLabel(g_setPage[PG_THEME], L(STR_TH_PORTNOTE), 16, 330, 440);
 
     // --- Language (20 UI languages; Apply switches immediately, Arabic RTL)
     MkLabel(g_setPage[PG_LANG], L(STR_LA_LABEL), 16, 14, 430);
@@ -3419,6 +3733,11 @@ static void LiveApply(HWND mainWnd) {
     else if (g_set.priority == L"realtime") pc = REALTIME_PRIORITY_CLASS;
     SetPriorityClass(GetCurrentProcess(), pc);
     ApplyThemeVisual();                    // effective bg/fg/accent from [Theme]/[Color]
+    if (mainWnd) {                         // v0.15: custom frame + edit inset redo
+        InvalidateRect(mainWnd, nullptr, TRUE);
+        RECT rc; GetClientRect(mainWnd, &rc);
+        SendMessageW(mainWnd, WM_SIZE, 0, MAKELPARAM(rc.right - rc.left, rc.bottom - rc.top));
+    }
     g_trayErr = false;
     FreeTrayIcons();                       // badge follows the new accent
     SetTrayVisual();
@@ -3686,7 +4005,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_SIZE: {
         // keep the edit centered in the space ABOVE the 20px status strip;
         // height follows the font (UX A4: a fixed 24 clipped the 18pt glyphs)
-        int above = (int)HIWORD(lp) - SB_H;
+        // v0.15: a custom theme may draw a bw-px frame -> the edit sits inside it
+        int bw = g_borderW > 0 ? g_borderW : 0;
+        int above = (int)HIWORD(lp) - SB_H - bw;
         if (above < 16) above = 16;
         int eh = 24;
         if (HFONT f = (HFONT)SendMessageW(g_edit, WM_GETFONT, 0, 0)) {
@@ -3697,7 +4018,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             eh = (int)tm.tmHeight + 6;
             if (eh > above) eh = above;
         }
-        MoveWindow(g_edit, 2, (above - eh) / 2, LOWORD(lp) - 4, eh, TRUE);
+        MoveWindow(g_edit, 2 + bw, bw + (above - eh) / 2, LOWORD(lp) - 4 - 2 * bw, eh, TRUE);
         return 0;
     }
     case WM_TIMER:
@@ -3714,6 +4035,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT rc; GetClientRect(hWnd, &rc);
         if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
         if (g_sbFont) PaintStatusBar(dc, rc);
+        PaintFrame(dc, rc);                     // v0.15 custom-theme frame on top
         EndPaint(hWnd, &ps);
         return 0;
     }
@@ -3722,12 +4044,14 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT rc; GetClientRect(hWnd, &rc);
         if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
         if (g_sbFont) PaintStatusBar(dc, rc);
+        PaintFrame(dc, rc);
         return 0;
     }
     case WM_ERASEBKGND:
         if (g_bgBrush) {
             RECT rc; GetClientRect(hWnd, &rc);
             FillRect((HDC)wp, &rc, g_bgBrush);
+            PaintFrame((HDC)wp, rc);
             return 1;
         }
         break;
@@ -3959,7 +4283,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     else if (g_set.priority == L"high")     pc = HIGH_PRIORITY_CLASS;
     else if (g_set.priority == L"realtime") pc = REALTIME_PRIORITY_CLASS;
     SetPriorityClass(GetCurrentProcess(), pc);
-    ApplyThemeVisual();   // theme + [Color] -> g_effBg/g_effFg/g_accent + g_bgBrush
+    LoadThemes();         // v0.15: themes\*.theme.ini (portable custom themes)
+    ApplyThemeVisual();   // theme + [Color] -> g_effBg/g_effFg/g_accent + frame + g_bgBrush
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc   = WndProc;

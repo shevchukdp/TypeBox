@@ -159,9 +159,19 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
   Submit keeps the console open for plugin answers; `plugin: … handled` log lines;
   right-click menu on the console (TypeAndRun-style, 20 languages).
 
-## v0.15.0 — Theme studio (user request: "create your own themes")
+## v0.15.0 — Theme studio (user request: "create your own themes") — **shipped**
 
 | # | Feature | Size |
 |---|---|---|
-| 78 | `themes\<name>.theme.ini` portable presets: bg/fg/accent/border colors (ChooseColorW pickers), border thickness px, alpha, font family/size/bold, console W/H — Save as…/Delete on the Theme page; combo lists built-ins + customs; Apply pushes font/alpha/geometry to INI, colors live in the theme file with `[Color]` explicit-wins kept | L |
+| 78 | ✅ `themes\<name>.theme.ini` portable presets: bg/fg/accent/border colors (ChooseColorW pickers), border thickness px, alpha, font family/size/bold, console W/H — Save as…/Delete on the Theme page; combo lists built-ins + customs; Apply pushes font/alpha/geometry to INI, colors live in the theme file with `[Color]` explicit-wins kept | L |
+
+## v0.16.0 — next plugin wave + quality backlog
+
+| # | Feature | Size |
+|---|---|---|
+| 4 | cliphist — clipboard history plugin (gallery #4): `clip 1..N` rows, `[ClipHist] Rows` | M |
+| 5 | taskman — process control plugin (gallery #5): `ps firefox`, `kill firefox`, `[Taskman] Confirm` | M |
+| 72 | ClickFix-style guard: offer "explain this error" only when the line really looks like an error | S |
+| 73 | `Scripts\` folder auto-registration (any `.bat/.ps1/.py` becomes a command) | S |
+| 75 | frecency ranking in the drop-down + `TypeBox.local.ini` override + danger-confirm for destructive aliases | M |
 

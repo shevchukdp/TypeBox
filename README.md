@@ -69,6 +69,10 @@ Working today (v0.12.0):
   preview), GDI-drawn tray badge (accent rim, state dot), console status strip
   (counts · chips · clock) and a traffic light previewing Enter: 🟢 your alias/~/cmd,
   🟡 PATH/file/URL/plugin, 🔴 shell catch-all — per keystroke, localized labels
+- ✅ **Theme studio** (v0.15) — create your own themes without touching INI by hand:
+  native color pickers (bg/text/accent/border), border thickness, transparency, console
+  width/height, font family/size/bold, live preview card; themes save as portable
+  `themes\<name>.theme.ini` files — copy the folder, take your looks anywhere
 - ✅ **Localization — 20 languages, everywhere** (en ru uk de fr es pt it complete +
   zh ja ko ar tr pl vi hi id sw af am core): tray, balloons, help/about, whole settings
   dialog; `[UI] Language`, Language page, Arabic RTL, CJK/RTL font auto-suggestion,

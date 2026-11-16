@@ -62,6 +62,9 @@ enum StrId {
     STR_CTX_SETTINGS, STR_CTX_ALIASES, STR_CTX_PLUGINS, STR_CTX_THEME, STR_CTX_LANG,
     STR_CTX_RELOAD, STR_CTX_INIDIR, STR_CTX_ABOUT, STR_CTX_HELP, STR_CTX_HIDE,
     STR_CTX_EXIT,
+    // v0.15: theme studio — custom themes (colors, border, alpha, font, size).
+    STR_TH_BG, STR_TH_TEXT, STR_TH_ACCENT, STR_TH_BORDER, STR_TH_BORDERW,
+    STR_TH_NAMELBL, STR_TH_SAVEAS, STR_TH_DEL, STR_TH_PORTNOTE,
     STR_LAST
 };
 
@@ -102,7 +105,9 @@ static const char* const kKeyNames[STR_LAST] = {
     "dd_show", "dd_rows", "dd_empty", "ft_fuzzy", "cue", "an_web",
     "ctx_undo", "ctx_cut", "ctx_copy", "ctx_paste", "ctx_selall",
     "ctx_settings", "ctx_aliases", "ctx_plugins", "ctx_theme", "ctx_lang",
-    "ctx_reload", "ctx_inidir", "ctx_about", "ctx_help", "ctx_hide", "ctx_exit"
+    "ctx_reload", "ctx_inidir", "ctx_about", "ctx_help", "ctx_hide", "ctx_exit",
+    "th_bg", "th_text", "th_accent", "th_border", "th_borderw",
+    "th_name", "th_saveas", "th_del", "th_portnote"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -994,6 +999,64 @@ static const wchar_t* const kCtxItems[LANG_COUNT][16] = {
 /* am */ { C, C, C, C, C, C, C, C, C, C, C, C, C, C, C, C },
 };
 
+// v0.15 theme studio strings. Columns == STR_TH_BG .. STR_TH_PORTNOTE.
+static const wchar_t* const kThItems[LANG_COUNT][9] = {
+/* en */ { L"Background", L"Text", L"Accent", L"Border", L"Border width (px)",
+           L"New theme name", L"Save as...", L"Delete",
+           L"Custom themes live in themes\\<name>.theme.ini - portable with the folder." },
+/* ru */ { L"Фон", L"Текст", L"Акцент", L"Рамка", L"Толщина рамки (px)",
+           L"Имя новой темы", L"Сохранить как…", L"Удалить",
+           L"Свои темы лежат в themes\\<имя>.theme.ini и переносятся вместе с папкой." },
+/* uk */ { L"Фон", L"Текст", L"Акцент", L"Рамка", L"Товщина рамки (px)",
+           L"Ім'я нової теми", L"Зберегти як…", L"Видалити",
+           L"Власні теми лежать у themes\\<ім'я>.theme.ini й переносяться з папкою." },
+/* de */ { L"Hintergrund", L"Text", L"Akzent", L"Rahmen", L"Rahmenbreite (px)",
+           L"Neuer Theme-Name", L"Speichern unter…", L"Löschen",
+           L"Eigene Themes liegen in themes\\<name>.theme.ini -portabel mit dem Ordner." },
+/* fr */ { L"Arrière-plan", L"Texte", L"Accent", L"Bordure", L"Épaisseur de bordure (px)",
+           L"Nom du nouveau thème", L"Enregistrer sous…", L"Supprimer",
+           L"Les thèmes personnalisés sont dans themes\\<nom>.theme.ini — portables." },
+/* es */ { L"Fondo", L"Texto", L"Acento", L"Borde", L"Grosor del borde (px)",
+           L"Nombre del tema nuevo", L"Guardar como…", L"Eliminar",
+           L"Los temas propios están en themes\\<nombre>.theme.ini - portables." },
+/* pt */ { L"Fundo", L"Texto", L"Destaque", L"Borda", L"Espessura da borda (px)",
+           L"Nome do novo tema", L"Salvar como…", L"Excluir",
+           L"Temas personalizados ficam em themes\\<nome>.theme.ini - portáteis." },
+/* it */ { L"Sfondo", L"Testo", L"Accento", L"Bordo", L"Spessore bordo (px)",
+           L"Nome del nuovo tema", L"Salva come…", L"Elimina",
+           L"i temi personalizzati sono in themes\\<nome>.theme.ini - portabili." },
+/* zh */ { L"背景", L"文字", L"强调色", L"边框", L"边框宽度 (px)",
+           L"新主题名称", L"另存为…", L"删除",
+           L"自制主题保存在 themes\\<名称>.theme.ini，随文件夹一起携带。" },
+/* ja */ { L"背景", L"文字", L"アクセント", L"枠線", L"枠の太さ (px)",
+           L"新しいテーマ名", L"名前を付けて保存…", L"削除",
+           L"自作テーマは themes\\<名前>.theme.ini に保存され、フォルダと一緒に持ち歩けます。" },
+/* ko */ { L"배경", L"텍스트", L"강조색", L"테두리", L"테두리 두께(px)",
+           L"새 테마 이름", L"다른 이름으로 저장…", L"삭제",
+           L"직접 만든 테마는 themes\\<이름>.theme.ini에 저장되어 폴더와 함께 이동합니다." },
+/* ar */ { L"خلفية", L"نص", L"لون مميز", L"حد", L"سماكة الحد (بكسل)",
+           L"اسم السمة الجديد", L"حفظ باسم…", L"حذف",
+           L"السمات المخصصة محفوظة في themes\\<name>.theme.ini وتنتقل مع المجلد." },
+/* tr */ { L"Arka plan", L"Metin", L"Vurgu", L"Kenarlık", L"Kenarlık kalınlığı (px)",
+           L"Yeni tema adı", L"Farklı kaydet…", L"Sil",
+           L"Özel temalar themes\\<ad>.theme.ini içinde klasörle taşınır." },
+/* pl */ { L"Tło", L"Tekst", L"Akcent", L"Obramowanie", L"Grubość obramowania (px)",
+           L"Nazwa nowego motywu", L"Zapisz jako…", L"Usuń",
+           L"Własne motywy są w themes\\<nazwa>.theme.ini - przenośne razem z folderem." },
+/* vi */ { L"Nền", L"Văn bản", L"Nhấn", L"Viền", L"Độ dày viền (px)",
+           L"Tên chủ đề mới", L"Lưu thành…", L"Xóa",
+           L"Chủ đề tự tạo nằm trong themes\\<tên>.theme.ini - di chuyển cùng thư mục." },
+/* hi */ { L"पृष्ठभूमि", L"टेक्स्ट", L"एक्सेंट", L"किनारा", L"किनारे की मोटाई (px)",
+           L"नई थीम का नाम", L"के रूप में सहेजें…", L"हटाएँ",
+           L"अपनी थीम themes\\<नाम>.theme.ini में रहती हैं - फ़ोल्डर के साथ पोर्टेबल।" },
+/* id */ { L"Latar", L"Teks", L"Aksen", L"Bingkai", L"Ketebalan bingkai (px)",
+           L"Nama tema baru", L"Simpan sebagai…", L"Hapus",
+           L"Tema khusus ada di themes\\<nama>.theme.ini - portabel bersama folder." },
+/* sw */ { C, C, C, C, C, C, C, C, C },
+/* af */ { C, C, C, C, C, C, C, C, C },
+/* am */ { C, C, C, C, C, C, C, C, C },
+};
+
 // ---------------------------------------------------------------- runtime state
 static int g_langIdx = LANG_EN;
 static std::map<std::wstring, std::wstring> g_i18nUser;   // key -> override
@@ -1087,6 +1150,13 @@ static const wchar_t* L(int id) {
         const wchar_t* x = kCtxItems[g_langIdx][id - STR_CTX_UNDO];
         if (x && *x) return x;
         x = kCtxItems[LANG_EN][id - STR_CTX_UNDO];   // packs carry no ctx tail
+        if (x && *x) return x;
+        return L"?";
+    }
+    if (id >= STR_TH_BG && id <= STR_TH_PORTNOTE) {
+        const wchar_t* x = kThItems[g_langIdx][id - STR_TH_BG];
+        if (x && *x) return x;
+        x = kThItems[LANG_EN][id - STR_TH_BG];
         if (x && *x) return x;
         return L"?";
     }
