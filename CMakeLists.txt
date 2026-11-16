@@ -42,8 +42,9 @@ foreach(P units codec vol)
 endforeach()
 
 # Gallery waves two+three (v0.16.0/v0.17.0): cliphist needs shell32 for its
-# optional balloon; winlist (v0.17) is pure user32.
-foreach(P cliphist taskman winlist)
+# optional balloon; winlist (v0.17) is pure user32. taskman (v0.19: restart)
+# needs shell32 for ShellExecuteW; pwgen pulls advapi32 for CryptGenRandom.
+foreach(P cliphist taskman winlist pwgen)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -51,6 +52,8 @@ foreach(P cliphist taskman winlist)
     set_target_properties(${P} PROPERTIES PREFIX "")
 endforeach()
 target_link_libraries(cliphist PRIVATE shell32)
+target_link_libraries(taskman PRIVATE shell32)
+target_link_libraries(pwgen   PRIVATE advapi32)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

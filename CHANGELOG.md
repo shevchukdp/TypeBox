@@ -3,6 +3,40 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.19.0] - 2026-11-16
+
+![pwgen](docs/screenshots/console-pwgen.png)
+*Type `pw 20 s` and a cryptographically random password lands in the console
+and on the clipboard - `pwgen.dll`, the eighth plugin, is here: `pw [len] [count] [flags]`
+with `n` digits-only, `s` symbols, `p` pronounceable, `[Pwgen] Len/Symbols/Popup`
+defaults, rejection-sampled `CryptGenRandom` (no modulo bias, never a silent weak fallback).*
+
+### Third plugin wave + grab-and-drag
+
+- 🔑 **pwgen plugin** (`Plugins\pwgen.dll`, gallery #9) - `pw 16`, `pw 20 s`,
+  `pw 16 3` for three candidates (first copied): crypto-random passwords straight
+  into the console with a `[copied]` tail; `[Pwgen] Len=16`, `[Pwgen] Symbols`,
+  `[Pwgen] Popup=1` for the old-school MessageBox.
+- 📊 **taskman 1.1 - `top`** - live CPU ranking from two `GetProcessTimes`
+  samples 300 ms apart: `top`, `top 5`, `top chrome`; no psapi, no admin,
+  console rows (`top: chrome.exe 12.4% (1234), …`).
+- 🔁 **taskman 1.1 - `restart`** - `restart notepad` / `restart 1234`:
+  image path via `QueryFullProcessImageNameW`, terminate, wait, relaunch through
+  the shell - the app comes back on its own.
+- 📌 **cliphist 1.1 - pin** - `clip pin 2` / `clip unpin 2`: a `*`-marked entry
+  rides at the top of the list and survives trimming **and** `Persist` reloads.
+- 🎯 **cliphist 1.1 - paste at caret** - `clip paste 1` hides the console,
+  waits for the keystroke to land somewhere sane and types Ctrl+V where your
+  caret is; `[Clipboard] PasteOnSelect=1` makes plain `clip <n>` do it too.
+- ✋ **Drag the console by its status strip** - press on the 20 px strip and the
+  window follows the mouse through the standard Windows move loop (multi-monitor
+  fine); the spot is remembered for the session, and **every restart returns the
+  console to its INI home position** - `[Show] DragMove` (on by default).
+- 🧪 `test-v0190.ps1`: 38 gates - pwgen grammar incl. length/flag validation,
+  `top` fuel detection against a real CPU burner, restart kill+relaunch pid
+  churn, pin survival under `Max=4` trim pressure, paste-at-caret clipboard
+  proof, and hit-test/position gates for the drag handle.
+
 ## [0.18.0] - 2026-11-16
 
 ![su chip](docs/screenshots/console-su-chip.png)

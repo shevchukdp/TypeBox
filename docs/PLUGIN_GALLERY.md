@@ -283,15 +283,17 @@ hint like `vol 5` (harmless today, useful after the keep-visible fix).
 
 ## 4. cliphist — clipboard history (`cliphist.dll`)
 
-> **Status: shipped in v0.16.0** — implemented as `examples/plugin_cliphist/cliphist.c`
+> **Status: shipped in v0.16.0, 1.1 in v0.19.0** — implemented as `examples/plugin_cliphist/cliphist.c`
 > (console-first: with `[Clipboard] Popup=0` the list answers inside the TypeBox console,
 > never a blocking dialog; `[Clipboard] Persist=1` keeps history across runs in
-> `Plugins\cliphist.dat`).
+> `Plugins\cliphist.dat` — pinned entries survive both trimming and persist;
+> v0.19.1 adds `clip pin/unpin <n>` (the `*` marker in `clip` list) and
+> `clip paste <n>` = copy + hide console + SendInput Ctrl+V at the caret).
 
 | Field | Value |
 |---|---|
 | DLL | `Plugins\cliphist.dll` |
-| Triggers | `clip` (list) · `clip <n>` (re-copy entry n) · `clip clear` · `clip pin <n>` |
+| Triggers | `clip` (list) · `clip <n>` (re-copy entry n) · `clip clear` · `clip pin/unpin <n>` · `clip paste <n>` |
 | Build | `gcc -shared -O2 -static -o cliphist.dll cliphist.c -luser32` |
 | LOC | ~260 |
 
@@ -319,6 +321,7 @@ Entries are stored as `wchar_t*` internally and kept only in RAM by default.
 | `RowChars` | row preview length | `48` |
 | `Persist` | `1` = save/load `Plugins\cliphist.dat` across runs | `0` |
 | `Balloons` | tray balloon after re-copy | `0` |
+| `PasteOnSelect` | `1` = `clip <n>` also hides the console and sends Ctrl+V (like `clip paste <n>` always does) | `0` |
 
 **GetCount/GetString**: `1` — `"clip"`.
 
@@ -358,24 +361,27 @@ rows also work when the user adds arguments after `clip` — not required today.
 
 ## 5. taskman — process list & kill (`taskman.dll`)
 
-> **Status: shipped in v0.16.0** — implemented as `examples/plugin_taskman/taskman.c`
+> **Status: shipped in v0.16.0, 1.1 in v0.19.0** — implemented as `examples/plugin_taskman/taskman.c`
 > (console-first: results are console lines; the only popup is the one kill confirmation,
-> and `[Taskman] Confirm=0` removes it too — automation-safe).
+> and `[Taskman] Confirm=0` removes it too — automation-safe. v0.19.0 adds
+> `top [n|filter]` — live CPU ranking from two `GetProcessTimes` samples 300 ms apart,
+> integer tenths, no psapi — and `restart <name|pid>`: image path via
+> `QueryFullProcessImageNameW`, terminate, wait 2 s, `ShellExecuteW` relaunch).
 
 | Field | Value |
 |---|---|
 | DLL | `Plugins\taskman.dll` |
-| Triggers | `kill <name>` (terminate) · `task <substr>` (list) |
-| Build | `gcc -shared -O2 -static -o taskman.dll taskman.c -lkernel32 -luser32` |
-| LOC | ~300 |
+| Triggers | `kill <name>` (terminate) · `task <substr>` (list) · `top [n|filter]` (CPU ranking) · `restart <name|pid>` (kill + relaunch) |
+| Build | `gcc -shared -O2 -static -o taskman.dll taskman.c -lkernel32 -luser32 -lshell32` |
+| LOC | ~470 |
 
 **TInfo**
 
 | Field | Value |
 |---|---|
 | name | `Task Manager Lite` |
-| version | `1.0` |
-| description | `kill <proc> / task <filter> - list processes and kill by name` |
+| version | `1.1` |
+| description | `kill <proc> / task <filter> / top / restart <proc> - list, kill, CPU rank, relaunch` |
 
 **What it does.** `kill notepad` terminates every process whose image name
 matches (exact, case-insensitive, `.exe` optional) after one `MB_YESNO`
@@ -392,8 +398,9 @@ never walks the toolhelp snapshot.
 | `CompleteArgs` | `1` = offer bare process names as argument ET rows (see two-mode caveat) | `1` |
 | `Confirm` | `0` = kill without the Yes/No popup (power users) | `1` |
 | `ListMax` | max rows in the `task` window | `300` |
+| `TopN` | rows shown by `top` (1..30) | `8` |
 
-**GetCount/GetString**: `2` — `"kill"`, `"task"`.
+**GetCount/GetString**: `4` — `"kill"`, `"task"`, `"top"`, `"restart"`.
 
 **Example dropdown rows** (two-mode, because ET only sees the caret word):
 
@@ -620,12 +627,17 @@ of scope.)
 
 ## 9. pwgen — password generator (`pwgen.dll`)
 
+> **Status: shipped in v0.19.0** — implemented as `examples/plugin_pwgen/pwgen.c`
+> (console-first: the answer lands in the console with a `[copied]` tail,
+> `[Pwgen] Popup=1` opts into the old-school MessageBox; grammar extended with
+> an optional `count` argument: `pw [len] [count] [flags]`).
+
 | Field | Value |
 |---|---|
 | DLL | `Plugins\pwgen.dll` |
-| Triggers | `pw [len] [flags]` e.g. `pw 16`, `pw 20 n`, `pw 8 nsp` |
+| Triggers | `pw [len] [count] [flags]` e.g. `pw 16`, `pw 20 n`, `pw 8 nsp`, `pw 16 3` |
 | Build | `gcc -shared -O2 -static -o pwgen.dll pwgen.c -ladvapi32 -luser32` |
-| LOC | ~140 |
+| LOC | ~350 |
 
 **TInfo**
 
@@ -633,7 +645,7 @@ of scope.)
 |---|---|
 | name | `Password Generator` |
 | version | `1.0` |
-| description | `pw 16 - crypto-random password to clipboard (n=digits s=symbols)` |
+| description | `pw 16 - crypto-random password to clipboard (n=digits s=symbols p=pronounceable)` |
 
 **What it does.** Generates a cryptographically random password with
 `CryptAcquireContext(CRYPT_VERIFYCONTEXT)` + `CryptGenRandom` (advapi32) and
@@ -647,9 +659,9 @@ typed line should not linger in history (see the `[PluginState]` note).
 
 | `[Pwgen]` key | Meaning | Default |
 |---|---|---|
-| `Len` | default length | `16` |
+| `Len` | default length (4..128) | `16` |
 | `Symbols` | symbol alphabet | `` !@#$%^&*()-_=+[]{}?`` (ASCII set) |
-| `Popup` | `0` = clipboard only | `1` |
+| `Popup` | `1` = also show a MessageBox with the result (console-first default) | `0` |
 
 **GetCount/GetString**: `1` — `"pw"`.
 

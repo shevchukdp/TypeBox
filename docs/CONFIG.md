@@ -130,6 +130,7 @@ startup logs `local config: on (TypeBox.local.ini)`. Note: plugins read
 | `TrayIcon` / `BalloonTips` | tray presence / notifications | `1` / `1` |
 | `Transparent` | window alpha `0..255` | `255` |
 | `AutoHide` / `AutoHideValue` | auto-hide after N idle seconds | `0` / `30` |
+| `DragMove` | `1` = press-and-drag the 20 px status strip to move the console; the spot is remembered for the session, the INI position is restored on every restart | `1` |
 | `Priority` | process class: `idle` · `normal` · `high` · `realtime` | `normal` |
 
 ### `[Type]` (EasyType completion)
@@ -225,9 +226,10 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `units` | `conv 10 km mi` · `hex 255` → `FF` · `bin 0xFF` · `dec 0xFF` · `oct 777` | `[Units] Popup=1 CopyResult=1` |
 | `codec` | `b64enc/b64dec` · `urlenc/urldec` · `hexenc/hexdec` | `[Codec] Popup=1 CopyResult=1` |
 | `vol` | `vol +` · `vol -` · `vol mute` · `vol 3` | `[Vol] Step=1 Beeps=0` |
-| `cliphist` | `clip` (list) · `clip <n>` re-copy · `clip clear` — CF_UNICODETEXT watcher in RAM | `[Clipboard] Max=20 PollMs=500 RowChars=48 Popup=1 Persist=0 Balloons=0` |
-| `taskman` | `task <substr>` (list) · `kill <name|pid>` | `[Taskman] Confirm=1 ListMax=300` |
+| `cliphist` | `clip` (list, `*` = pinned) · `clip <n>` re-copy · `clip pin/unpin <n>` · `clip paste <n>` (hide + Ctrl+V at caret) · `clip clear` | `[Clipboard] Max=20 PollMs=500 RowChars=48 Popup=1 Persist=0 Balloons=0 PasteOnSelect=0` |
+| `taskman` | `task <substr>` (list) · `kill <name|pid>` · `top [n|filter]` (CPU ranking) · `restart <name|pid>` | `[Taskman] Confirm=1 ListMax=300 TopN=8` |
 | `winlist` | `win <title>` activate · `win` (list) · `win <n>` (pick last filter) | `[Winlist] AltTrick=1 Titles=9` |
+| `pwgen` | `pw` · `pw 20` · `pw 20 3` · `pw 16 snp` (letters+digits / `n` digits / `s` symbols / `p` pronounceable) — first result copied to clipboard | `[Pwgen] Len=16 Symbols=!@#$%^&*()-_=+[]{}? Popup=0` |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per

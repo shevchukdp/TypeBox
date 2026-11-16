@@ -98,9 +98,11 @@ Working today (v0.12.0):
 - ✅ **Plugin host — TypeAndRun ABI-compatible** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`):
   drop DLLs into the portable `Plugins\` folder; ships ready-to-use **units** (`conv 10 km mi`,
   `hex 255`→`FF`), **codec** (`b64enc`, `urlenc`, `hexdec`), **vol** (`vol + / mute / 3`),
-  **cliphist** (`clip 3` re-copies the 3rd last copied text), **taskman** (`task chrome`,
-  `kill notepad`) and **winlist** (`win notepad` raises the window), plus the calculator
-  example in [`examples/plugin_calc`](examples/plugin_calc/calc.c)
+  **cliphist** (`clip 3` re-copies the 3rd last copied text, `clip pin 2` keeps an entry safe
+  from trimming, `clip paste 1` pastes it at the caret), **taskman** (`task chrome`,
+  `kill notepad`, `top` live CPU ranking, `restart notepad` kill+relaunch) and
+  **winlist** (`win notepad` raises the window), plus **pwgen** (`pw 20 s` strong passwords,
+  `[Pwgen]` defaults) and the calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c)
   — [docs/PLUGIN_API.md](docs/PLUGIN_API.md), specs in [docs/PLUGIN_GALLERY.md](docs/PLUGIN_GALLERY.md)
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
@@ -122,6 +124,10 @@ Working today (v0.12.0):
 - 🖱️ **Console context menu** (like the original TypeAndRun) — right-click the console:
   Undo/Cut/Copy/Paste/Select All · Settings · Aliases · Plugins · Theme · Language ·
   Reload config · Open config folder · About · Help · Hide · Exit — all 20 languages
+- ✋ **Grab and drag the console** (v0.19) — press and drag the 20 px status strip at the
+  bottom of the console and the whole window follows the mouse (standard Windows move,
+  works across monitors); the spot is remembered for the session, and a restart always
+  brings the console back to its INI home position (`[Show] X/Y`, `[Show] DragMove`)
 - ✅ **EasyType completion** — `Tab` completes from commands/aliases/sys-aliases/plugins/history, cycles on repeat
 - ✅ Tray icon + balloon tips · sounds per execution type · undo (`Ctrl+Z`)
 - ✅ Persistent history (`↑/↓`, portable `History.dat`, per-type toggles) · single instance + `WM_COPYDATA` IPC

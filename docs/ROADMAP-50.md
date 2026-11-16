@@ -183,14 +183,15 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
 | 77 | ✅ danger-confirm for destructive commands (`del`, `format`, `shutdown`, `reg delete`, `rm -r`…) reusing the v0.16 guard UI — aliases, script args and shell alike | S |
 | 78 | ✅ winlist — window switcher plugin (gallery #6): `win <title>`, `win <n>`, `[Winlist] AltTrick/Titles` | M |
 
-## v0.18.0 — third plugin wave backlog
+## v0.18.0 - third plugin wave backlog - **shipped in v0.19.0**
 
 | # | Feature | Size |
 |---|---|---|
-| 81 | ✅ `su` / `sudo` / `/su` — run any command, alias, script or file elevated (UAC runas), admin chip + `[Security] Elevate` switch | M |
-| 79 | cliphist pin-to-keep + `clip <n>` also pastes at caret via Ctrl+V emulation | S |
-| 80 | taskman `restart <name>` (wait + relaunch main window) and CPU column in `task` output | S |
-| 6 | timer — timers & stopwatch plugin (gallery #7): `timer 10m tea`, `stopwatch`, console-first ticker | M |
-| 7 | sysmon — CPU / RAM / battery / disk plugin (gallery #8): `cpu`, `ram`, `battery`, `disk` | M |
-| 8 | pwgen — password generator (gallery #9): `pwgen 16 4`, clipboard hand-off | S |
+| 81 | ✅ `su` / `sudo` / `/su` - run any command, alias, script or file elevated (UAC runas), admin chip + `[Security] Elevate` switch | M |
+| 79 | ✅ cliphist pin-to-keep (`clip pin/unpin <n>`, `*` marker, survives trim + Persist) + `clip paste <n>` pastes at caret via Ctrl+V emulation | S |
+| 80 | ✅ taskman `restart <name|pid>` (terminate + relaunch main window) and `top [n|filter]` live CPU ranking (two `GetProcessTimes` samples, no psapi) | S |
+| 8 | ✅ pwgen - password generator (gallery #9) shipped as `pw [len] [count] [flags]`, clipboard hand-off + `[copied]` tail, `[Pwgen] Len/Symbols/Popup` | S |
+| 82 | ✅ drag the console by its status strip (`WM_NCHITTEST` → `HTCAPTION`), spot remembered for the session, INI home position restored on restart (`[Show] DragMove`) - user request | S |
+| 6 | timer - timers & stopwatch plugin (gallery #7): `timer 10m tea`, `stopwatch`, console-first ticker | M |
+| 7 | sysmon - CPU / RAM / battery / disk plugin (gallery #8): `cpu`, `ram`, `battery`, `disk` | M |
 

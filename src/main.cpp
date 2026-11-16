@@ -78,6 +78,7 @@ struct Settings {
     int  transparent = 255;    // 0..255 alpha
     bool autoHide = false;     // hide after AutoHideValue seconds of idleness
     int  autoHideValue = 30;
+    bool dragMove = true;      // [Show] DragMove: status strip doubles as drag handle (v0.19)
     // [Exec]
     bool execInternal = true, execAliases = true, execWww = true,
          execEmail = true, execFiles = true, execShell = true, execPlugins = true;
@@ -678,6 +679,7 @@ static void LoadSettings() {
     g_set.trayIcon          = ReadIniBool(L"Show", L"TrayIcon", true);
     g_set.balloonTips       = ReadIniBool(L"Show", L"BalloonTips", true);
     g_set.showOnStart       = ReadIniBool(L"Show", L"ShowConsoleOnStart", true);
+    g_set.dragMove          = ReadIniBool(L"Show", L"DragMove", true);
     g_set.transparent       = ReadIniInt(L"Show", L"Transparent", 255);
     g_set.autoHide          = ReadIniBool(L"Show", L"AutoHide", false);
     g_set.autoHideValue     = ReadIniInt(L"Show", L"AutoHideValue", 30);
@@ -1818,6 +1820,12 @@ static void SetTrayVisual();
 static void DdClose();
 static void DdUpdate(HWND mainWnd);
 
+// v0.19: mouse-dragged position of the console. MEMORY ONLY - never written to
+// the INI, so a restart always returns the window to its [Show] X/Y (or centered)
+// home position, which is exactly what the "return to original on restart" ask means.
+static int  g_dragX = -1, g_dragY = -1;
+static bool g_dragged = false;
+
 static void ShowBox(HWND mainWnd) {
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
     int x, y;
@@ -1826,6 +1834,7 @@ static void ShowBox(HWND mainWnd) {
     if (g_set.y >= 0 && !g_set.centerY) y = g_set.y;
     else y = g_set.centerY ? (wr.bottom - g_set.height) / 3 : 100;
     if (!g_set.centerX) x = 0;
+    if (g_set.dragMove && g_dragged) { x = g_dragX; y = g_dragY; }
 
     SetWindowPos(mainWnd, HWND_TOPMOST, x, y, g_set.width, g_set.height, SWP_SHOWWINDOW);
     if (g_set.transparent < 255) {
@@ -3926,6 +3935,7 @@ static void WriteDraftIni() {
     WB(L"Show", L"BalloonTips",        s.balloonTips);
     WB(L"Show", L"AutoHide",           s.autoHide);
     WInt(L"Show", L"AutoHideValue",    s.autoHideValue);
+    WB(L"Show", L"DragMove",           s.dragMove);
     WInt(L"Show", L"Width",            s.width);
     WInt(L"Show", L"Height",           s.height);
     WInt(L"Show", L"X",                s.x);
@@ -4397,6 +4407,29 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             return (LRESULT)g_bgBrush;
         }
         break;
+    // v0.19: drag the console by its 20px status strip. Returning HTCAPTION
+    // makes DefWindowProc run the standard system move loop; it ends with
+    // WM_EXITSIZEMOVE, where we remember the spot (memory only, see g_dragX).
+    case WM_NCHITTEST: {
+        if (g_set.dragMove) {
+            POINT cp = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+            ScreenToClient(hWnd, &cp);
+            RECT rc; GetClientRect(hWnd, &rc);
+            if (cp.x >= 0 && cp.x <= rc.right &&
+                cp.y >= rc.bottom - SB_H && cp.y < rc.bottom)
+                return (LRESULT)HTCAPTION;
+        }
+        break;
+    }
+    case WM_NCLBUTTONDBLCLK:
+        if (g_set.dragMove) return 0;   // double-click on strip must not maximize
+        break;
+    case WM_EXITSIZEMOVE:
+        if (g_set.dragMove) {
+            RECT rc; GetWindowRect(hWnd, &rc);
+            g_dragX = rc.left; g_dragY = rc.top; g_dragged = true;
+        }
+        return 0;
     case WM_HOTKEY:
         if (wp == kHotkeyId) {
             // Ignores.ini (TypeAndRun BadApp): stay hidden over listed apps

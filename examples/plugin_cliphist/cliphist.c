@@ -1,6 +1,8 @@
 /*
- * TypeBox plugin: clipboard history — "clip", "clip <n>", "clip clear".
- * Spec: docs/PLUGIN_GALLERY.md #4. Zero dependencies beyond user32/shell32/kernel32.
+ * TypeBox plugin: clipboard history — "clip", "clip <n>", "clip pin <n>",
+ * "clip unpin <n>", "clip paste <n>", "clip clear".
+ * Spec: docs/PLUGIN_GALLERY.md #4 (+ backlog RI #79: pin & paste-at-caret).
+ * Zero dependencies beyond user32/shell32/kernel32.
  *
  * Build (MinGW):  gcc -shared -O2 -DCLIPHIST_BUILDING_DLL cliphist.c -o cliphist.dll -luser32 -lshell32
  * Build (MSVC):   cl /LD /DCLIPHIST_BUILDING_DLL /Fe:cliphist.dll cliphist.c user32.lib shell32.lib
@@ -8,13 +10,18 @@
  *
  * Config (TypeBox.ini next to the host exe, DLL lives in Plugins\ so ini = dllpath\..\TypeBox.ini):
  *   [Clipboard]
- *     Max       entries kept, clamped 1..50           (default 20)
- *     PollMs    capture poll interval, ms             (default 500)
- *     RowChars  row preview length                    (default 48)
- *     Persist   1 = save/load Plugins\cliphist.dat    (default 0)
- *     Balloons  1 = tray balloon after re-copy        (default 0)
- *     Popup     1 = "clip" (no arg) shows a MessageBox (default 1);
- *               0 = never blocks, listing goes to con_text instead.
+ *     Max            entries kept, clamped 1..50      (default 20)
+ *     PollMs         capture poll interval, ms         (default 500)
+ *     RowChars       row preview length                (default 48)
+ *     Persist        1 = save/load Plugins\cliphist.dat (default 0)
+ *     Balloons       1 = tray balloon after re-copy    (default 0)
+ *     Popup          1 = "clip" (no arg) shows a MessageBox (default 1);
+ *                    0 = never blocks, listing goes to con_text instead.
+ *     PasteOnSelect  1 = "clip <n>" also hides the console and types the
+ *                    entry at the caret (Ctrl+V injection)  (default 0)
+ *
+ * Pinned entries (* in the list) survive trimming and Persist reloads; the
+ * newest copies always sit above them, so the top of the list stays yours.
  */
 #include <windows.h>
 #include <shellapi.h>
@@ -56,13 +63,15 @@ typedef struct {
 
 static HWND     g_mainWnd = NULL;
 static HWND     g_msgWnd  = NULL;
-static wchar_t* g_entries[MAX_ENTRIES];  /* newest first                    */
+static wchar_t* g_entries[MAX_ENTRIES];  /* newest first, pinned block on top */
+static BOOL     g_pinned[MAX_ENTRIES];   /* RI #79: survive trim + reload     */
 static int      g_count   = 0;
 static DWORD    g_lastSeq = 0;
 static BOOL     g_trayOn  = FALSE;
 
 static int g_max = 20, g_pollMs = 500, g_rowChars = 48;
 static int g_persist = 0, g_balloons = 0, g_popup = 1;
+static int g_pasteOnSelect = 0;
 
 static char g_result[8192];
 
@@ -111,6 +120,7 @@ static void loadConfig(void) {
     g_persist  = (int)GetPrivateProfileIntW(L"Clipboard", L"Persist",   0, ini);
     g_balloons = (int)GetPrivateProfileIntW(L"Clipboard", L"Balloons",  0, ini);
     g_popup    = (int)GetPrivateProfileIntW(L"Clipboard", L"Popup",     1, ini);
+    g_pasteOnSelect = (int)GetPrivateProfileIntW(L"Clipboard", L"PasteOnSelect", 0, ini);
     if (g_max < 1) g_max = 1;
     if (g_max > MAX_ENTRIES) g_max = MAX_ENTRIES;
     if (g_pollMs < 50) g_pollMs = 50;
@@ -121,8 +131,19 @@ static void loadConfig(void) {
 
 static void freeAll(void) {
     int i;
-    for (i = 0; i < g_count; ++i) { free(g_entries[i]); g_entries[i] = NULL; }
+    for (i = 0; i < g_count; ++i) { free(g_entries[i]); g_entries[i] = NULL; g_pinned[i] = FALSE; }
     g_count = 0;
+}
+
+/* RI #79: keep the pinned block stable on top, newest-first inside it, then
+ * the unpinned newest-first. Called after every structural change. */
+static void normalizeOrder(void) {
+    wchar_t* e[MAX_ENTRIES];
+    BOOL     p[MAX_ENTRIES];
+    int i, o = 0;
+    for (i = 0; i < g_count; ++i) if (g_pinned[i]) { e[o] = g_entries[i]; p[o] = TRUE; ++o; }
+    for (i = 0; i < g_count; ++i) if (!g_pinned[i]) { e[o] = g_entries[i]; p[o] = FALSE; ++o; }
+    for (i = 0; i < g_count; ++i) { g_entries[i] = e[i]; g_pinned[i] = p[i]; }
 }
 
 /* preview of one entry: first line, \r\n\t -> space, truncated at RowChars */
@@ -148,25 +169,41 @@ static int wideToUtf8(const wchar_t* w, char* a, int ac) {
 }
 
 /* insert entry newest-first, skipping dup of newest, deduping older copies,
- * trimming to g_max. Takes ownership of w (frees it when discarding). */
-static void addEntry(wchar_t* w) {
+ * trimming to g_max. Takes ownership of w (frees it when discarding).
+ * Pinned entries are never evicted; if everything is pinned the list may sit
+ * above Max (hard cap MAX_ENTRIES). */
+static void addEntryEx(wchar_t* w, BOOL pin) {
     int i;
     if (!w || !w[0]) { free(w); return; }
     if (lstrlenW(w) * sizeof(wchar_t) > MAX_BYTES) { free(w); return; }
     if (g_count && lstrcmpW(g_entries[0], w) == 0) { free(w); return; }
     for (i = 0; i < g_count; ++i) {
         if (lstrcmpW(g_entries[i], w) == 0) {        /* duplicate: move to front */
+            pin = g_pinned[i] || pin;                /* a re-copy keeps the pin  */
             free(g_entries[i]);
-            for (; i > 0; --i) g_entries[i] = g_entries[i - 1];
+            for (; i > 0; --i) { g_entries[i] = g_entries[i - 1]; g_pinned[i] = g_pinned[i - 1]; }
             g_entries[0] = w;
+            g_pinned[0]  = pin;
+            normalizeOrder();
             return;
         }
     }
-    for (i = g_count; i > 0; --i) g_entries[i] = g_entries[i - 1];
+    for (i = g_count; i > 0; --i) { g_entries[i] = g_entries[i - 1]; g_pinned[i] = g_pinned[i - 1]; }
     g_entries[0] = w;
+    g_pinned[0]  = pin;
     if (g_count < MAX_ENTRIES) ++g_count;
-    if (g_count > g_max) { free(g_entries[g_count - 1]); g_entries[g_count - 1] = NULL; g_count = g_max; }
+    normalizeOrder();
+    while (g_count > g_max) {                        /* evict last UNPINNED only */
+        int victim = -1;
+        for (i = g_count - 1; i >= 0; --i) if (!g_pinned[i]) { victim = i; break; }
+        if (victim < 0) break;                       /* all pinned: keep them    */
+        free(g_entries[victim]);
+        for (i = victim; i < g_count - 1; ++i) { g_entries[i] = g_entries[i + 1]; g_pinned[i] = g_pinned[i + 1]; }
+        --g_count;
+    }
 }
+
+static void addEntry(wchar_t* w) { addEntryEx(w, FALSE); }
 
 /* -------------------------------- capture ----------------------------------- */
 
@@ -213,6 +250,7 @@ static void saveHistory(void) {
     if (!f) return;
     for (i = 0; i < g_count; ++i) {
         const wchar_t* e = g_entries[i];
+        if (g_pinned[i]) fputs("\\p", f);              /* RI #79: pin marker */
         for (; *e; ++e) {
             switch (*e) {
             case L'\n': fputs("\\n", f); break;
@@ -249,8 +287,11 @@ static void loadHistory(void) {
         char* out;
         wchar_t* w;
         size_t o;
+        BOOL pin = FALSE;
         q = p + strlen(p);
         while (q > p && (q[-1] == '\n' || q[-1] == '\r')) *--q = 0;
+        if (!*p) continue;
+        if (p[0] == '\\' && p[1] == 'p') { pin = TRUE; p += 2; }   /* pin marker */
         if (!*p) continue;
         out = (char*)malloc(strlen(p) * 3 + 1);       /* decoded utf8 bytes */
         if (!out) break;
@@ -273,7 +314,7 @@ static void loadHistory(void) {
             if (w) {
                 if (wn > 0) MultiByteToWideChar(CP_UTF8, 0, out, -1, w, wn);
                 else w[0] = 0;
-                addEntry(w);                          /* oldest first, newest ends on top */
+                addEntryEx(w, pin);                   /* oldest first, newest ends on top */
             }
         }
         free(out);
@@ -349,10 +390,10 @@ static void runList(void) {
     for (i = 0; i < g_count; ++i) {
         wchar_t prev[256], head[32];
         preview(g_entries[i], prev, (int)(sizeof(prev) / sizeof(prev[0])));
-        wsprintfW(head, L"%d) ", i + 1);
+        if (g_pinned[i]) wsprintfW(head, L"%d) *%s", i + 1, prev);   /* RI #79 */
+        else             wsprintfW(head, L"%d) %s",  i + 1, prev);
         if (list[0] && lstrlenW(list) < 7800) lstrcatW(list, L"  ");
         lstrcatW(list, head);
-        lstrcatW(list, prev);
     }
     if (g_popup) {
         MessageBoxW(NULL, list, L"TypeBox \x2014 clipboard history", MB_OK | MB_ICONINFORMATION);
@@ -362,27 +403,65 @@ static void runList(void) {
     }
 }
 
-static void runRecopy(int n) {
+/* RI #79: hide the console so focus returns to the window that held the
+ * caret, then inject Ctrl+V there. Only used by "clip paste <n>" and by
+ * "clip <n>" when [Clipboard] PasteOnSelect=1. */
+static void doPasteCaret(void) {
+    INPUT in[4];
+    if (!g_mainWnd) return;
+    ShowWindow(g_mainWnd, SW_HIDE);
+    Sleep(150);                                        /* focus handover */
+    ZeroMemory(in, sizeof(in));
+    in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_CONTROL;
+    in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = 'V';
+    in[2].type = INPUT_KEYBOARD; in[2].ki.wVk = 'V'; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+    in[3].type = INPUT_KEYBOARD; in[3].ki.wVk = VK_CONTROL; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(4, in, sizeof(INPUT));
+}
+
+/* returns 1 when the entry was answered (n valid) */
+static int runRecopy(int n, int paste) {
     wchar_t msg[320], one[300];
     if (g_count == 0) {
         wideToUtf8(L"clip: nothing captured yet", g_result, sizeof(g_result));
-        return;
+        return 1;
     }
     if (n < 1 || n > g_count) {
         wchar_t only[64];
         only[0] = 0;
         wsprintfW(only, L"clip: only %d entries (1..%d)", g_count, g_count);
         wideToUtf8(only, g_result, sizeof(g_result));
-        return;
+        return 1;
     }
-    putOnClipboard(g_entries[n - 1]);                   /* -1 = clipboard locked, still echo */
-    /* con_text = the entry itself; the host selects it in the console */
-    wideToUtf8(g_entries[n - 1], g_result, sizeof(g_result));
+    {
+        int ok = putOnClipboard(g_entries[n - 1]);      /* -1 = clipboard locked, still echo */
+        /* con_text = the entry itself; the host selects it in the console */
+        wideToUtf8(g_entries[n - 1], g_result, sizeof(g_result));
+        if (paste && ok > 0) doPasteCaret();
+    }
     if (g_balloons) {
         preview(g_entries[n - 1], one, (int)(sizeof(one) / sizeof(one[0])));
         wsprintfW(msg, L"clip: entry %d on the clipboard: %s", n, one);
         trayBalloon(msg);
     }
+    return 1;
+}
+
+/* RI #79: pin/unpin keep the pinned block on top after normalizing. */
+static void runPin(int n, int pin) {
+    wchar_t line[96];
+    if (g_count == 0) { wideToUtf8(L"clip: nothing captured yet", g_result, sizeof(g_result)); return; }
+    if (n < 1 || n > g_count) {
+        wsprintfW(line, L"clip: %s needs an entry 1..%d", pin ? L"pin" : L"unpin", g_count);
+        wideToUtf8(line, g_result, sizeof(g_result));
+        return;
+    }
+    g_pinned[n - 1] = pin ? TRUE : FALSE;
+    normalizeOrder();
+    if (g_persist) saveHistory();                       /* pins must survive a reload */
+    if (pin) wsprintfW(line, L"clip: entry %d pinned \x2014 kept when history trims", n);
+    else     wsprintfW(line, L"clip: entry %d unpinned", n);
+    wideToUtf8(line, g_result, sizeof(g_result));
 }
 
 /* ----------------------------------- ABI ------------------------------------ */
@@ -429,8 +508,8 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     TInfo i;
     i.size = sizeof(TInfo);
     i.name = "Clipboard History";
-    i.version = "1.0";
-    i.description = "clip <n> - re-copy the n-th copied text (last 20 kept in RAM)";
+    i.version = "1.1";
+    i.description = "clip <n> re-copy \u00b7 clip pin <n> keep \u00b7 clip paste <n> type at caret (last 20 kept in RAM)";
     i.author = "D. Shevchuk";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";
@@ -459,10 +538,16 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
     captureIfChanged();                    /* lazy: ET may run before any RunString */
     if (lstrlenA(input) <= 4) {                        /* typed prefix of "clip" ("" counts) */
         if (_strnicmp(input, "clip", lstrlenA(input)) != 0) return 0;
-    } else {                                           /* "clip c..." -> offer clear */
+    } else {                                           /* "clip c..." -> offer subcommands */
+        const char* a;
+        size_t la;
         if (_strnicmp(input, "clip ", 5) != 0) return 0;
-        if (_strnicmp(input + 5, "clear", lstrlenA(input) - 5) != 0) return 0;
-        etAdd("clip clear");
+        a = input + 5;
+        la = (size_t)lstrlenA(a);
+        if (!la || _strnicmp(a, "clear", la) == 0) etAdd("clip clear");
+        if (!la || _strnicmp(a, "pin",   la) == 0) etAdd("clip pin 1");      /* RI #79 */
+        if (!la || _strnicmp(a, "unpin", la) == 0) etAdd("clip unpin 1");    /* RI #79 */
+        if (!la || _strnicmp(a, "paste", la) == 0) etAdd("clip paste 1");    /* RI #79 */
         return g_etCount;
     }
     n = g_count;
@@ -499,13 +584,25 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
     } else if (!_strnicmp(p, "clear", 5) && (p[5] == 0 || isspace((unsigned char)p[5]))) {
         freeAll();
         wideToUtf8(L"clip: history cleared", g_result, sizeof(g_result));
+    } else if (!_strnicmp(p, "pin", 3) && (p[3] == 0 || isspace((unsigned char)p[3]))) {
+        n = strtol(p + 3, &end, 10);
+        if (end == p + 3 || n < 1) return ex;              /* not ours */
+        runPin((int)n, 1);                                 /* RI #79   */
+    } else if (!_strnicmp(p, "unpin", 5) && (p[5] == 0 || isspace((unsigned char)p[5]))) {
+        n = strtol(p + 5, &end, 10);
+        if (end == p + 5 || n < 1) return ex;
+        runPin((int)n, 0);                                 /* RI #79 */
+    } else if (!_strnicmp(p, "paste", 5) && (p[5] == 0 || isspace((unsigned char)p[5]))) {
+        n = strtol(p + 5, &end, 10);
+        if (end == p + 5 || n < 1) return ex;
+        runRecopy((int)n, 1);                              /* RI #79: Ctrl+V at caret */
     } else {
         n = strtol(p, &end, 10);
         if (end == p || n < 1) return ex;              /* not ours -> let others try */
         /* rows arrive as "clip <n>: preview ..." - everything after the first
          * space following the number is ignored: strtol stops at ':' and the
          * rest is never looked at by runRecopy */
-        runRecopy((int)n);
+        runRecopy((int)n, g_pasteOnSelect);
     }
     if (!g_result[0]) return ex;                       /* popup mode: nothing to show */
     ex.run = 1;

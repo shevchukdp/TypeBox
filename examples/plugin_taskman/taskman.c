@@ -1,23 +1,30 @@
 /*
- * TypeBox plugin: task manager lite — "kill <name|pid>", "task <filter>".
- * Spec: docs/PLUGIN_GALLERY.md #5, console-first: no modal list window, the
- * host is NEVER blocked except the optional kill confirmation (Confirm=0
- * disables even that). Zero dependencies beyond kernel32/user32.
+ * TypeBox plugin: task manager lite — "kill <name|pid>", "task <filter>",
+ * "top [n|filter]", "restart <name|pid>".
+ * Spec: docs/PLUGIN_GALLERY.md #5 (+ backlog RI #80: CPU ranking + restart),
+ * console-first: no modal list window, the host is NEVER blocked except the
+ * optional kill confirmation (Confirm=0 disables even that) and the 300 ms
+ * CPU sampling window of `top`. Zero dependencies beyond kernel32/user32/shell32.
  *
- * Build (MinGW):  gcc -shared -O2 -DTASKMAN_BUILDING_DLL taskman.c -o taskman.dll -lkernel32 -luser32
- * Build (MSVC):   cl /LD /DTASKMAN_BUILDING_DLL /Fe:taskman.dll taskman.c kernel32.lib user32.lib
+ * Build (MinGW):  gcc -shared -O2 -DTASKMAN_BUILDING_DLL taskman.c -o taskman.dll -lkernel32 -luser32 -lshell32
+ * Build (MSVC):   cl /LD /DTASKMAN_BUILDING_DLL /Fe:taskman.dll taskman.c kernel32.lib user32.lib shell32.lib
  * Licensed under GPL-3.0.
  *
  * Config (TypeBox.ini next to the host exe, DLL lives in Plugins\ so ini = dllpath\..\TypeBox.ini):
  *   [Taskman]
  *     Confirm   0 = kill without the Yes/No popup                 (default 1)
  *     ListMax   max processes scanned into the cache per snapshot (default 300)
+ *     TopN      rows shown by "top"                               (default 8)
  *
  * Process snapshot: CreateToolhelp32Snapshot/Process32FirstW/NextW (kernel32,
  * no psapi). Refreshed at RunString time; the ET path serves from the cache
  * and refreshes only when it is older than 2000 ms.
+ * `top` samples GetProcessTimes twice 300 ms apart (kernel32 only, no psapi);
+ * `restart` reads the image path with QueryFullProcessImageNameW, terminates
+ * and relaunches it — no confirm popup, the process comes back by design.
  */
 #include <windows.h>
+#include <shellapi.h>
 #include <tlhelp32.h>
 #include <stdlib.h>
 #include <string.h>
@@ -60,7 +67,7 @@ static PROC_ENT  g_procs[MAX_PROCS];
 static int       g_nprocs = 0;
 static DWORD     g_cacheTick = 0;
 static int       g_haveCache = 0;
-static int       g_confirm = 1, g_listMax = 300;
+static int       g_confirm = 1, g_listMax = 300, g_topN = 8;
 
 static char g_result[2048];
 
@@ -90,8 +97,11 @@ static void loadConfig(void) {
     } else lstrcpyW(ini, L"TypeBox.ini");
     g_confirm = (int)GetPrivateProfileIntW(L"Taskman", L"Confirm", 1, ini);
     g_listMax = (int)GetPrivateProfileIntW(L"Taskman", L"ListMax", 300, ini);
+    g_topN    = (int)GetPrivateProfileIntW(L"Taskman", L"TopN",     8, ini);
     if (g_listMax < 1) g_listMax = 1;
     if (g_listMax > MAX_PROCS) g_listMax = MAX_PROCS;
+    if (g_topN < 1) g_topN = 1;
+    if (g_topN > 30) g_topN = 30;
 }
 
 /* ------------------------------ wide helpers -------------------------------- */
@@ -186,6 +196,159 @@ static void doTask(const wchar_t* arg) {
     wideToUtf8(out, g_result, sizeof(g_result));
 }
 
+/* ----------------------------------- top -------------------------------------- */
+/* RI #80: CPU ranking without psapi — sample GetProcessTimes twice 300 ms
+ * apart; percent is normalized over all cores. Times in 100 ns units, integer
+ * math (wsprintf has no %f), so "12.3%" prints as tenths. */
+
+typedef struct { DWORD pid; wchar_t name[MAX_PATH]; HANDLE h; ULONGLONG t0; } TOP_REC;
+static TOP_REC g_topBuf[MAX_HITS];
+
+static ULONGLONG ftSum(const FILETIME* a, const FILETIME* b) {
+    ULARGE_INTEGER ua, ub;
+    ua.LowPart = a->dwLowDateTime;  ua.HighPart = a->dwHighDateTime;
+    ub.LowPart = b->dwLowDateTime;  ub.HighPart = b->dwHighDateTime;
+    return ua.QuadPart + ub.QuadPart;
+}
+
+static void doTop(const wchar_t* arg) {
+    wchar_t needle[MAX_PATH], out[900], one[192];
+    SYSTEM_INFO si;
+    int topN = g_topN, filter = 1;
+    int i, n = 0, shown = 0, picked, round;
+    ULONGLONG tick0, tick1, elapsed;
+    FILETIME c, e, k, u;
+
+    lstrcpynW(needle, arg, MAX_PATH);
+    lowerW(needle);
+    {   /* "top 5" = row count, anything else (or empty) = name filter */
+        int numeric = needle[0] != 0;
+        for (i = 0; needle[i]; ++i) if (!iswdigit(needle[i])) { numeric = 0; break; }
+        if (numeric) { long w = (long)wcstoul(needle, NULL, 10);
+                       topN = (w < 1) ? 1 : (w > 30 ? 30 : (int)w); filter = 0; }
+    }
+    GetSystemInfo(&si);
+    if (si.dwNumberOfProcessors < 1) si.dwNumberOfProcessors = 1;
+
+    n = 0;
+    tick0 = GetTickCount64();
+    for (i = 0; i < g_nprocs && n < MAX_HITS; ++i) {
+        HANDLE h;
+        if (g_procs[i].pid <= 4) continue;
+        if (filter && needle[0] && !matches(g_procs[i].name, needle)) continue;
+        h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, g_procs[i].pid);
+        if (!h) continue;
+        if (!GetProcessTimes(h, &c, &e, &k, &u)) { CloseHandle(h); continue; }
+        g_topBuf[n].pid = g_procs[i].pid;
+        lstrcpynW(g_topBuf[n].name, g_procs[i].name, MAX_PATH);
+        g_topBuf[n].h = h;
+        g_topBuf[n].t0 = ftSum(&k, &u);
+        ++n;
+    }
+    Sleep(300);
+    tick1 = GetTickCount64();
+    elapsed = (tick1 - tick0) * 10000ULL;                    /* 100 ns units   */
+    if (elapsed < 1000000ULL) elapsed = 3000000ULL;           /* floor: 300 ms  */
+
+    /* fold busy into the records, drop the zero-CPU ones and close handles */
+    {
+        int w = 0;
+        for (i = 0; i < n; ++i) {
+            ULONGLONG busy;
+            if (!GetProcessTimes(g_topBuf[i].h, &c, &e, &k, &u)) { CloseHandle(g_topBuf[i].h); continue; }
+            busy = ftSum(&k, &u);
+            CloseHandle(g_topBuf[i].h);
+            if (busy <= g_topBuf[i].t0) continue;             /* idle: not worth a row */
+            g_topBuf[i].t0 = busy - g_topBuf[i].t0;           /* now: busy delta       */
+            if (w != i) g_topBuf[w] = g_topBuf[i];
+            ++w;
+        }
+        n = w;
+    }
+    if (!n) { wideToUtf8(L"top: no CPU samples (everything idle?)", g_result, sizeof(g_result)); return; }
+
+    /* selection sort, top rounds only */
+    lstrcpyW(out, L"top: ");
+    for (round = 0; round < topN && shown < n; ++round) {
+        int best = -1;
+        ULONGLONG bestBusy = 0;
+        for (i = 0; i < n; ++i) {
+            if (g_topBuf[i].t0 == (ULONGLONG)(-1)) continue;  /* already taken */
+            if (g_topBuf[i].t0 > bestBusy) { bestBusy = g_topBuf[i].t0; best = i; }
+        }
+        if (best < 0) break;
+        picked = (int)(bestBusy * 1000ULL / (elapsed * (ULONGLONG)si.dwNumberOfProcessors));
+        g_topBuf[best].t0 = (ULONGLONG)(-1);
+        ++shown;
+        if (shown > 1) lstrcatW(out, L", ");
+        wsprintfW(one, L"%s %d.%d%% (%lu)", g_topBuf[best].name,
+                  picked / 10, picked % 10, g_topBuf[best].pid);
+        if (lstrlenW(out) + lstrlenW(one) > 700) { lstrcatW(out, L" \x2026"); break; }
+        lstrcatW(out, one);
+    }
+    if (!shown) { wideToUtf8(L"top: no CPU samples (everything idle?)", g_result, sizeof(g_result)); return; }
+    wideToUtf8(out, g_result, sizeof(g_result));
+}
+
+/* --------------------------------- restart ------------------------------------ */
+/* RI #80: kill + relaunch from the image path. No confirm popup by design —
+ * the process comes back, so this is a refresh, not a destruction. */
+
+static void doRestart(const wchar_t* arg) {
+    DWORD pids[MAX_HITS];
+    wchar_t disp[MAX_PATH], q[MAX_PATH], line[256], path[MAX_PATH * 2];
+    int i, n = 0, ok = 0, fail = 0, asPid = 1;
+    DWORD pid = 0;
+
+    lstrcpynW(q, arg, MAX_PATH);
+    for (i = 0; q[i]; ++i) if (!iswdigit(q[i])) { asPid = 0; break; }
+    if (asPid && q[0]) pid = (DWORD)wcstoul(q, NULL, 10);
+
+    disp[0] = 0;
+    for (i = 0; i < g_nprocs && n < 8; ++i) {                /* cap: 8 restarts */
+        int hit = asPid ? (g_procs[i].pid == pid) : nameMatch(g_procs[i].name, q);
+        if (hit) {
+            if (n == 0) lstrcpynW(disp, g_procs[i].name, MAX_PATH);
+            pids[n++] = g_procs[i].pid;
+        }
+    }
+    if (!n) {
+        wsprintfW(line, L"restart: no process named %s", q);
+        wideToUtf8(line, g_result, sizeof(g_result));
+        return;
+    }
+    for (i = 0; i < n; ++i) {
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_TERMINATE,
+                               FALSE, pids[i]);
+        DWORD cch;
+        BOOL got;
+        HINSTANCE r;
+        if (!h) { ++fail; continue; }
+        path[0] = 0;
+        cch = (DWORD)(sizeof(path) / sizeof(path[0]));
+        got = QueryFullProcessImageNameW(h, 0, path, &cch) && path[0] != 0;
+        if (got) {
+            TerminateProcess(h, 0);
+            WaitForSingleObject(h, 2000);
+        }
+        CloseHandle(h);
+        if (!got) { ++fail; continue; }
+        r = ShellExecuteW(g_mainWnd, L"open", path, NULL, NULL, SW_SHOWNORMAL);
+        if ((INT_PTR)r > 32) ++ok; else ++fail;
+    }
+    if (ok > 0) {
+        wsprintfW(line, L"restart: %s \x2014 restarted %d process(es)", disp, ok);
+        if (fail > 0) {
+            wchar_t extra[64];
+            wsprintfW(extra, L", %d failed", fail);
+            lstrcatW(line, extra);
+        }
+    } else {
+        wsprintfW(line, L"restart: %s \x2014 failed for %d process(es)", disp, fail);
+    }
+    wideToUtf8(line, g_result, sizeof(g_result));
+}
+
 /* ---------------------------------- kill -------------------------------------- */
 
 static void doKill(const wchar_t* arg) {
@@ -256,19 +419,19 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     TInfo i;
     i.size = sizeof(TInfo);
     i.name = "Task Manager Lite";
-    i.version = "1.0";
-    i.description = "kill <proc> / task <filter> - list processes and kill by name";
+    i.version = "1.1";
+    i.description = "kill <proc> / task <filter> / top / restart <proc> - console process tools";
     i.author = "D. Shevchuk";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";
     return i;
 }
 
-PLUGIN_API int __cdecl GetCount(void) { return 2; }
+PLUGIN_API int __cdecl GetCount(void) { return 4; }
 
 PLUGIN_API const char* __cdecl GetString(int n) {
-    static const char* k[2] = { "kill", "task" };
-    return (n >= 0 && n < 2) ? k[n] : NULL;
+    static const char* k[4] = { "kill", "task", "top", "restart" };
+    return (n >= 0 && n < 4) ? k[n] : NULL;
 }
 
 /* ET rows: cache-only (refresh if >2000 ms old), unique image names, newest
@@ -303,17 +466,30 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
     if (!input[0]) {                                  /* gallery examples */
         etAdd("kill notepad.exe");
         etAdd("task chrome.exe");
+        etAdd("top");
+        etAdd("restart explorer.exe");
         return g_etCount;
     }
-    if (!_strnicmp(input, "kill ", 5) || !_strnicmp(input, "task ", 5)) {
-        const wchar_t* verb = (input[0] == 'k' || input[0] == 'K') ? L"kill" : L"task";
-        MultiByteToWideChar(CP_UTF8, 0, input + 5, -1, arg, MAX_PATH);
+    if (!_strnicmp(input, "kill ", 5) || !_strnicmp(input, "task ", 5)
+        || !_strnicmp(input, "restart ", 8)) {
+        const wchar_t* verb;
+        int skip;
+        if (input[0] == 'k' || input[0] == 'K')      { verb = L"kill";    skip = 5; }
+        else if (input[0] == 'r' || input[0] == 'R') { verb = L"restart"; skip = 8; }
+        else                                          { verb = L"task";    skip = 5; }
+        MultiByteToWideChar(CP_UTF8, 0, input + skip, -1, arg, MAX_PATH);
         lowerW(arg);
         etFill(verb, arg);
         return g_etCount;
     }
     if (_strnicmp(input, "kill", (int)lstrlenA(input)) == 0) { etFill(L"kill", NULL); return g_etCount; }
     if (_strnicmp(input, "task", (int)lstrlenA(input)) == 0) { etFill(L"task", NULL); return g_etCount; }
+    if (_strnicmp(input, "restart", (int)lstrlenA(input)) == 0) { etFill(L"restart", NULL); return g_etCount; }
+    if (_strnicmp(input, "top", (int)lstrlenA(input)) == 0) {
+        etAdd("top");
+        etAdd("top 5");
+        return g_etCount;
+    }
     return 0;
 }
 
@@ -326,24 +502,31 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
     const char* p;
     wchar_t argW[MAX_PATH];
     char a[512];
+    int verb = -1, vlen = 4;
     ex.size = sizeof(TExec);
     ex.run = 0; ex.con_text = NULL; ex.con_sel_start = 0; ex.con_sel_length = 0;
     if (!str) return ex;
-    if (_strnicmp(str, "kill", 4) != 0 && _strnicmp(str, "task", 4) != 0) return ex;
-    p = str + 4;
+    /* verb + word boundary: "topless" is not ours, "top 5" is */
+    if     (_strnicmp(str, "kill",    4) == 0 && (!str[4]  || isspace((unsigned char)str[4])))  { verb = 0; vlen = 4; }
+    else if(_strnicmp(str, "task",    4) == 0 && (!str[4]  || isspace((unsigned char)str[4])))  { verb = 1; vlen = 4; }
+    else if(_strnicmp(str, "top",     3) == 0 && (!str[3]  || isspace((unsigned char)str[3])))  { verb = 2; vlen = 3; }
+    else if(_strnicmp(str, "restart", 7) == 0 && (!str[7]  || isspace((unsigned char)str[7])))  { verb = 3; vlen = 7; }
+    else return ex;
+    p = str + vlen;
     while (*p == ' ') ++p;
-    if (!*p) return ex;                                /* bare "kill"/"task": not ours */
+    if (!*p && verb != 2) return ex;                      /* bare kill/task/restart: not ours */
     lstrcpynA(a, p, sizeof(a));
     {   /* trim trailing spaces */
         size_t n = strlen(a);
         while (n && isspace((unsigned char)a[n - 1])) a[--n] = 0;
     }
-    if (!a[0]) return ex;
     MultiByteToWideChar(CP_UTF8, 0, a, -1, argW, MAX_PATH);
-    refreshCache();                                    /* fresh view at run time */
+    refreshCache();                                       /* fresh view at run time */
     g_result[0] = 0;
-    if (_strnicmp(str, "kill", 4) == 0) doKill(argW);
-    else                                doTask(argW);
+    if      (verb == 0) doKill(argW);
+    else if (verb == 1) doTask(argW);
+    else if (verb == 2) doTop(argW);
+    else                doRestart(argW);
     if (!g_result[0]) return ex;
     ex.run = 1;
     ex.con_text = g_result;
