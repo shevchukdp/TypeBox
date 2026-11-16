@@ -122,7 +122,7 @@ static WIN_ENT g_hits[MAX_TITLES];
 static int     g_nhits, g_total, g_cap;
 static wchar_t g_needle[MAX_PATH];        /* lowercased substring, empty = all */
 
-static BOOL CALLBACK collect(HWND hwnd, LPARAM) {
+static BOOL CALLBACK collect(HWND hwnd, LPARAM lParam) {   /* named: MSVC reads bare LPARAM as K&R */
     wchar_t cls[96], title[TITLE_LEN], low[TITLE_LEN];
     int i;
     if (!IsWindowVisible(hwnd)) return TRUE;
