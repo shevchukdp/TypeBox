@@ -103,8 +103,9 @@ Working today (v0.12.0):
   `kill notepad`, `top` live CPU ranking, `restart notepad` kill+relaunch) and
   **winlist** (`win notepad` raises the window), **pwgen** (`pw 20 s` strong passwords,
   `[Pwgen]` defaults), **timer** (`timer 25m tea` countdown + `sw` stopwatch with
-   a topmost mini label, `[Timer]` defaults) and the calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c)
-  — [docs/PLUGIN_API.md](docs/PLUGIN_API.md), specs in [docs/PLUGIN_GALLERY.md](docs/PLUGIN_GALLERY.md)
+   a topmost mini label, `[Timer]` defaults) and **sysmon** (`cpu`, `ram`, `batt`, `disk`, `sys` - sampled
+   CPU percent, clipboard hand-off, `[Sysmon]` defaults), plus the calculator example in
+   [`examples/plugin_calc`](examples/plugin_calc/calc.c)
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
   arguments passed through; re-scan with `/reread`

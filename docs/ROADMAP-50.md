@@ -193,7 +193,7 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
 | 8 | ✅ pwgen - password generator (gallery #9) shipped as `pw [len] [count] [flags]`, clipboard hand-off + `[copied]` tail, `[Pwgen] Len/Symbols/Popup` | S |
 | 82 | ✅ drag the console by its status strip (`WM_NCHITTEST` → `HTCAPTION`), spot remembered for the session, INI home position restored on restart (`[Show] DragMove`) - user request | S |
 | 6 | ✅ timer - timers & stopwatch plugin (gallery #7): `timer 10m tea`, `timer stop [label]`, `sw`/`sw reset` topmost mini label, tray balloon on due - v0.21.0 | M |
-| 7 | sysmon - CPU / RAM / battery / disk plugin (gallery #8): `cpu`, `ram`, `battery`, `disk` | M |
+| 7 | ✅ sysmon - CPU / RAM / battery / disk plugin (gallery #8): `cpu`, `ram`, `batt`, `disk`, `sys` to clipboard - v0.22.0 | M |
 
 ## v0.20+ - merge source: research backlog #3
 

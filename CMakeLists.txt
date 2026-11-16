@@ -46,7 +46,8 @@ endforeach()
 # needs shell32 for ShellExecuteW; pwgen pulls advapi32 for CryptGenRandom.
 # timer (v0.21, gallery #7): winmm for the due-alert sound, gdi32 to paint its
 # stopwatch mini-window, shell32 for the tray balloon.
-foreach(P cliphist taskman winlist pwgen timer)
+# sysmon (v0.22, gallery #8): pure user32 (clipboards) + kernel32 stats calls.
+foreach(P cliphist taskman winlist pwgen timer sysmon)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)

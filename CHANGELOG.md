@@ -3,6 +3,39 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.22.0] - 2026-11-16
+
+![sysmon popup](docs/screenshots/sysmon-popup.png)
+*`sys` answers the whole health readout in one line — copied to the clipboard,
+and with `[Sysmon] Popup=1` even in a MessageBox. The tenth plugin, `sysmon.dll`,
+is here — gallery #8.*
+
+### System monitor — plugin gallery #8 (ROADMAP #7)
+
+- ✅ **`cpu`** — real utilisation, not a lie: the percent is the **delta of two
+  `GetSystemTimes` snapshots** taken by the plugin's own message-only window
+  (`[Sysmon] SampleMs`, default 2 s). The very first call before the first tick
+  answers `cpu: sampling (ask again in 2 s)` — there is no stale `0%`.
+
+![sysmon console](docs/screenshots/console-sysmon.png)
+*The `disk` readout in the console — fixed drives with free/total GB, one line,
+already on the way to the clipboard when you type `sys`.*
+- ✅ **`ram`** — `ram: 9.8 GB/31.3 GB (63%)` via `GlobalMemoryStatusEx`;
+  **`batt`** — state + percent via `GetSystemPowerStatus`, `batt: no battery
+  detected` on desktops; **`disk`** — one line per fixed drive
+  (`disk: C: 157.1 GB/1860.4 GB | G: …`), `[Sysmon] DiskMinGB` hides small drives.
+- ✅ **`sys`** — all four plus uptime as one line, **auto-copied to the clipboard**
+  (5× retry when the clipboard is busy — the console answer never depends on it);
+  `[Sysmon] Popup=1` adds the classic MessageBox the gallery spec asked for,
+  and the console keeps the answer either way (console-first doctrine).
+- ✅ **EasyType** — `sy` + Tab completes `sys`; all five commands are plugin
+  candidates with the usual per-plugin `[PluginState]` switch.
+- ✅ `test-v0220.ps1`: 17 gates — every readout's exact shape, the **sampling →
+  ready transition** on a fresh host with `SampleMs=8000`, `DiskMinGB` hiding,
+  clipboard parity with the console line, the Popup=1 MessageBox (shown, closed
+  with OK, answer still in the console) and the ET Tab path; a `cbprobe` health
+  gate aborts the run on a system-locked clipboard instead of blaming the host.
+
 ## [0.21.0] - 2026-11-16
 
 ![stopwatch](docs/screenshots/timer-mini.png)
