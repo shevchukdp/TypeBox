@@ -195,3 +195,13 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
 | 6 | timer - timers & stopwatch plugin (gallery #7): `timer 10m tea`, `stopwatch`, console-first ticker | M |
 | 7 | sysmon - CPU / RAM / battery / disk plugin (gallery #8): `cpu`, `ram`, `battery`, `disk` | M |
 
+## v0.20+ - merge source: research backlog #3
+
+Third research wave is [IDEAS-RESEARCH-3.md](IDEAS-RESEARCH-3.md) - ideas **#201-300** (2026-11-16,
+baseline v0.19.1), grep-checked non-duplicates of RI1 #1-50, RI2 #101-200, this roadmap's #1-82 and the
+shipped feature set. Its "Next 3 releases - picks" section maps v0.20 (daily-driver plumbing:
+#226 pos presets, #230 stayawake, #250 ts, #251 slug, #246 sha verify + queued gallery #7 timer),
+v0.21 (clipboard muscle & eyes: #260 ring window, #261 clip type, #269/#270 plugin DX + queued gallery #8
+sysmon) and v0.22 (brains & paperwork: #279 confirm mini-language, #202 macro recorder, #284 PIN-lock).
+Items adopted here get numbers in this table at merge time; RI3 numbering stays canonical in that doc.
+
