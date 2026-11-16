@@ -263,6 +263,7 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `taskman` | `task <substr>` (list) · `kill <name|pid>` · `top [n|filter]` (CPU ranking) · `restart <name|pid>` | `[Taskman] Confirm=1 ListMax=300 TopN=8` |
 | `winlist` | `win <title>` activate · `win` (list) · `win <n>` (pick last filter) | `[Winlist] AltTrick=1 Titles=9` |
 | `pwgen` | `pw` · `pw 20` · `pw 20 3` · `pw 16 snp` (letters+digits / `n` digits / `s` symbols / `p` pronounceable) — first result copied to clipboard | `[Pwgen] Len=16 Symbols=!@#$%^&*()-_=+[]{}? Popup=0` |
+| `timer` | `timer 5m tea` countdown with tray balloon · `timer` (list) · `timer stop [label]` (no label = soonest) · `sw` start/report/stop the stopwatch · `sw reset` | `[Timer] MiniWindow=1 Sound=1 Max=8` |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per

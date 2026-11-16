@@ -44,7 +44,9 @@ endforeach()
 # Gallery waves two+three (v0.16.0/v0.17.0): cliphist needs shell32 for its
 # optional balloon; winlist (v0.17) is pure user32. taskman (v0.19: restart)
 # needs shell32 for ShellExecuteW; pwgen pulls advapi32 for CryptGenRandom.
-foreach(P cliphist taskman winlist pwgen)
+# timer (v0.21, gallery #7): winmm for the due-alert sound, gdi32 to paint its
+# stopwatch mini-window, shell32 for the tray balloon.
+foreach(P cliphist taskman winlist pwgen timer)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -52,8 +54,9 @@ foreach(P cliphist taskman winlist pwgen)
     set_target_properties(${P} PROPERTIES PREFIX "")
 endforeach()
 target_link_libraries(cliphist PRIVATE shell32)
-target_link_libraries(taskman PRIVATE shell32)
-target_link_libraries(pwgen   PRIVATE advapi32)
+target_link_libraries(taskman  PRIVATE shell32)
+target_link_libraries(pwgen    PRIVATE advapi32)
+target_link_libraries(timer    PRIVATE shell32 winmm gdi32)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

@@ -101,8 +101,9 @@ Working today (v0.12.0):
   **cliphist** (`clip 3` re-copies the 3rd last copied text, `clip pin 2` keeps an entry safe
   from trimming, `clip paste 1` pastes it at the caret), **taskman** (`task chrome`,
   `kill notepad`, `top` live CPU ranking, `restart notepad` kill+relaunch) and
-  **winlist** (`win notepad` raises the window), plus **pwgen** (`pw 20 s` strong passwords,
-  `[Pwgen]` defaults) and the calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c)
+  **winlist** (`win notepad` raises the window), **pwgen** (`pw 20 s` strong passwords,
+  `[Pwgen]` defaults), **timer** (`timer 25m tea` countdown + `sw` stopwatch with
+   a topmost mini label, `[Timer]` defaults) and the calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c)
   — [docs/PLUGIN_API.md](docs/PLUGIN_API.md), specs in [docs/PLUGIN_GALLERY.md](docs/PLUGIN_GALLERY.md)
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),

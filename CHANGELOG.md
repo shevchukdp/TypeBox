@@ -3,6 +3,36 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.21.0] - 2026-11-16
+
+![stopwatch](docs/screenshots/timer-mini.png)
+*`timer 25m pomodoro` and the console answers, the tray balloon fires when it is
+due; `sw` starts a topmost mini label that ticks while you work. The ninth plugin,
+`timer.dll`, is here — gallery #7.*
+
+### Timers & stopwatch — plugin gallery #7 (ROADMAP #6)
+
+- ✅ **`timer <dur> [label]`** — countdowns from the console: `timer 5m tea`,
+  `timer 90` (plain seconds), `timer 1h30m` (mixed `s`/`m`/`h` runs). When one is due
+  a **tray balloon** ("tea - time!") + beep fires and the console flashes; up to
+  `[Timer] Max` (8) run at once, each keeping its own slot and label.
+- ✅ **`timer` / `timer list`** — a one-line inventory with time left per entry
+  (`timer: 24:58 (pomodoro), 4:59 (tea) left`); **`timer stop [label]`** cancels the
+  matching timer or, with no label, the soonest one. Unparseable duration answers
+  `timer: use 90, 5m, 1h30m, 90s`.
+- ✅ **`sw` / `sw reset`** — stopwatch: start / report (`stopwatch: 0:00:04`) / stop,
+  reset zeroes it. While running it shows a **topmost mini label**
+  (`stopwatch 0:00:03`) you can keep beside any window (`[Timer] MiniWindow=0` to
+  hide, `Sound=0` for silent balloons). All timing lives on the plugin's own
+  message-only window; `Unload` kills timers, window and tray icon — no ghost after `/reread`.
+- ✅ **EasyType** — `tim` completes `timer 5m/10m/25m/stop/list`, `sw` completes
+  `sw`/`sw reset`; the plugin registers with the host's per-plugin `[PluginState]`
+  switches like the other eight.
+- ✅ `test-v0210.ps1`: 21 gates — lifecycle, cap at `Max=2`, soonest-stop, a **real
+  2-second due-fire** (the tick loop must clear the slot), stopwatch report format,
+  mini-window create/destroy asserted through the host process window list, and the
+  EasyType Tab path.
+
 ## [0.20.0] - 2026-11-16
 
 ![update](docs/screenshots/console-update-ask.png)
