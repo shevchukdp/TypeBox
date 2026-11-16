@@ -3,6 +3,40 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.20.0] - 2026-11-16
+
+![update](docs/screenshots/console-update-ask.png)
+*Type `/update` and TypeBox asks the release API — the one and only place the
+host ever touches the network, and only because you typed it. Newer version?
+Download → **SHA-256 verified against the published digest** → staged →
+"Restart and install?". Your `TypeBox.ini` is never touched by the installer.*
+
+### `/update` — release check & install helper (RI3 #298, user request)
+
+- ✅ **`/update`** — queries the GitHub Releases API once, compares `tag_name` with the
+  running version (numeric, `v`-prefix tolerant), and offers the update as plain dialogs:
+  download the release zip to `%TEMP%\TypeBox-update\`, verify its **SHA-256 against the
+  digest published with the release** (a mismatch cancels outright — no "install anyway"
+  on a broken digest; a release without a published digest asks you explicitly), unpack
+  to a staging folder and prepare `install.bat`.
+- ✅ **Automated install** — `[Update] AutoRun=1` (default): after verification the
+  console asks "Restart TypeBox and install now?"; **Yes** and the host exits, the helper
+  waits for the process to vanish, mirrors the staged tree over the app folder and
+  relaunches TypeBox — the running exe never replaces itself, and **`.ini` files are
+  excluded from the copy** (settings are the user's). `AutoRun=0` just stages the files
+  and points at the folder.
+- ✅ **Offline-first holds** — no background traffic: nothing phones home unless `/update`
+  is typed; the opt-in `[Update] CheckOnStart=1` adds one silent startup check that only
+  surfaces a tray balloon. `[Update] ApiUrl` mirrors the check (plain `http://` accepted
+  only for loopback); the latest known tag + check time are cached and shown when the
+  network is unavailable. Every step is logged (`/update: … available / digest verified /
+  staged / installing via install.bat`).
+- ✅ `test-v0200.ps1`: 11 gates against a fake localhost Releases API — ask dialog + version
+  compare, sha256-verified staging, **digest-mismatch cancellation** (nothing staged),
+  up-to-date path, offline path with cache display, missing-digest explicit-warning gate,
+  `/help` advertises `/update`, and a real **AutoRun E2E**: host exits, exe is replaced,
+  new instance runs, user INI provably untouched.
+
 ## [0.19.1] - 2026-11-16
 
 *Regression fix for the user report "пропал вызов настроек": the v0.19.0 drag

@@ -94,7 +94,7 @@ Working today (v0.12.0):
 - ✅ **System aliases** (`[SysAliases]`): `~lock · ~logoff · ~sleep · ~screensave · ~reboot`
   defaults, user table overridable; **Shift+Enter** kills the last alias process
 - ✅ **Ignores.ini (BadApp)** — stay hidden over listed apps (process/class, wildcards)
-- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo` `/log` `/sys`
+- ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo` `/log` `/sys` `/update`
 - ✅ **Plugin host — TypeAndRun ABI-compatible** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`):
   drop DLLs into the portable `Plugins\` folder; ships ready-to-use **units** (`conv 10 km mi`,
   `hex 255`→`FF`), **codec** (`b64enc`, `urlenc`, `hexdec`), **vol** (`vol + / mute / 3`),

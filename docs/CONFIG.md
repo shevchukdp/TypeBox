@@ -100,6 +100,39 @@ launch (`GetLastError=1223` in the log) and TypeBox keeps running. Set
 `[Security] Elevate=0` (or uncheck it on the Execution settings page) to make
 su-prefixed lines run without UAC — intended for headless automation.
 
+### `/update` — check for a new version & install helper (TypeBox 0.20.0)
+
+Type `/update` and TypeBox asks the release API **once** — that one command is
+the only place the host ever talks to the network, and it never happens unless
+you type it (offline-first rule). What you get:
+
+```
+/update            ->  "You are running the latest version (0.20.0)" - or -
+                        "TypeBox 0.20.1 is available (you are on 0.20.0, 970 KB).
+                         Download and prepare the update?"  [Yes/No]
+```
+
+On **Yes** the release zip is downloaded to `%TEMP%\TypeBox-update\`, its
+**SHA-256 is verified against the digest published with the release** before
+anything is unpacked (mismatch = canceled, never "install anyway"); a release
+without a published digest asks you explicitly. The verified zip is unpacked to
+a staging folder and `install.bat` is prepared. With the default
+`[Update] AutoRun=1` you get one last "Restart and install?" — **Yes** and the
+host exits, the helper waits for the process to vanish, copies the staged tree
+over the app folder and relaunches TypeBox. Your `TypeBox.ini` is **never**
+overwritten: `.ini` files are excluded from the copy.
+
+| `[Update]` key | Meaning | Default |
+|---|---|---|
+| `ApiUrl` | release API to query (mirror/self-host override; plain `http://` is accepted **only** for `127.0.0.1`/`localhost`) | official GitHub Releases API |
+| `AutoRun` | `1` = offer "restart & install" and run `install.bat`; `0` = only stage the files and show the folder | `1` |
+| `CheckOnStart` | `1` = silent background check at startup; a newer release becomes a tray balloon, nothing else | `0` |
+| `Latest` / `LastCheck` | cache of the last known newest tag and check time (shown when the check fails offline) | — |
+
+Every step is logged (`/update: <tag> available…`, `digest verified`, `staged`,
+`installing via install.bat`), so a support request can be answered from the log
+alone.
+
 ### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
 
 Drop an INI named `TypeBox.local.ini` next to `TypeBox.ini` and it wins on every

@@ -140,9 +140,13 @@ AutoRun (HKLM/HKCU), "Add to context menu" (ShellInt), MultiUser — 📋
 Semaphore single-instance; second instance forwards command via WM_COPYDATA; command-line
 params (`ParseCmdLine`) to prefill/execute — ✅
 
-## Internal commands (all 14)
+## Internal commands (all 14 + TypeBox extras)
 `/about /checkconfig /config /exit /help /hide /homedir /inidir /inifiles /load /reread /settings /show /unload` — ✅
 (`/load` `/unload` are stubs until the Phase 2 plugin host)
+TypeBox extras: `/export` `/import` `/undo` `/log` `/sys` `/openconfig` `/path`, and
+`/update` (v0.20.0) — checks the release API for a newer version, verifies the
+download's SHA-256 against the published digest and stages `install.bat`
+(user-typed only; `[Update]` section in [CONFIG.md](CONFIG.md)).
 
 ## Plugins (ABI-compatible with TypeAndRun)
 `Load(HWND) Unload GetInfo GetCount GetString GetCountET GetStringET RunString→TExec` — ✅

@@ -73,6 +73,10 @@ enum StrId {
     STR_SO_ADMIN, STR_SU_HINT,
     // v0.18b: Elevate checkbox on the Exec page (column 8).
     STR_SE_ELEVATE,
+    // v0.20: /update release check + install helper (same side table, columns 9-16;
+    // EN+RU compiled, other languages fall back to EN, lang\*.ini can override).
+    STR_UP_UPTODATE, STR_UP_ASK_DL, STR_UP_HASH_BAD, STR_UP_HASH_WARN,
+    STR_UP_RESTART_ASK, STR_UP_DL_FAIL, STR_UP_ERR_API, STR_UP_MANUAL,
     STR_LAST
 };
 
@@ -119,7 +123,9 @@ static const char* const kKeyNames[STR_LAST] = {
     "ex_scripts", "se_suspicious", "so_script",
     "se_danger", "ty_frecency",
     "so_admin", "su_hint",
-    "se_elevate"
+    "se_elevate",
+    "up_uptodate", "up_ask_dl", "up_hash_bad", "up_hash_warn",
+    "up_restart_ask", "up_dl_fail", "up_err_api", "up_manual"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -1070,17 +1076,34 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 };
 
 // v0.16 Scripts folder + payload guard, v0.17 danger-confirm + frecency,
-// v0.18 su chip + usage hint + Elevate checkbox.
-// Columns == STR_EX_SCRIPTS .. STR_SE_ELEVATE.
-static const wchar_t* const kExItems[LANG_COUNT][8] = {
+// v0.18 su chip + usage hint + Elevate checkbox, v0.20 /update dialogs.
+// Columns == STR_EX_SCRIPTS .. STR_UP_MANUAL (update tail compiled EN+RU;
+// the other packs stop at column 8 and fall back to English, as before).
+static const wchar_t* const kExItems[LANG_COUNT][16] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
-           L"Use UAC elevation for su commands" },
+           L"Use UAC elevation for su commands",
+           L"You are running the latest version (%s).\nLast check: %s",
+           L"TypeBox %s is available (you are on %s, %s).\nDownload and prepare the update?",
+           L"Checksum mismatch - the downloaded file does not match the published digest.\nThe update was canceled.",
+           L"The release has no published checksum.\nDownloaded sha256: %s\nInstall anyway?",
+           L"Update verified. Restart TypeBox now and install %s?",
+           L"Update %s failed: %s\nCheck disk space and try again.",
+           L"Update check failed (%s).\nLast check: %s. Last known latest: %s",
+           L"Update staged: %s\nRun install.bat when ready (settings .ini files are never overwritten)." },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
-           L"Использовать UAC-повышение для su-команд" },
+           L"Использовать UAC-повышение для su-команд",
+           L"Установлена последняя версия (%s).\nПоследняя проверка: %s",
+           L"Доступен TypeBox %s (у вас %s, %s).\nСкачать и подготовить обновление?",
+           L"Несовпадение контрольной суммы — файл не совпал с опубликованным дайджестом.\nОбновление отменено.",
+           L"У релиза нет опубликованной контрольной суммы.\nСкачано sha256: %s\nУстановить всё же?",
+           L"Обновление проверено. Перезапустить TypeBox и установить %s сейчас?",
+           L"Ошибка этапа обновления %s: %s\nПроверьте свободное место и повторите.",
+           L"Проверка обновления не удалась (%s).\nПоследняя проверка: %s. Последняя известная версия: %s",
+           L"Обновление подготовлено: %s\nЗапустите install.bat, когда будете готовы (файлы .ini не перезаписываются)." },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1252,10 +1275,10 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_SE_ELEVATE) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_UP_MANUAL) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
-        x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16 tail
+        x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail
         if (x && *x) return x;
         return L"?";
     }

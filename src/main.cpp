@@ -11,7 +11,8 @@
 // Build (MSVC):  cmake -S . -B build && cmake --build build --config Release
 // Build (MinGW): g++ -std=c++17 -DUNICODE -D_UNICODE -O2 src/main.cpp
 //                -o TypeBox.exe -municode -mwindows
-//                -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lwinmm
+//                -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lcomdlg32
+//                -lwinmm -lwinhttp -lbcrypt
 
 #include <windows.h>
 #include <commdlg.h>
@@ -19,6 +20,8 @@
 #include <shlwapi.h>
 #include <commctrl.h>
 #include <mmsystem.h>
+#include <winhttp.h>
+#include <bcrypt.h>
 #include <string>
 #include <vector>
 #include <map>
@@ -40,6 +43,9 @@ static const wchar_t* kClassName  = L"TypeBoxMain";
 static const int      kHotkeyId   = 666; // same lineage as TypeAndRun HotKeyId=666
 static const UINT     kTrayMsg    = WM_APP + 1;
 static const UINT     kTrayId     = 1;
+static const UINT     kUpdateMsg  = WM_APP + 2;   // v0.20: opt-in startup update note
+static const wchar_t* kUpdateApiDefault =
+    L"https://api.github.com/repos/shevchukdp/TypeBox/releases/latest";
 
 // ------------------------------------------------------------------ state
 
@@ -87,6 +93,13 @@ struct Settings {
     bool confirmDanger = true;       // [Security] ConfirmDanger: destructive commands (v0.17)
     bool elevate = true;             // [Security] Elevate: su actually uses runas (v0.18)
     bool frecency = true;            // [Type] FrecencyRanking: most-used wins ties (v0.17)
+    // [Update] (v0.20): /update release check + install helper. Offline-first:
+    // network only when the user typed /update, or with explicit CheckOnStart.
+    std::wstring updApi;             // release API ("" = official GitHub releases)
+    bool updAutoRun = true;          // launch install helper right after verification
+    bool updCheckOnStart = false;    // opt-in silent startup check + tray balloon
+    std::wstring updLatest;          // cache: last known latest tag
+    std::wstring updLastCheck;       // cache: unix time of the last successful check
     // [Font]
     std::wstring fontName = L"Courier New";
     int  fontSize = 18;
@@ -697,6 +710,14 @@ static void LoadSettings() {
     g_set.frecency          = ReadIniBool(L"Type", L"FrecencyRanking", true);
     g_set.execPlugins  = ReadIniBool(L"Exec", L"Plugins",  true);
 
+    // [Update] (v0.20)
+    g_set.updApi          = Trim(ReadIniStr(L"Update", L"ApiUrl", L""));
+    if (g_set.updApi.empty()) g_set.updApi = kUpdateApiDefault;
+    g_set.updAutoRun      = ReadIniBool(L"Update", L"AutoRun", true);
+    g_set.updCheckOnStart = ReadIniBool(L"Update", L"CheckOnStart", false);
+    g_set.updLatest       = ReadIniStr(L"Update", L"Latest", L"");
+    g_set.updLastCheck    = ReadIniStr(L"Update", L"LastCheck", L"");
+
     g_set.fontName = ReadIniStr(L"Font", L"Name", L"Courier New");
     g_set.fontSize = ReadIniInt(L"Font", L"Size", 18);
     g_set.fontBold = ReadIniInt(L"Font", L"Bold", 1);
@@ -1257,6 +1278,437 @@ enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
        PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_ENV,
        PG_THEME, PG_LANG, PG_COUNT };
 
+// ---------------------------------------------------------------- update (v0.20)
+//
+// `/update`: user-initiated release check + install helper (RI3 #298). The
+// offline-first rule holds: nothing here touches the network unless the user
+// typed /update (or opted into [Update] CheckOnStart). https only, with
+// loopback http allowed for mirrors and for the test harness. The downloaded
+// zip is sha256-verified against the digest published by the release API
+// before anything is staged, and the running exe never replaces itself:
+// install.bat waits for our pid to vanish, copies the staged tree (never
+// *.ini - settings are the user's) over the app folder and restarts TypeBox.
+
+struct UpdateInfo {
+    std::wstring tag, asset, url;
+    std::string  digest;             // "sha256:<hex>" when the API publishes one
+    long long    size = 0;
+};
+
+static std::wstring AscW(const std::string& s) {
+    std::wstring w; w.reserve(s.size());
+    for (unsigned char c : s) w += (wchar_t)c;
+    return w;
+}
+
+static bool HttpGet(const std::wstring& url, std::string& body,
+                    const std::wstring* toFile, std::wstring& err) {
+    URL_COMPONENTS uc = { sizeof(uc) };
+    wchar_t host[256] = {}, path[2048] = {}, extra[512] = {};
+    uc.lpszHostName = host;   uc.dwHostNameLength = 255;
+    uc.lpszUrlPath  = path;   uc.dwUrlPathLength  = 2047;
+    uc.lpszExtraInfo = extra; uc.dwExtraInfoLength = 511;
+    if (!WinHttpCrackUrl(url.c_str(), 0, 0, &uc)) { err = L"bad url"; return false; }
+    bool secure = (uc.nScheme == INTERNET_SCHEME_HTTPS);
+    std::wstring hostL = Lower(host);
+    if (!secure && hostL != L"127.0.0.1" && hostL != L"localhost") {
+        err = L"https required (loopback http only)"; return false;
+    }
+    bool ok = false;
+    HINTERNET hs = WinHttpOpen(L"TypeBox update check", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
+                               WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+    if (!hs) { err = L"winhttp open"; return false; }
+    WinHttpSetTimeouts(hs, 8000, 8000, 10000, 15000);
+    HINTERNET hc = WinHttpConnect(hs, host, uc.nPort, 0);
+    if (hc) {
+        std::wstring full = std::wstring(path) + extra;
+        HINTERNET hq = WinHttpOpenRequest(hc, L"GET", full.c_str(), nullptr,
+                                          WINHTTP_NO_REFERER,
+                                          WINHTTP_DEFAULT_ACCEPT_TYPES,
+                                          secure ? WINHTTP_FLAG_SECURE : 0);
+        if (hq) {
+            const wchar_t* hdrs =
+                L"Accept: application/vnd.github+json\r\n"
+                L"X-GitHub-Api-Version: 2022-11-28\r\n";
+            WinHttpAddRequestHeaders(hq, hdrs, (DWORD)-1, WINHTTP_ADDREQ_FLAG_ADD);
+            if (WinHttpSendRequest(hq, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                                   WINHTTP_NO_REQUEST_DATA, 0, 0, 0) &&
+                WinHttpReceiveResponse(hq, nullptr)) {
+                DWORD status = 0, sz = sizeof(status);
+                WinHttpQueryHeaders(hq,
+                    WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                    WINHTTP_HEADER_NAME_BY_INDEX, &status, &sz, WINHTTP_NO_HEADER_INDEX);
+                if (status == 200) {
+                    HANDLE hf = toFile ? CreateFileW(toFile->c_str(), GENERIC_WRITE, 0,
+                                                     nullptr, CREATE_ALWAYS,
+                                                     FILE_ATTRIBUTE_NORMAL, nullptr)
+                                       : INVALID_HANDLE_VALUE;
+                    if (toFile && hf == INVALID_HANDLE_VALUE) {
+                        err = L"cannot write " + *toFile;
+                    } else {
+                        ok = true;
+                        for (;;) {
+                            DWORD avail = 0;
+                            if (!WinHttpQueryDataAvailable(hq, &avail) || !avail) break;
+                            char buf[32768];
+                            if (avail > sizeof(buf)) avail = sizeof(buf);
+                            DWORD rd = 0;
+                            if (!WinHttpReadData(hq, buf, avail, &rd) || !rd) break;
+                            if (toFile) {
+                                DWORD wr = 0;
+                                if (!WriteFile(hf, buf, rd, &wr, nullptr) || wr != rd)
+                                    { ok = false; break; }
+                            } else {
+                                body.append(buf, rd);
+                                if (body.size() > 16u * 1024 * 1024) { ok = false; break; }
+                            }
+                        }
+                        if (toFile) CloseHandle(hf);
+                        if (!toFile && body.empty()) ok = false;
+                    }
+                } else {
+                    wchar_t st[48]; wsprintfW(st, L"http %u", status); err = st;
+                }
+            } else err = L"send failed";
+            WinHttpCloseHandle(hq);
+        } else err = L"request";
+        WinHttpCloseHandle(hc);
+    } else err = L"connect";
+    WinHttpCloseHandle(hs);
+    return ok;
+}
+
+// Minimal JSON field readers (the release payload is our own trust domain:
+// GitHub's fixed schema, ASCII in every field we touch).
+static bool JsonStr(const std::string& j, const std::string& key, std::string& out) {
+    std::string pat = "\"" + key + "\":\"";
+    size_t p = j.find(pat);
+    if (p == std::string::npos) return false;
+    p += pat.size();
+    std::string v;
+    while (p < j.size()) {
+        char c = j[p];
+        if (c == '\"') break;
+        if (c == '\\' && p + 1 < j.size()) { v += j[p + 1]; p += 2; continue; }
+        v += c; ++p;
+    }
+    out = v;
+    return true;
+}
+
+static bool JsonLong(const std::string& j, const std::string& key, long long& out) {
+    std::string pat = "\"" + key + "\":";
+    size_t p = j.find(pat);
+    if (p == std::string::npos) return false;
+    p += pat.size();
+    long long v = 0; bool any = false;
+    while (p < j.size() && j[p] >= L'0' && j[p] <= L'9') {
+        v = v * 10 + (j[p] - '0'); ++p; any = true;
+    }
+    out = v; return any;
+}
+
+// Top-level objects of "<key>":[ {..}, {..} ] - string-aware brace scan.
+static std::vector<std::string> JsonObjects(const std::string& j, const std::string& key) {
+    std::vector<std::string> out;
+    std::string pat = "\"" + key + "\":[";
+    size_t p = j.find(pat);
+    if (p == std::string::npos) return out;
+    p += pat.size();
+    while (p < j.size()) {
+        while (p < j.size() && j[p] != '{' && j[p] != ']') ++p;
+        if (p >= j.size() || j[p] != '{') break;
+        size_t start = p;
+        int depth = 0; bool instr = false, esc = false;
+        for (; p < j.size(); ++p) {
+            char c = j[p];
+            if (instr) { if (esc) esc = false; else if (c == '\\') esc = true;
+                         else if (c == '\"') instr = false; }
+            else if (c == '\"') instr = true;
+            else if (c == '{') ++depth;
+            else if (c == '}') { if (!--depth) { ++p; break; } }
+        }
+        out.push_back(j.substr(start, p - start));
+    }
+    return out;
+}
+
+// "0.19.1" / "v9.9.9" / "0.20.0-dev" -> 4 numeric slots for comparison.
+static void VerNums(const std::wstring& v, int out[4]) {
+    out[0] = out[1] = out[2] = out[3] = 0;
+    int slot = 0; long long cur = 0; bool any = false;
+    for (size_t i = 0; i <= v.size() && slot < 4; ++i) {
+        wchar_t c = (i < v.size()) ? v[i] : L'.';
+        if (c >= L'0' && c <= L'9') { cur = cur * 10 + (c - L'0'); any = true; }
+        else if (c == L'.' || c == L'-' || c == L'+' || c == L'_') {
+            out[slot++] = any ? (int)cur : 0; cur = 0; any = false;
+        }
+    }
+}
+
+static int VerCmp(const std::wstring& a, const std::wstring& b) {
+    int va[4], vb[4]; VerNums(a, va); VerNums(b, vb);
+    for (int i = 0; i < 4; ++i) if (va[i] != vb[i]) return va[i] < vb[i] ? -1 : 1;
+    return 0;
+}
+
+static bool Sha256File(const std::wstring& file, std::string& hex) {
+    bool ok = false;
+    BCRYPT_ALG_HANDLE ha = nullptr; BCRYPT_HASH_HANDLE hh = nullptr;
+    if (BCryptOpenAlgorithmProvider(&ha, BCRYPT_SHA256_ALGORITHM, nullptr, 0) >= 0 &&
+        BCryptCreateHash(ha, &hh, nullptr, 0, nullptr, 0, 0) >= 0) {
+        HANDLE hf = CreateFileW(file.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hf != INVALID_HANDLE_VALUE) {
+            ok = true;
+            char buf[65536]; DWORD rd = 0;
+            while (ReadFile(hf, buf, sizeof(buf), &rd, nullptr) && rd)
+                if (BCryptHashData(hh, (PUCHAR)buf, rd, 0) < 0) { ok = false; break; }
+            CloseHandle(hf);
+            unsigned char dig[32] = {};
+            if (ok && BCryptFinishHash(hh, dig, 32, 0) >= 0) {
+                static const char* kX = "0123456789abcdef";
+                for (int i = 0; i < 32; ++i) { hex += kX[dig[i] >> 4]; hex += kX[dig[i] & 15]; }
+            } else ok = false;
+        }
+        if (hh) BCryptDestroyHash(hh);
+    }
+    if (ha) BCryptCloseAlgorithmProvider(ha, 0);
+    return ok;
+}
+
+static void DeleteDirTree(const std::wstring& dir) {
+    WIN32_FIND_DATAW fd;
+    std::wstring pat = dir + L"\\*";
+    HANDLE h = FindFirstFileW(pat.c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L"..")) continue;
+        std::wstring p = dir + L"\\" + fd.cFileName;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) DeleteDirTree(p);
+        else SetFileAttributesW(p.c_str(), FILE_ATTRIBUTE_NORMAL), DeleteFileW(p.c_str());
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+    RemoveDirectoryW(dir.c_str());
+}
+
+static std::wstring UpdateDir() {
+    wchar_t tmp[MAX_PATH] = {}; GetTempPathW(MAX_PATH, tmp);
+    return std::wstring(tmp) + L"TypeBox-update";
+}
+
+static std::wstring LastCheckText() {
+    if (g_set.updLastCheck.empty()) return L"never";
+    time_t tt = (time_t)_wtoi64(g_set.updLastCheck.c_str());
+    struct tm* lt = localtime(&tt);
+    if (!lt) return L"?";
+    wchar_t buf[64];
+    wsprintfW(buf, L"%04d-%02d-%02d %02d:%02d", lt->tm_year + 1900, lt->tm_mon + 1,
+              lt->tm_mday, lt->tm_hour, lt->tm_min);
+    return buf;
+}
+
+static void CacheUpdateResult(const std::wstring& tag) {
+    g_set.updLatest = tag;
+    g_set.updLastCheck = std::to_wstring((long long)time(nullptr));
+    WritePrivateProfileStringW(L"Update", L"Latest", tag.c_str(), g_iniPath.c_str());
+    WritePrivateProfileStringW(L"Update", L"LastCheck",
+                               g_set.updLastCheck.c_str(), g_iniPath.c_str());
+}
+
+// Ask the configured API for the latest release. Returns false on network /
+// schema failure (err = reason); on success fills ui and refreshes the cache.
+static bool UpdateQuery(std::wstring& err, UpdateInfo& ui) {
+    std::string body;
+    if (!HttpGet(g_set.updApi, body, nullptr, err)) return false;
+    std::string tag;
+    if (!JsonStr(body, "tag_name", tag) || tag.empty()) { err = L"no tag_name"; return false; }
+    std::wstring wtag = AscW(tag);
+    while (!wtag.empty() && (wtag[0] == L'v' || wtag[0] == L'V')) wtag.erase(0, 1);
+    ui.tag = wtag;
+    for (auto& obj : JsonObjects(body, "assets")) {
+        std::string name;
+        if (!JsonStr(obj, "name", name)) continue;
+        std::wstring wname = Lower(AscW(name));
+        if (wname.size() < 4 || wname.substr(wname.size() - 4) != L".zip") continue;
+        ui.asset = AscW(name);
+        std::string du, dg;
+        if (JsonStr(obj, "browser_download_url", du)) ui.url = AscW(du);
+        if (JsonStr(obj, "digest", dg)) ui.digest = dg;
+        JsonLong(obj, "size", ui.size);
+        break;
+    }
+    if (ui.asset.empty() || ui.url.empty()) { err = L"no zip asset"; return false; }
+    CacheUpdateResult(ui.tag);
+    return true;
+}
+
+static void DoUpdate(HWND mainWnd) {
+    UpdateInfo ui;
+    std::wstring err;
+    if (!UpdateQuery(err, ui)) {
+        LogError(L"/update check failed: " + err);   // log first: the box is modal
+        wchar_t msg[1024];
+        wsprintfW(msg, L(STR_UP_ERR_API), err.c_str(),
+                  LastCheckText().c_str(),
+                  g_set.updLatest.empty() ? L"?" : g_set.updLatest.c_str());
+        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    std::wstring cur = WVersion();
+    if (VerCmp(ui.tag, cur) <= 0) {
+        LogInfo(L"/update: already latest " + cur + L" (tag " + ui.tag + L")");
+        wchar_t msg[512];
+        wsprintfW(msg, L(STR_UP_UPTODATE), cur.c_str(), LastCheckText().c_str());
+        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    wchar_t kb[32];
+    wsprintfW(kb, L"%u KB", (unsigned)(ui.size / 1024));   // wsprintfW: no %lld
+    LogInfo(L"/update: " + ui.tag + L" available, current " + cur + L", " +
+            std::wstring(kb) + L", asset " + ui.asset);
+    wchar_t ask[512];
+    wsprintfW(ask, L(STR_UP_ASK_DL), ui.tag.c_str(), cur.c_str(), kb);
+    if (MessageBoxW(mainWnd, ask, L"TypeBox — update",
+                    MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+
+    std::wstring dir = UpdateDir();
+    CreateDirectoryW(dir.c_str(), nullptr);
+    std::wstring zip = dir + L"\\" + ui.asset;
+    DeleteFileW(zip.c_str());
+    {
+        std::string unused;
+        if (!HttpGet(ui.url, unused, &zip, err)) {
+            LogError(L"/update download failed: " + err);   // log before the modal box
+            wchar_t msg[1024];
+            wsprintfW(msg, L(STR_UP_DL_FAIL), L"download", err.c_str());
+            MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+            return;
+        }
+    }
+    std::string hex;
+    if (!Sha256File(zip, hex)) {
+        wchar_t msg[1024];
+        wsprintfW(msg, L(STR_UP_DL_FAIL), L"hash", err.c_str());
+        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+        return;
+    }
+    if (!ui.digest.empty()) {
+        std::string want = ui.digest;
+        if (want.size() > 7 && want.compare(0, 7, "sha256:") == 0) want = want.substr(7);
+        for (auto& c : want) if (c >= 'A' && c <= 'Z') c = (char)(c + 32);
+        if (want != hex) {
+            LogError(L"/update digest mismatch: published=" + AscW(want) +
+                     L" actual=" + AscW(hex));   // log before the modal box
+            MessageBoxW(mainWnd, L(STR_UP_HASH_BAD), L"TypeBox — update",
+                        MB_OK | MB_ICONERROR);
+            return;
+        }
+        LogInfo(L"/update: digest verified sha256=" + AscW(hex));
+    } else {
+        LogInfo(L"/update: no published digest, sha256=" + AscW(hex));
+        wchar_t warn[1024];
+        wsprintfW(warn, L(STR_UP_HASH_WARN), AscW(hex).c_str());
+        if (MessageBoxW(mainWnd, warn, L"TypeBox — update",
+                        MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    }
+
+    // Stage: unpack the zip, normalize the "TypeBox/" wrapper the packer adds.
+    std::wstring stage = dir + L"\\stage";
+    DeleteDirTree(stage);
+    CreateDirectoryW(stage.c_str(), nullptr);
+    bool unpacked = false;
+    {
+        std::wstring cmd = L"tar.exe -xf \"" + zip + L"\" -C \"" + stage + L"\"";
+        STARTUPINFOW si = { sizeof(si) };
+        PROCESS_INFORMATION pi = {};
+        si.dwFlags = STARTF_USESHOWWINDOW; si.wShowWindow = SW_HIDE;
+        if (CreateProcessW(nullptr, cmd.data(), nullptr, nullptr, FALSE,
+                           CREATE_NO_WINDOW, nullptr, nullptr, &si, &pi)) {
+            WaitForSingleObject(pi.hProcess, 60000);
+            DWORD ec = 1; GetExitCodeProcess(pi.hProcess, &ec);
+            CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
+            unpacked = (ec == 0);
+        }
+    }
+    std::wstring src = stage;
+    if (PathFileExistsW((stage + L"\\TypeBox\\TypeBox.exe").c_str()))
+        src = stage + L"\\TypeBox";
+    if (!unpacked || !PathFileExistsW((src + L"\\TypeBox.exe").c_str())) {
+        wchar_t msg[1024];
+        wsprintfW(msg, L(STR_UP_DL_FAIL), L"unpack", L"tar");
+        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+        return;
+    }
+
+    // install.bat: wait for our pid to vanish, mirror the staged tree (no .ini
+    // files - those are the user's), restart, remove itself. ASCII only.
+    std::wstring bat = dir + L"\\install.bat";
+    {
+        std::string srcA, appA;
+        {
+            std::wstring sw = src;
+            srcA.assign(sw.begin(), sw.end());
+            std::wstring aw = ExeDir();
+            appA.assign(aw.begin(), aw.end());
+            while (!appA.empty() && appA.back() == '\\') appA.pop_back();
+        }
+        std::string s;
+        s += "@echo off\r\n";
+        s += ":waitexit\r\n";
+        s += "tasklist /fi \"pid eq %1\" | findstr /r \"[0-9]\" >nul 2>&1 && (\r\n";
+        s += "  %SystemRoot%\\System32\\timeout.exe /t 1 /nobreak >nul\r\n";
+        s += "  goto :waitexit\r\n";
+        s += ")\r\n";
+        s += "del /q \"" + srcA + "\\*.ini\" 2>nul\r\n";
+        s += "xcopy /e /y /q /i \"" + srcA + "\\*\" \"" + appA + "\\\" >nul\r\n";
+        s += "if errorlevel 1 (\r\n";
+        s += "  echo TypeBox update: copy failed. Press a key...\r\n";
+        s += "  pause >nul\r\n";
+        s += ") else (\r\n";
+        s += "  start \"\" \"" + appA + "\\TypeBox.exe\"\r\n";
+        s += ")\r\n";
+        s += "del \"%~f0\"\r\n";
+        HANDLE hf = CreateFileW(bat.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hf == INVALID_HANDLE_VALUE) {
+            wchar_t msg[1024];
+            wsprintfW(msg, L(STR_UP_DL_FAIL), L"bat", bat.c_str());
+            MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+            return;
+        }
+        DWORD wr = 0;
+        WriteFile(hf, s.data(), (DWORD)s.size(), &wr, nullptr);
+        CloseHandle(hf);
+    }
+    LogInfo(L"/update staged " + ui.tag + L" from " + ui.asset);
+
+    if (!g_set.updAutoRun) {
+        wchar_t msg[1024];
+        wsprintfW(msg, L(STR_UP_MANUAL), dir.c_str());
+        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+    wchar_t askr[512];
+    wsprintfW(askr, L(STR_UP_RESTART_ASK), ui.tag.c_str());
+    if (MessageBoxW(mainWnd, askr, L"TypeBox — update",
+                    MB_YESNO | MB_ICONQUESTION) != IDYES) return;
+    ShowWindow(mainWnd, SW_HIDE);
+    LogInfo(L"/update: installing via install.bat, pid " + std::to_wstring(GetCurrentProcessId()));
+    std::wstring pid = std::to_wstring(GetCurrentProcessId());
+    ShellExecuteW(mainWnd, L"open", bat.c_str(), pid.c_str(), dir.c_str(), SW_SHOWNORMAL);
+    DestroyWindow(mainWnd);   // WM_DESTROY tears down cleanly; the bat takes over
+}
+
+static DWORD WINAPI UpdateCheckThread(LPVOID p) {
+    HWND wnd = (HWND)p;
+    UpdateInfo ui;
+    std::wstring err;
+    if (UpdateQuery(err, ui) && VerCmp(ui.tag, WVersion()) > 0)
+        PostMessageW(wnd, kUpdateMsg, 0, (LPARAM)new std::wstring(ui.tag));
+    return 0;
+}
+
 // ---------------------------------------------------------------- internal commands
 //
 // The 14 internal commands of TypeAndRun (Static.pas), kept 1:1 by name.
@@ -1275,6 +1727,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
             L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
+            L"/update checks GitHub Releases for a newer version (user-initiated only)\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
@@ -1429,6 +1882,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         else
             MessageBoxW(mainWnd, L"Log is empty or not configured ([Log] File).",
                         L"TypeBox — log", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/update") {
+        DoUpdate(mainWnd);            // v0.20: release check + install helper
     } else if (c == L"/hide") {
         HideBox(mainWnd);
     } else if (c == L"/show") {
@@ -1723,7 +2178,7 @@ static const wchar_t* const kInternalCmds[] = {
     L"/about", L"/checkconfig", L"/config", L"/exit", L"/export", L"/help",
     L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
     L"/log", L"/openconfig", L"/path", L"/reread", L"/settings", L"/show",
-    L"/sys", L"/unload", L"/undo" };
+    L"/sys", L"/unload", L"/undo", L"/update" };
 
 struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
 static Anchor g_anchor;
@@ -2351,7 +2806,7 @@ static void TabComplete(HWND edit) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
                      L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
                      L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path", L"/reread", L"/settings",
-                     L"/show", L"/sys", L"/unload", L"/undo" })
+                     L"/show", L"/sys", L"/unload", L"/undo", L"/update" })
                     add(cmd);
             }
             if (g_set.etAlias)
@@ -3970,6 +4425,17 @@ static void WriteDraftIni() {
     WB(L"Security", L"Elevate",           s.elevate);
     WB(L"Exec", L"Plugins",  s.execPlugins);
 
+    // [Update] (v0.20): survives settings saves; official API written as empty.
+    {
+        std::wstring api = s.updApi;
+        if (_wcsicmp(api.c_str(), kUpdateApiDefault) == 0) api.clear();
+        WS_(L"Update", L"ApiUrl",       api);
+        WB(L"Update",  L"AutoRun",      s.updAutoRun);
+        WB(L"Update",  L"CheckOnStart", s.updCheckOnStart);
+        WS_(L"Update", L"Latest",       s.updLatest);
+        WS_(L"Update", L"LastCheck",    s.updLastCheck);
+    }
+
     WInt(L"Type", L"EasyType",     s.easyType);
     WInt(L"Type", L"Fuzzy",        s.fuzzy ? 1 : 0);
     WInt(L"DropDown", L"Enable",              s.dropDown ? 1 : 0);
@@ -4473,6 +4939,25 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             ShowTrayMenu(hWnd);
         return 0;
     }
+    case kUpdateMsg: {   // v0.20: opt-in startup check result (thread -> UI)
+        std::wstring* tag = (std::wstring*)lp;
+        if (tag) {
+            if (g_set.balloonTips && g_nid.hWnd && g_set.trayIcon) {
+                g_nid.uFlags = NIF_INFO;
+                g_nid.dwInfoFlags = NIIF_INFO;
+                lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
+                std::wstring txt = std::wstring(L(STR_UP_ASK_DL));
+                // one %s: the tag; leave the rest as-is (informational balloon)
+                size_t p = txt.find(L"%s");
+                if (p != std::wstring::npos) txt.replace(p, 2, *tag);
+                lstrcpynW(g_nid.szInfo, txt.c_str(), ARRAYSIZE(g_nid.szInfo));
+                Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+            }
+            LogInfo(L"/update: newer release cached: " + *tag);
+            delete tag;
+        }
+        return 0;
+    }
     case WM_COMMAND:
         if (HIWORD(wp) == EN_CHANGE && g_edit && (HWND)lp == g_edit) {
             // live traffic-light preview of what Enter will execute
@@ -4602,6 +5087,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 + std::wstring(L(STR_SO_ADMIN)) + L"\r\n"       // v0.18 su chip + hint
                 + std::wstring(L(STR_SU_HINT)) + L"\r\n"
                 + std::wstring(L(STR_SE_ELEVATE)) + L"\r\n"
+                + std::wstring(L(STR_UP_UPTODATE)) + L"\r\n"    // v0.20 /update dialogs
+                + std::wstring(L(STR_UP_ASK_DL)) + L"\r\n"
                 + std::wstring(L(STR_HK_HINT));
             std::string bytes = ToUtf8(out);
             auto tryWrite = [&bytes](const std::wstring& p) -> bool {
@@ -4732,6 +5219,10 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetTrayVisual();                             // cozy badge replaces the default icon
     SetTimer(mainWnd, 2, 15000, nullptr);   // status bar clock refresh
     if (g_set.showOnStart) ShowBox(mainWnd);
+
+    // v0.20: opt-in silent release check (default off - offline-first).
+    if (g_set.updCheckOnStart && !g_testSettings)
+        CreateThread(nullptr, 0, UpdateCheckThread, mainWnd, 0, nullptr);
 
     if (g_testSettings) {                  // CI gate: dialog must build, pump, close
         bool ok = SettingsSelfTest(mainWnd);

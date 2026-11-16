@@ -205,3 +205,9 @@ v0.21 (clipboard muscle & eyes: #260 ring window, #261 clip type, #269/#270 plug
 sysmon) and v0.22 (brains & paperwork: #279 confirm mini-language, #202 macro recorder, #284 PIN-lock).
 Items adopted here get numbers in this table at merge time; RI3 numbering stays canonical in that doc.
 
+## v0.20.0 - release plumbing backlog - **shipped**
+
+| # | Feature | Size |
+|---|---|---|
+| 298 | ✅ `/update` (RI3 #298) - release check + sha256-verified download + AutoRun install helper (`install.bat` swap, `.ini` never overwritten), `[Update]` ApiUrl/AutoRun/CheckOnStart - user request | M |
+
