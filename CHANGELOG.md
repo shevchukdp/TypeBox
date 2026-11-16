@@ -3,6 +3,65 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.16.0] - 2026-11-16
+
+![scripts](docs/screenshots/console-script-chip.png)
+*Type `backup C:\Users\me\Docs` and the console already knows it is
+`Scripts\backup.bat` — the status strip lights the yellow **script** chip before
+Enter. Any `.bat/.cmd/.ps1/.py/.vbs` dropped into the portable `Scripts\` folder
+becomes a command by its file name; arguments pass straight through.*
+
+![safe run box](docs/screenshots/security-guard.png)
+**The only safe Run box.** Encoded one-liners — `powershell -enc …`, base64 blobs,
+`certutil`/`bitsadmin`/`mshta`, curl-pipe-shell — now stop and ask before the shell
+executes them (the ClickFix paste-into-Run attack class). **No** = nothing runs,
+and the decision is logged. Switch it off with `[Security] ConfirmSuspicious=0`.
+
+![exec page](docs/screenshots/settings-exec-v016.png)
+*Both new switches live on the Execution page: Scripts folder + suspicious-command
+confirmation.*
+
+### Added
+- 📜 **Scripts folder auto-registration** (RI2 #159): every script in the portable
+  `Scripts\` directory next to the exe is a command by its file name.
+  `hello.bat` → type `hello world`; launcher picks the right host
+  (`cmd /c` · `powershell -NoProfile -ExecutionPolicy Bypass -File` · `py` ·
+  WScript association), arguments pass through. Traffic light shows a yellow
+  **script** chip; startup logs `scripts: N registered`; `/reread` and Apply re-scan live.
+- 🛡️ **Safe Run box — payload guard** (RI2 #168): before the shell catch-all (and
+  before script arguments) runs a line that looks like an encoded payload or fileless
+  one-liner, a confirmation dialog shows exactly what would run.
+  ~30 signatures (`-enc`, `FromBase64String`, `DownloadString`, `certutil -`,
+  `bitsadmin`, `mshta http`, `regsvr32 /i:`, `| sh`, `iex`, `mimikatz`, …) plus an
+  ≥80-char base64-blob heuristic. One INI key: `[Security] ConfirmSuspicious` (default 1).
+- 🔌 **Two more plugins from the gallery ship in the zip** —
+  **cliphist** (`clip` list · `clip 3` re-copy · `clip clear`; RAM watcher on
+  `CF_UNICODETEXT`, `[Clipboard] Max/PollMs/RowChars/Popup/Persist/Balloons`) and
+  **taskman** (`task chrome` list · `kill notepad` with one confirmation popup,
+  `[Taskman] Confirm=0` for automation). Both console-first: they answer inside the
+  TypeBox console and never block the host. The zip now ships **6 plugins**.
+
+### Fixed / hardened
+- Host never dies to a suspicious line twice: guard covers both the shell stage and
+  script arguments (`script started` only after an explicit Yes).
+
+### Under the hood
+- `ScriptCmd {name, path, ext}` model + `LoadScripts()`/`FindScript()`; dispatch stage 4c
+  sits between file/URL resolution and the shell catch-all.
+- `LooksSuspicious()` — lowercase signature scan + rolling base64-run detector.
+- i18n: 3 new keys (`ex_scripts`, `se_suspicious`, `so_script`) in 17 languages.
+
+### Verified
+- `test-v0160` **26/26**: script registration + arg pass-through, guard dialog appears /
+  No blocks / Yes runs, safe lines never prompt, guard-off honors INI; cliphist
+  newest/second/list/clear/empty-answers + ET rows; taskman list/no-hit/ET + confirm
+  dialog → cancel keeps host alive; units still consumes.
+- ABI-probed both new DLLs against the host harness (`TInfo` 56 B / `TExec` 24 B,
+  all 8 exports, real `TerminateProcess` of spawned test processes).
+- Full regression suite green: v0150 21/21, v0140 18/18, v0130 11/11, v0120 9/9,
+  v0110 12/12, v0100 13/13, v091 11/11, v090 15/15.
+- `--check-i18n` + `--test-settings` gates pass; downloaded release re-run before publishing.
+
 ## [0.15.0] - 2026-11-16
 
 ![theme studio](docs/screenshots/settings-theme-studio.png)

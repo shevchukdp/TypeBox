@@ -283,6 +283,11 @@ hint like `vol 5` (harmless today, useful after the keep-visible fix).
 
 ## 4. cliphist — clipboard history (`cliphist.dll`)
 
+> **Status: shipped in v0.16.0** — implemented as `examples/plugin_cliphist/cliphist.c`
+> (console-first: with `[Clipboard] Popup=0` the list answers inside the TypeBox console,
+> never a blocking dialog; `[Clipboard] Persist=1` keeps history across runs in
+> `Plugins\cliphist.dat`).
+
 | Field | Value |
 |---|---|
 | DLL | `Plugins\cliphist.dll` |
@@ -352,6 +357,10 @@ rows also work when the user adds arguments after `clip` — not required today.
 ---
 
 ## 5. taskman — process list & kill (`taskman.dll`)
+
+> **Status: shipped in v0.16.0** — implemented as `examples/plugin_taskman/taskman.c`
+> (console-first: results are console lines; the only popup is the one kill confirmation,
+> and `[Taskman] Confirm=0` removes it too — automation-safe).
 
 | Field | Value |
 |---|---|

@@ -46,7 +46,30 @@ myide   = "C:\tools\ide.exe"|"%1"|C:\tools|3||open in my IDE
 
 ### `[Exec]`
 Toggles (`0`/`1`) mirroring TypeAndRun: `Internal`, `Aliases`, `WWW`, `EMail`,
-`Files`, `Shell`.
+`Files`, `Shell`, plus `Scripts` (v0.16) — whether the portable `Scripts\`
+folder works as a command set.
+
+### `Scripts\` folder — scripts are commands (TypeBox 0.16.0)
+
+Any `*.bat` · `*.cmd` · `*.ps1` · `*.py` · `*.vbs` · `*.vbe` dropped into the
+portable `Scripts\` folder next to the exe becomes a command by its file name:
+
+```
+Scripts\hello.bat        ->  type: hello [any arguments]
+Scripts\backup.ps1       ->  type: backup C:\Data
+```
+
+Arguments are passed through (`cmd /c` for bat/cmd, `powershell -File` for ps1,
+`py` for python, shell association for vbs). The traffic light shows a yellow
+**script** chip before Enter. Re-scan: `/reread` or Apply in settings
+(startup logs `scripts: N registered`).
+
+### `[Security]` — the safe Run box (TypeBox 0.16.0)
+| Key | Meaning | Default |
+|---|---|---|
+| `ConfirmSuspicious` | `1` = confirm before running lines that look like encoded payloads/fileless one-liners (`powershell -enc`, base64 blobs, `certutil`/`bitsadmin`/`mshta`, curl-pipe-shell, …) — the ClickFix lesson | `1` |
+The check covers the shell catch-all and script arguments. Answer **No** and
+nothing runs; the decision is logged (`security: blocked suspicious command`).
 
 ### `[Show]`
 | Key | Meaning | Default |
@@ -153,6 +176,8 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `units` | `conv 10 km mi` · `hex 255` → `FF` · `bin 0xFF` · `dec 0xFF` · `oct 777` | `[Units] Popup=1 CopyResult=1` |
 | `codec` | `b64enc/b64dec` · `urlenc/urldec` · `hexenc/hexdec` | `[Codec] Popup=1 CopyResult=1` |
 | `vol` | `vol +` · `vol -` · `vol mute` · `vol 3` | `[Vol] Step=1 Beeps=0` |
+| `cliphist` | `clip` (list) · `clip <n>` re-copy · `clip clear` — CF_UNICODETEXT watcher in RAM | `[Clipboard] Max=20 PollMs=500 RowChars=48 Popup=1 Persist=0 Balloons=0` |
+| `taskman` | `task <substr>` (list) · `kill <name|pid>` | `[Taskman] Confirm=1 ListMax=300` |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per

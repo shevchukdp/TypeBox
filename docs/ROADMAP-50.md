@@ -165,13 +165,22 @@ GALLERY backlog: cliphist/taskman/timer next wave; nettools awaits the wininet-v
 |---|---|---|
 | 78 | ✅ `themes\<name>.theme.ini` portable presets: bg/fg/accent/border colors (ChooseColorW pickers), border thickness px, alpha, font family/size/bold, console W/H — Save as…/Delete on the Theme page; combo lists built-ins + customs; Apply pushes font/alpha/geometry to INI, colors live in the theme file with `[Color]` explicit-wins kept | L |
 
-## v0.16.0 — next plugin wave + quality backlog
+## v0.16.0 — second plugin wave + quality backlog — **shipped**
 
 | # | Feature | Size |
 |---|---|---|
-| 4 | cliphist — clipboard history plugin (gallery #4): `clip 1..N` rows, `[ClipHist] Rows` | M |
-| 5 | taskman — process control plugin (gallery #5): `ps firefox`, `kill firefox`, `[Taskman] Confirm` | M |
-| 72 | ClickFix-style guard: offer "explain this error" only when the line really looks like an error | S |
-| 73 | `Scripts\` folder auto-registration (any `.bat/.ps1/.py` becomes a command) | S |
-| 75 | frecency ranking in the drop-down + `TypeBox.local.ini` override + danger-confirm for destructive aliases | M |
+| 4 | ✅ cliphist — clipboard history plugin (gallery #4): `clip 1..N` rows, `[Clipboard] Max/Popup/Persist` | M |
+| 5 | ✅ taskman — process control plugin (gallery #5): `task firefox`, `kill firefox`, `[Taskman] Confirm` | M |
+| 72 | ✅ ClickFix-style payload guard — confirm encoded one-liners before the shell runs them | S |
+| 73 | ✅ `Scripts\` folder auto-registration (any `.bat/.ps1/.py` becomes a command) | S |
+
+## v0.17.0 — ranking & trust backlog
+
+| # | Feature | Size |
+|---|---|---|
+| 75 | frecency ranking in the drop-down (count + lastUsed in `Usage.dat`) | M |
+| 76 | `TypeBox.local.ini` — per-machine override merged over `TypeBox.ini` (portable + roaming) | S |
+| 77 | danger-confirm for destructive aliases (`rm`, `del`, `format` patterns) reusing the v0.16 guard UI | S |
+| 79 | cliphist pin-to-keep + `clip <n>` also pastes at caret via Ctrl+V emulation | S |
+| 80 | taskman `restart <name>` (wait + relaunch main window) and CPU column in `task` output | S |
 

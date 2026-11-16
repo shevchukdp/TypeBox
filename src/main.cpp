@@ -80,6 +80,8 @@ struct Settings {
     // [Exec]
     bool execInternal = true, execAliases = true, execWww = true,
          execEmail = true, execFiles = true, execShell = true, execPlugins = true;
+    bool execScripts = true;         // [Exec] Scripts: portable Scripts\ folder (v0.16)
+    bool confirmSuspicious = true;   // [Security] ConfirmSuspicious: safe Run box (v0.16)
     // [Font]
     std::wstring fontName = L"Courier New";
     int  fontSize = 18;
@@ -279,6 +281,64 @@ static std::vector<EnvVar>       g_envVars;
 static std::vector<std::wstring> g_pathDirs;   // expanded
 static std::vector<std::wstring> g_pathRaw;    // as written in the INI (for GUI round-trip)
 static std::wstring              g_basePath;   // PATH as it was when the process started
+
+// ---------------------------------------------------------------- Scripts\ folder (v0.16, RI2 #159)
+// Every script in the portable Scripts\ directory becomes a command by its
+// file name (args pass through) — no INI entry, no installer.
+struct ScriptCmd { std::wstring name, path, ext; };
+static std::vector<ScriptCmd> g_scripts;
+static void LoadScripts() {
+    g_scripts.clear();
+    WIN32_FIND_DATAW fd;
+    HANDLE hf = FindFirstFileW((ExeDir() + L"Scripts\\*.*").c_str(), &fd);
+    if (hf == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) continue;
+        std::wstring fn = fd.cFileName;
+        size_t dot = fn.find_last_of(L'.');
+        if (dot == std::wstring::npos || dot == 0) continue;
+        std::wstring ext = Lower(fn.substr(dot));
+        static const wchar_t* kOk[] = { L".bat", L".cmd", L".ps1", L".py", L".vbs", L".vbe" };
+        bool ok = false;
+        for (auto e : kOk) if (ext == e) { ok = true; break; }
+        if (!ok) continue;
+        g_scripts.push_back({ fn.substr(0, dot), ExeDir() + L"Scripts\\" + fn, ext });
+    } while (FindNextFileW(hf, &fd));
+    FindClose(hf);
+    std::sort(g_scripts.begin(), g_scripts.end(),
+              [](const ScriptCmd& a, const ScriptCmd& b) {
+                  return _wcsicmp(a.name.c_str(), b.name.c_str()) < 0; });
+}
+static const ScriptCmd* FindScript(const std::wstring& word) {
+    for (auto& s : g_scripts)
+        if (_wcsicmp(s.name.c_str(), word.c_str()) == 0) return &s;
+    return nullptr;
+}
+
+// ---------------------------------------------------------------- safe Run box (v0.16, RI2 #168)
+// ClickFix-style payload guard: encoded one-liners and fileless loaders are
+// the classic paste-into-Run attack. Confirm them BEFORE the shell runs them.
+static bool LooksSuspicious(const std::wstring& line) {
+    std::wstring s = Lower(line);
+    static const wchar_t* kSigs[] = {
+        L"-enc ", L"-enc(", L"-enc:", L"encodedcommand", L"frombase64string",
+        L"downloadstring", L"-wpercent", L"certutil -", L"bitsadmin",
+        L"mshta http", L"mshta vbscript", L"regsvr32 /i:", L"rundll32 http",
+        L"rundll32 javascript", L"msiexec /i http", L" | sh", L"|sh ",
+        L" | bash", L"|bash ", L" | powershell", L"|powershell", L"| iex",
+        L"iex ", L"invoke-expression", L"mimikatz", L"psexec", L"procdump",
+        L"lazagne", L"netcat", L"nc.exe", L"base64 -d |", L"base64 --decode |",
+    };
+    for (auto sig : kSigs) if (s.find(sig) != std::wstring::npos) return true;
+    int run = 0;                                  // long base64 blob?
+    for (wchar_t c : s) {
+        if (iswspace(c)) run = 0;
+        else if (iswalnum(c) || c == L'+' || c == L'/' || c == L'=') {
+            if (++run >= 80) return true;
+        } else run = 0;
+    }
+    return false;
+}
 
 // Prepend our folders to PATH. Called at startup and whenever settings apply.
 static void ApplyEnvPath() {
@@ -559,6 +619,8 @@ static void LoadSettings() {
     g_set.execEmail    = ReadIniBool(L"Exec", L"EMail",    true);
     g_set.execFiles    = ReadIniBool(L"Exec", L"Files",    true);
     g_set.execShell    = ReadIniBool(L"Exec", L"Shell",    true);
+    g_set.execScripts  = ReadIniBool(L"Exec", L"Scripts",  true);
+    g_set.confirmSuspicious = ReadIniBool(L"Security", L"ConfirmSuspicious", true);
     g_set.execPlugins  = ReadIniBool(L"Exec", L"Plugins",  true);
 
     g_set.fontName = ReadIniStr(L"Font", L"Name", L"Courier New");
@@ -1134,6 +1196,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         LoadSettings();
         LoadAliases();
         LoadWebSearch();
+        LoadScripts();              // v0.16: Scripts\ picked up live too
         ReloadHotkey(mainWnd);
         LoadThemes();               // v0.15: themes\*.theme.ini picked up too
         ApplyThemeVisual();
@@ -1181,6 +1244,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
                 LoadSettings();
                 LoadAliases();
                 LoadWebSearch();
+                LoadScripts();
                 ReloadHotkey(mainWnd);
                 MessageBoxW(mainWnd,
                     L"Settings imported. Previous config kept as TypeBox.ini.bak",
@@ -1417,8 +1481,62 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         }
     }
 
+    // 4c) Scripts\ folder (v0.16, RI2 #159): a script file name is a command.
+    if (g_set.execScripts && !word.empty() && !g_scripts.empty() &&
+        word.find(L'\\') == std::wstring::npos && word.find(L'/') == std::wstring::npos) {
+        if (const ScriptCmd* sc = FindScript(word)) {
+            if (g_set.confirmSuspicious && LooksSuspicious(rest)) {
+                std::wstring msg = L"TypeBox \u2014 security check\n\nThe arguments to your script look like an encoded payload:\n\n"
+                                   + rest + L"\n\nRun it anyway?";
+                if (MessageBoxW(mainWnd, msg.c_str(), L"TypeBox",
+                                MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+                    LogInfo(L"security: blocked suspicious args for script: " + word);
+                    return EXC_NONE;
+                }
+            }
+            std::wstring file, args;
+            if (sc->ext == L".ps1") {
+                file = L"powershell.exe";
+                args = L"-NoProfile -ExecutionPolicy Bypass -File \"" + sc->path + L"\"";
+                if (!rest.empty()) args += L" " + rest;
+            } else if (sc->ext == L".bat" || sc->ext == L".cmd") {
+                file = L"cmd.exe";
+                args = L"/c \"" + sc->path + L"\"";
+                if (!rest.empty()) args += L" " + rest;
+            } else if (sc->ext == L".py") {
+                file = L"cmd.exe";
+                args = L"/c py \"" + sc->path + L"\"";
+                if (!rest.empty()) args += L" " + rest;
+            } else {                       // .vbs/.vbe: shell association (wscript)
+                file = sc->path;
+                args = rest;
+            }
+            HINSTANCE r = ShellExecuteW(mainWnd, L"open", file.c_str(),
+                                        args.empty() ? nullptr : args.c_str(),
+                                        nullptr, SW_SHOWNORMAL);
+            if ((INT_PTR)r > 32) {
+                LogInfo(L"script started: " + word + L" (" + sc->path + L")");
+                PlayTypeSound(8);
+                return EXC_SHELL;
+            }
+            LogError(L"script start failed: " + sc->path +
+                     L" (ShellExecute=" + std::to_wstring((INT_PTR)r) + L")");
+            return EXC_NONE;
+        }
+    }
+
     // 5) shell mode ("bash-ish"): cmd.exe /c <line>
     if (g_set.execShell) {
+        // v0.16 (RI2 #168): the only safe Run box — confirm suspicious payloads.
+        if (g_set.confirmSuspicious && LooksSuspicious(expanded)) {
+            std::wstring msg = L"TypeBox \u2014 security check\n\nThis command looks like an encoded payload or fileless one-liner:\n\n"
+                               + expanded + L"\n\nRun it anyway?";
+            if (MessageBoxW(mainWnd, msg.c_str(), L"TypeBox",
+                            MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+                LogInfo(L"security: blocked suspicious command");
+                return EXC_NONE;
+            }
+        }
         std::wstring shellCmd  = ReadIniStr(L"Shell", L"Command", L"cmd.exe");
         std::wstring shellArgs = ReadIniStr(L"Shell", L"Args", L"/c");
         ShellExecuteW(mainWnd, L"open", shellCmd.c_str(),
@@ -1501,6 +1619,9 @@ static Anchor ClassifyAnchor(const std::wstring& lineRaw) {
                         != INVALID_FILE_ATTRIBUTES)
                     { a.lamp = 1; a.labelId = STR_AN_PATH; return a; }
     }
+    if (g_set.execScripts && !word.empty() && !g_scripts.empty() &&
+        word.find(L'\\') == std::wstring::npos && word.find(L'/') == std::wstring::npos &&
+        FindScript(word)) { a.lamp = 2; a.labelId = STR_SO_SCRIPT; return a; }
     if (g_set.execShell) { a.lamp = 2; a.labelId = STR_SO_SHELL; return a; }
     a.lamp = 2; a.labelId = STR_AN_UNKNOWN; return a;
 }
@@ -3329,7 +3450,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_EXEC], L(STR_EX_EMAIL),      16, y, &Settings::execEmail);   y += 26;
     CkB(g_setPage[PG_EXEC], L(STR_EX_FILES),      16, y, &Settings::execFiles);   y += 26;
     CkB(g_setPage[PG_EXEC], L(STR_EX_SHELL),      16, y, &Settings::execShell);   y += 26;
-    CkB(g_setPage[PG_EXEC], L(STR_EX_PLUGINS),    16, y, &Settings::execPlugins);
+    CkB(g_setPage[PG_EXEC], L(STR_EX_PLUGINS),    16, y, &Settings::execPlugins); y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_EX_SCRIPTS),    16, y, &Settings::execScripts); y += 26;
+    CkB(g_setPage[PG_EXEC], L(STR_SE_SUSPICIOUS), 16, y, &Settings::confirmSuspicious);
 
     // --- EasyType
     y = 12;
@@ -3626,6 +3749,8 @@ static void WriteDraftIni() {
     WB(L"Exec", L"EMail",    s.execEmail);
     WB(L"Exec", L"Files",    s.execFiles);
     WB(L"Exec", L"Shell",    s.execShell);
+    WB(L"Exec", L"Scripts",  s.execScripts);
+    WB(L"Security", L"ConfirmSuspicious", s.confirmSuspicious);
     WB(L"Exec", L"Plugins",  s.execPlugins);
 
     WInt(L"Type", L"EasyType",     s.easyType);
@@ -3705,6 +3830,7 @@ static void LiveApply(HWND mainWnd) {
     ReloadHotkey(mainWnd);                 // LoadSettings + RegisterHotKey
     LoadAliases();                         // LoadSettings covers sys-aliases/ignores
     LoadWebSearch();
+    LoadScripts();                         // v0.16 Scripts\ follows Apply too
     // language: re-resolve pack + RTL before fonts (CJK/RTL suggestion)
     {
         bool wasRtl = (GetWindowLongW(mainWnd, GWL_EXSTYLE) & WS_EX_LAYOUTRTL) != 0;
@@ -4274,6 +4400,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetProcessDefaultLayout(LangRtl() ? LAYOUT_RTL : 0);   // Arabic mirror (LTR = 0)
     LoadAliases();
     LoadWebSearch();
+    LoadScripts();      // v0.16: Scripts\ folder auto-registration
     LoadHistory();
     DiscoverPlugins();
 
@@ -4326,8 +4453,11 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 L"on (" + std::to_wstring(g_set.ddLines) + L" rows)" : L"off"));
         LogInfo(L"fuzzy: " + std::wstring(g_set.fuzzy ? L"on" : L"off (prefix mode)"));
         LogInfo(L"websearch: " + (g_webLinks.empty()
-                ? std::wstring(L"off")
-                : std::to_wstring(g_webLinks.size()) + L" keywords"));
+                 ? std::wstring(L"off")
+                 : std::to_wstring(g_webLinks.size()) + L" keywords"));
+        LogInfo(L"scripts: " + (g_scripts.empty()
+                 ? std::wstring(L"none (Scripts\\ folder)")
+                 : std::to_wstring(g_scripts.size()) + L" registered"));
     }
 
     AddTrayIcon(mainWnd, true);

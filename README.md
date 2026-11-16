@@ -97,9 +97,16 @@ Working today (v0.12.0):
 - ✅ **All 14 TypeAndRun internal commands** (`/about … /unload`) + `/export` `/import` `/undo` `/log` `/sys`
 - ✅ **Plugin host — TypeAndRun ABI-compatible** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`):
   drop DLLs into the portable `Plugins\` folder; ships ready-to-use **units** (`conv 10 km mi`,
-  `hex 255`→`FF`), **codec** (`b64enc`, `urlenc`, `hexdec`) and **vol** (`vol + / mute / 3`), plus the
-  calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c) — [docs/PLUGIN_API.md](docs/PLUGIN_API.md),
-  specs in [docs/PLUGIN_GALLERY.md](docs/PLUGIN_GALLERY.md)
+  `hex 255`→`FF`), **codec** (`b64enc`, `urlenc`, `hexdec`), **vol** (`vol + / mute / 3`),
+  **cliphist** (`clip 3` re-copies the 3rd last copied text) and **taskman** (`task chrome`,
+  `kill notepad`), plus the calculator example in [`examples/plugin_calc`](examples/plugin_calc/calc.c)
+  — [docs/PLUGIN_API.md](docs/PLUGIN_API.md), specs in [docs/PLUGIN_GALLERY.md](docs/PLUGIN_GALLERY.md)
+- ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
+  `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
+  arguments passed through; re-scan with `/reread`
+- 🛡️ **The safe Run box** (v0.16) — ClickFix-style payload guard: encoded one-liners
+  (`powershell -enc …`, base64 blobs, `certutil`/`bitsadmin`/`mshta`, curl-pipe-shell …) ask for
+  confirmation before the shell runs them (`[Security] ConfirmSuspicious`, on by default)
 - 🖱️ **Console context menu** (like the original TypeAndRun) — right-click the console:
   Undo/Cut/Copy/Paste/Select All · Settings · Aliases · Plugins · Theme · Language ·
   Reload config · Open config folder · About · Help · Hide · Exit — all 20 languages

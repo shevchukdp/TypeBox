@@ -65,6 +65,8 @@ enum StrId {
     // v0.15: theme studio — custom themes (colors, border, alpha, font, size).
     STR_TH_BG, STR_TH_TEXT, STR_TH_ACCENT, STR_TH_BORDER, STR_TH_BORDERW,
     STR_TH_NAMELBL, STR_TH_SAVEAS, STR_TH_DEL, STR_TH_PORTNOTE,
+    // v0.16: Scripts\ folder + ClickFix-style payload guard (side table kExItems).
+    STR_EX_SCRIPTS, STR_SE_SUSPICIOUS, STR_SO_SCRIPT,
     STR_LAST
 };
 
@@ -107,7 +109,8 @@ static const char* const kKeyNames[STR_LAST] = {
     "ctx_settings", "ctx_aliases", "ctx_plugins", "ctx_theme", "ctx_lang",
     "ctx_reload", "ctx_inidir", "ctx_about", "ctx_help", "ctx_hide", "ctx_exit",
     "th_bg", "th_text", "th_accent", "th_border", "th_borderw",
-    "th_name", "th_saveas", "th_del", "th_portnote"
+    "th_name", "th_saveas", "th_del", "th_portnote",
+    "ex_scripts", "se_suspicious", "so_script"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -1057,6 +1060,30 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 /* am */ { C, C, C, C, C, C, C, C, C },
 };
 
+// v0.16 Scripts folder + payload guard. Columns == STR_EX_SCRIPTS .. STR_SO_SCRIPT.
+static const wchar_t* const kExItems[LANG_COUNT][3] = {
+/* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script" },
+/* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт" },
+/* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт" },
+/* de */ { L"Ordner Scripts\\ = Befehle", L"Verdächtige Befehle vor dem Ausführen bestätigen", L"Skript" },
+/* fr */ { L"Dossier Scripts\\ = commandes", L"Confirmer les commandes suspectes avant l'exécution", L"script" },
+/* es */ { L"Carpeta Scripts\\ = comandos", L"Confirmar comandos sospechosos antes de ejecutar", L"script" },
+/* pt */ { L"Pasta Scripts\\ = comandos", L"Confirmar comandos suspeitos antes de executar", L"script" },
+/* it */ { L"Cartella Scripts\\ = comandi", L"Conferma i comandi sospetti prima dell'esecuzione", L"script" },
+/* zh */ { L"Scripts\\ 文件夹 = 命令", L"运行前确认可疑命令", L"脚本" },
+/* ja */ { L"Scripts\\ フォルダ = コマンド", L"不審なコマンドは実行前に確認", L"スクリプト" },
+/* ko */ { L"Scripts\\ 폴더 = 명령", L"의심스러운 명령은 실행 전 확인", L"스크립트" },
+/* ar */ { L"مجلد Scripts\\ = أوامر", L"تأكيد الأوامر المشبوهة قبل التشغيل", L"نص برمجي" },
+/* tr */ { L"Scripts\\ klasörü = komutlar", L"Şüpheli komutları çalıştırmadan önce onayla", L"betik" },
+/* pl */ { L"Folder Scripts\\ = polecenia", L"Potwierdzaj podejrzane polecenia przed uruchomieniem", L"skrypt" },
+/* vi */ { L"Thư mục Scripts\\ = lệnh", L"Xác nhận lệnh đáng ngờ trước khi chạy", L"tập lệnh" },
+/* hi */ { L"Scripts\\ फ़ोल्डर = कमांड", L"चलाने से पहले संदिग्ध कमांड की पुष्टि करें", L"स्क्रिप्ट" },
+/* id */ { L"Folder Scripts\\ = perintah", L"Konfirmasi perintah mencurigakan sebelum dijalankan", L"skrip" },
+/* sw */ { C, C, C },
+/* af */ { C, C, C },
+/* am */ { C, C, C },
+};
+
 // ---------------------------------------------------------------- runtime state
 static int g_langIdx = LANG_EN;
 static std::map<std::wstring, std::wstring> g_i18nUser;   // key -> override
@@ -1142,7 +1169,10 @@ static void SetLanguage(int idx) {
 static const wchar_t* L(int id) {
     if (id < 0 || id >= STR_LAST) return L"?";
     // 1) portable user override  2) current pack  3) ctx table  4) English
-    auto it = g_i18nUser.find(std::wstring(I18nFromUtf8(kKeyNames[id])));
+    // kKeyNames must list every appended key; guard anyway so a missed entry
+    // degrades to the pack lookup instead of abort()ing on wstring(nullptr).
+    auto it = kKeyNames[id] ? g_i18nUser.find(std::wstring(I18nFromUtf8(kKeyNames[id])))
+                            : g_i18nUser.end();
     if (it != g_i18nUser.end() && !it->second.empty()) return it->second.c_str();
     const wchar_t* s = kPacks[g_langIdx]->items[id];
     if (s && *s) return s;
@@ -1157,6 +1187,13 @@ static const wchar_t* L(int id) {
         const wchar_t* x = kThItems[g_langIdx][id - STR_TH_BG];
         if (x && *x) return x;
         x = kThItems[LANG_EN][id - STR_TH_BG];
+        if (x && *x) return x;
+        return L"?";
+    }
+    if (id >= STR_EX_SCRIPTS && id <= STR_SO_SCRIPT) {
+        const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
+        if (x && *x) return x;
+        x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16 tail
         if (x && *x) return x;
         return L"?";
     }

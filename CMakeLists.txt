@@ -41,6 +41,16 @@ foreach(P units codec vol)
     set_target_properties(${P} PROPERTIES PREFIX "")
 endforeach()
 
+# Gallery wave two (v0.16.0): cliphist needs shell32 for its optional balloon.
+foreach(P cliphist taskman)
+    string(TOUPPER ${P} PU)
+    add_library(${P} SHARED examples/plugin_${P}/${P}.c)
+    target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
+    target_link_libraries(${P} PRIVATE user32)
+    set_target_properties(${P} PROPERTIES PREFIX "")
+endforeach()
+target_link_libraries(cliphist PRIVATE shell32)
+
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without
     # this flag MSVC decodes literals in the system ANSI codepage — the released
