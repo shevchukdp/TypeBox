@@ -3,6 +3,26 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.19.1] - 2026-11-16
+
+*Regression fix for the user report "пропал вызов настроек": the v0.19.0 drag
+handle turned the whole status strip into `HTCAPTION`, and `WM_NCHITTEST` cannot
+tell which mouse button is down - so a right-click on the strip never became
+`WM_CONTEXTMENU` and the console menu (Settings/Aliases/Plugins/…) did not open
+there. With the default `Height=40` that dead zone was half of the console.*
+
+- 🖱️ **Right-click on the status strip opens the console menu again** - the strip
+  is claimed as a drag handle only while the **left** button is down
+  (`GetAsyncKeyState(VK_RBUTTON)` guard); a right press falls through to the
+  ordinary client-area path, and a defensive `WM_NCRBUTTONUP/HTCAPTION` handler
+  opens the menu at the cursor even if the hit-test races.
+- 🧪 Two new gates in `test-v0190.ps1`: real-mouse `SendInput` right-clicks over
+  the edit line **and** the status strip must each raise the popup menu
+  (`d7_rclick_edit_menu`, `d8_rclick_strip_menu`) - message-posting probes could
+  not see this class of bug, so the suite now clicks for real.
+- ✋ Drag behavior is unchanged: left-press on the strip moves the window,
+  the spot survives hide/show, restart returns to the INI position.
+
 ## [0.19.0] - 2026-11-16
 
 ![pwgen](docs/screenshots/console-pwgen.png)

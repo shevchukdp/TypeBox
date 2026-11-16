@@ -4410,8 +4410,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     // v0.19: drag the console by its 20px status strip. Returning HTCAPTION
     // makes DefWindowProc run the standard system move loop; it ends with
     // WM_EXITSIZEMOVE, where we remember the spot (memory only, see g_dragX).
+    // WM_NCHITTEST cannot tell WHICH button is down - and HTCAPTION silently
+    // eats right-clicks (no WM_CONTEXTMENU, so no console menu: the v0.19.0
+    // regression users hit). Only claim the strip while the LEFT button is
+    // down; with the right button the strip behaves like plain client area.
     case WM_NCHITTEST: {
-        if (g_set.dragMove) {
+        if (g_set.dragMove && (GetAsyncKeyState(VK_RBUTTON) & 0x8000) == 0) {
             POINT cp = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
             ScreenToClient(hWnd, &cp);
             RECT rc; GetClientRect(hWnd, &rc);
@@ -4421,6 +4425,15 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         break;
     }
+    case WM_NCRBUTTONUP:
+        // right-click on the strip (e.g. arriving as non-client after a hit-test
+        // race): still open the console menu at the cursor, like everywhere else
+        if (wp == HTCAPTION && g_visible) {
+            POINT pt = { (int)(short)LOWORD(lp), (int)(short)HIWORD(lp) };
+            ShowConsoleMenu(hWnd, pt);
+            return 0;
+        }
+        break;
     case WM_NCLBUTTONDBLCLK:
         if (g_set.dragMove) return 0;   // double-click on strip must not maximize
         break;
