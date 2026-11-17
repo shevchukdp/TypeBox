@@ -24,6 +24,10 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 |---|---|
 | ![al](docs/screenshots/settings-aliases.png) | ![p](docs/screenshots/settings-plugins.png) |
 
+| `clip ring` — topmost clipboard picker (v0.24) | `note list` — quick capture to markdown (v0.25) | Settings → Plugins checklist (v0.25) |
+|---|---|---|
+| ![ring](docs/screenshots/console-clipring.png) | ![note](docs/screenshots/console-note.png) | ![plchk](docs/screenshots/console-plugins-checklist.png) |
+
 | Settings → Theme (cozy presets) | Settings → Language (20 UI languages) | The same page, Russian UI |
 |---|---|---|
 | ![theme](docs/screenshots/settings-theme.png) | ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
@@ -53,7 +57,12 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-Working today (v0.12.0):
+**Where TypeBox stands:** everything below ships in **[v0.25.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
+The project evolves in focused waves: one release ships a theme (v0.24 was the clipboard-picker wave, v0.25 is quick capture + plugin control), each gated by its
+own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in
+[CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md). Next wave: **v0.26.0 — `yt` video search**.
+
+Working today (v0.25.0 — 12 plugins ship ready-to-use):
 - 🔎 **Web-search quicklinks** — `[WebSearch] so=https://…%s`: `so hello world` opens the default
   browser (built-in g/yt/gh); logged, history-friendly, amber anchor
 - ⌨️ **Alt+1…9 quick-select** — the drop-down numbers its rows; Alt+digit runs one instantly;
@@ -156,8 +165,11 @@ Working today (v0.12.0):
 - ✅ Persistent history (`↑/↓`, portable `History.dat`, per-type toggles) · single instance + `WM_COPYDATA` IPC
 - ✅ INI config next to the exe — portable
 
-Planned (see [docs/PLAN.md](docs/PLAN.md)):
-- EasyType hint/dropdown popups + full 3-scheme colors
+Planned (full backlog of 50+ vetted ideas in [docs/ROADMAP-50.md](docs/ROADMAP-50.md) — [docs/PLAN.md](docs/PLAN.md) keeps the original plan):
+- 🏗️ **In progress — v0.26.0**: `yt <query>` video search right in the console —
+  top results with titles/durations, `yt <n>` opens one in the browser; optional
+  `[Youtube] ApiKey` (Data API v3), keyless public-instance fallback, and the
+  network is touched **only** when you type the command, like `/update`
 - Info display (calculator, web results, files, system status — like PowerToys Run modules)
 - Drop-down terminal / bash mode (Guake/Yakuake/Drop style)
 
@@ -172,8 +184,10 @@ info modules, ConPTY terminal mode, profiles) — is in **[docs/FEATURES.md](doc
 
 ## Docs
 
+- [CHANGELOG.md](CHANGELOG.md) — what shipped in every release, gate counts included
+- [docs/ROADMAP-50.md](docs/ROADMAP-50.md) — the living roadmap: adopted ideas, release picks, shipped status
 - [docs/FEATURES.md](docs/FEATURES.md) — parity checklist vs TypeAndRun + additions
-- [docs/PLAN.md](docs/PLAN.md) — roadmap (MVP → plugins → info → bash/terminal)
+- [docs/PLAN.md](docs/PLAN.md) — the original plan (MVP → plugins → info → bash/terminal)
 - [docs/CONFIG.md](docs/CONFIG.md) — INI schema, portability, import/export, migration
 - [docs/LANGUAGE.md](docs/LANGUAGE.md) — 20 UI languages, RTL, portable translation packs
 - [docs/PLUGIN_API.md](docs/PLUGIN_API.md) — TypeAndRun-compatible plugin ABI
