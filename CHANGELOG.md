@@ -3,6 +3,41 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.25.0] - 2026-11-17
+
+![note](docs/screenshots/console-note.png)
+*`note list` - today's captures, plain `.md` files in a folder of your choosing.
+The twelfth plugin, `note.dll`, is quick capture done the way the note apps do it -
+studied from Obsidian QuickAdd and Joplin before a line was written (user request).*
+
+### The capture + control wave - user requests
+
+- ✅ **`note`** - a topmost capture editor: it opens with whatever the clipboard holds
+  (capture first, organize later), **Ctrl+Enter** saves, **Esc** cancels. The file is a
+  clean markdown note - `# title` from the first line, a `_Captured …_` stamp, body -
+  named `2026-11-17-1423-privet-mir.md` so nameless captures still sort by time. The
+  saved path lands on the clipboard.
+- ✅ **`note + <text>`** - the QuickAdd bullet: appends `- [14:23] text` to today's
+  journal `YYYY-MM-DD.md`, creating it with a `# YYYY-MM-DD` heading when missing.
+- ✅ **`note list` / `note open`** - today's notes in one line; Explorer to the folder.
+  Everything lives in `[Notes] Folder` - default `<exe>\Notes`, portable: point it at
+  your vault and TypeBox writes plain files, no database, **no network, ever**.
+- ✅ **Settings → Plugins is now a checklist** (user request) - every discovered dll is
+  listed with a tick box; click a row to switch the plugin off (it stops being loaded,
+  stops answering, greys out), click again to bring it back. Persisted to
+  `[PluginState]` on OK/Apply - the INI stays the single source of truth, the dialog
+  just makes it visible.
+- ✅ **Hardening carried into the new plugin** - `note.dll` opens the clipboard against
+  its own message-only window (the v0.24 lesson), reads config from the *host* exe side
+  (portable default `exe\Notes`, not `Plugins\Notes`), and keeps ':' out of filenames
+  the way NTFS demands (the ADS trap the first draft fell into).
+- ✅ `test-v0250.ps1`: 22 gates - one-shot file content asserted from disk, journal
+  heading + timestamped bullet, clipboard hand-off, `note list`, editor open/prefill/
+  Ctrl+Enter-save/close, `[Notes] Folder` override across restarts, the checklist
+  end-to-end (rows=11, click -> `[PluginState] note_Load=0` -> 10 enabled after
+  restart -> the plugin truly silent -> re-click -> alive again), plus ABI neighbours
+  (`ts`, `clip`) still answering with the twelfth plugin loaded.
+
 ## [0.24.0] - 2026-11-17
 
 ![ring](docs/screenshots/console-clipring.png)

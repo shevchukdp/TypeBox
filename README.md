@@ -107,7 +107,9 @@ Working today (v0.12.0):
    a topmost mini label, `[Timer]` defaults), **sysmon** (`cpu`, `ram`, `batt`, `disk`, `sys` - sampled
    CPU percent, clipboard hand-off, `[Sysmon]` defaults) and **util** (`ts 1763385000` epoch↔ISO,
    `ts clip`, `slug Привет мир` → `privet-mir` with the result on the clipboard, `sha256 file` +
-   `sha256 /verify SUMS` checksum checks), plus the calculator example in
+   `sha256 /verify SUMS` checksum checks), **note** (`note` opens the quick-capture editor,
+   `note <text>` saves a markdown file, `note + <text>` appends a timestamped bullet to
+   today's journal), plus the calculator example in
    [`examples/plugin_calc`](examples/plugin_calc/calc.c)
  - ✅ **Positions & stay-awake** (v0.23) — `pos right` / `pos q3` / `pos center` dock the console
    into FancyZones-style slots of the current monitor, `pos <name>` uses a `[Positions]` preset
@@ -120,6 +122,11 @@ Working today (v0.12.0):
     Esc dismisses; `clip type <n>` injects it per-character via SendInput for apps that
     block Ctrl+V; `sha256 <file>` puts a digest on the clipboard and `sha256 /verify SUMS`
     checks a GNU/BSD checksum list the way `sha256sum -c` does
+  - ✅ **Quick capture & plugin control** (v0.25) — `note` opens a topmost capture editor
+    (clipboard prefilled, Ctrl+Enter saves a `YYYY-MM-DD-HHmm-title.md` into `[Notes] Folder`,
+    your vault stays plain markdown); `note + text` lands a timestamped `- [HH:mm] …` bullet
+    in today's journal like Obsidian QuickAdd; and Settings → Plugins is now a checklist —
+    click any plugin to turn it off (or back on), persisted to `[PluginState]`, no INI editing
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
   arguments passed through; re-scan with `/reread`

@@ -290,6 +290,7 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `timer` | `timer 5m tea` countdown with tray balloon · `timer` (list) · `timer stop [label]` (no label = soonest) · `sw` start/report/stop the stopwatch · `sw reset` | `[Timer] MiniWindow=1 Sound=1 Max=8` |
 | `sysmon` | `cpu` % (delta of two samples, never a stale 0) · `ram` used/total (load %) · `batt` state+percent · `disk` free/total per fixed drive · `sys` all-in-one line, auto-copied to clipboard | `[Sysmon] SampleMs=2000 DiskMinGB=0 Popup=0` |
 | `util` | `ts` now (epoch s/ms + ISO local/UTC) · `ts 1763385000` · `ts 2026-11-16T08:00+03:00` · `ts clip` · `slug Привет мир` → `privet-mir` (trailing `snake`/`pascal`/`camel`/`upper`, result copied) · `sha256 <file>` (digest + clipboard) · `sha256 /verify SUMS [base]` (GNU + BSD formats, `sha256sum -c` rules) | — |
+| `note` | `note` (capture editor, clipboard prefilled, Ctrl+Enter saves) · `note <text>` (one-shot `YYYY-MM-DD-HHmm-title.md`) · `note + <text>` (`- [HH:mm] text` bullet in today's journal `YYYY-MM-DD.md`) · `note list` (today's files) · `note open` (folder in Explorer) | `[Notes] Folder=` (default `<exe>\Notes`), `Prefill=1` |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per
@@ -297,8 +298,10 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 so Ctrl+C copies the formatted line; the clipboard gets the raw value.
 
 ### `[PluginState]` — per-plugin switches (TypeBox extension)
-Written by the **Plugins** page of the settings dialog, read at startup. Keys are the
-dll base name (no extension):
+Written by the **Plugins** page of the settings dialog, read at startup. Since
+v0.25 the page is a checklist: every discovered plugin is listed with a tick
+box - click a row to enable/disable it (the *Load* checkbox mirrors the selected
+row). Keys are the dll base name (no extension):
 `<name>_Load=1|0` — whether `Load()` runs at start and commands are routed to the
 plugin; `<name>_SaveHistory=1|0` — whether its commands go to the history.
 Example: `calc_Load=0` keeps `calc.dll` unloaded until re-enabled. The section is

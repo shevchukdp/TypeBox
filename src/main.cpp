@@ -3914,10 +3914,64 @@ static void SettingsShowPage(int p) {
         ShowWindow(g_setPage[i], i == p ? SW_SHOW : SW_HIDE);
 }
 
+// v0.25: the plugins list is a checklist - a click on a row toggles that
+// plugin's enable state (the "Load" checkbox of the edit pane stays in sync).
+static LRESULT CALLBACK PlChkProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+    LRESULT r = DefSubclassProc(h, m, w, l);
+    if (m == WM_LBUTTONUP) {
+        int idx = (int)SendMessageW(h, LB_ITEMFROMPOINT, 0, MAKELPARAM(LOWORD(l), HIWORD(l)));
+        if (LOWORD(idx) < (int)g_plRows.size()) {
+            PluginsReadRow();                       // commit the pane being edited
+            g_plSel = (int)LOWORD(idx);
+            g_plRows[g_plSel].load = g_plRows[g_plSel].load ? 0 : 1;
+            SendMessageW(g_plLoadChk, BM_SETCHECK,
+                         g_plRows[g_plSel].load ? BST_CHECKED : BST_UNCHECKED, 0);
+            InvalidateRect(h, NULL, TRUE);
+        }
+    }
+    return r;
+}
+
 static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+    case WM_MEASUREITEM: {                          // plugin checklist row height
+        LPMEASUREITEMSTRUCT mi = (LPMEASUREITEMSTRUCT)l;
+        if (mi->itemID == (UINT)-1) { mi->itemHeight = 20; return TRUE; }
+        break;
+    }
     case WM_DRAWITEM: {
         LPDRAWITEMSTRUCT di = (LPDRAWITEMSTRUCT)l;
+        if (g_plLb && di->hwndItem == g_plLb) {     // plugin enable checklist (v0.25)
+            if (di->itemID >= 0 && di->itemID < (int)g_plRows.size()) {
+                bool on = g_plRows[di->itemID].load != 0;
+                FillRect(di->hDC, &di->rcItem,
+                         GetSysColorBrush((di->itemState & ODS_SELECTED)
+                                          ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+                {
+                    RECT cb = di->rcItem;
+                    cb.left += 6;
+                    cb.top += (cb.bottom - cb.top - 13) / 2;
+                    cb.bottom = cb.top + 13;
+                    cb.right  = cb.left + 13;
+                    DrawFrameControl(di->hDC, &cb, DFC_BUTTON,
+                                     DFCS_BUTTON3STATE | (on ? DFCS_CHECKED : 0));
+                }
+                {
+                    wchar_t nm[128];
+                    nm[0] = 0;
+                    SendMessageW(g_plLb, LB_GETTEXT, di->itemID, (LPARAM)nm);
+                    SetBkMode(di->hDC, TRANSPARENT);
+                    SetTextColor(di->hDC,
+                                 (di->itemState & ODS_SELECTED)
+                                     ? GetSysColor(COLOR_HIGHLIGHTTEXT)
+                                     : (on ? GetSysColor(COLOR_WINDOWTEXT)
+                                           : GetSysColor(COLOR_GRAYTEXT)));
+                    TextOutW(di->hDC, di->rcItem.left + 28, di->rcItem.top + 2,
+                             nm, lstrlenW(nm));
+                }
+            }
+            return TRUE;
+        }
         if (g_themePrev && di->hwndItem == g_themePrev) {   // theme preview card
             const Theme& t = g_draftTheme;                 // v0.15: live studio draft
             HBRUSH b = CreateSolidBrush(t.bg);
@@ -4005,6 +4059,10 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             return 0;
         }
         if (code == BN_CLICKED) {
+            if (src == g_plLoadChk && g_plLb) {     // checklist glyph follows the
+                PluginsReadRow();                   // per-row "Load" checkbox and
+                InvalidateRect(g_plLb, NULL, TRUE); // the other way round as well
+            }
             // v0.15 theme studio: click a color patch -> ChooseColorW
             for (int i = 0; i < 4; ++i) {
                 if (src != g_thSw[i]) continue;
@@ -4167,7 +4225,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 // Page windows are DefWindowProc containers; forward their child notifications
 // (BN_CLICKED, LBN_SELCHANGE, EN_CHANGE...) to the settings window proc.
 static LRESULT CALLBACK PageProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
-    if (m == WM_COMMAND || m == WM_DRAWITEM)   // owner-draw controls live on the pages
+    if (m == WM_COMMAND || m == WM_DRAWITEM || m == WM_MEASUREITEM)  // owner-draw controls live on the pages
         return SendMessageW(GetParent(h), m, w, l);
     return DefSubclassProc(h, m, w, l);
 }
@@ -4400,7 +4458,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     // --- Plugins
     g_plLb = MkOn(g_setPage[PG_PLUGINS], L"LISTBOX", L"",
-                  WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 180, 250);
+                  WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
+                  LBS_OWNERDRAWFIXED | LBS_HASSTRINGS, 8, 8, 180, 250);
+    SetWindowSubclass(g_plLb, PlChkProc, 8, 0);     // click = enable/disable
     int px = 200;
     g_plLoadChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_LOAD), px, 12, 180);
     g_plHistChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_HIST), px, 38, 180);
@@ -4773,6 +4833,14 @@ static bool SettingsSelfTest(HWND mainWnd) {
     OpenSettings(mainWnd, 0);
     if (!g_setWnd) return false;
     MSG m;
+    for (int i = 0; i < 20; ++i) {
+        if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&m);
+            DispatchMessageW(&m);
+        }
+        Sleep(20);
+    }
+    OpenSettings(mainWnd, PG_PLUGINS);    // v0.25: exercise the plugin checklist
     for (int i = 0; i < 20; ++i) {
         if (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
             TranslateMessage(&m);

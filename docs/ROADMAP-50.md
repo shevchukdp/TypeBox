@@ -230,11 +230,16 @@ Items adopted here get numbers in this table at merge time; RI3 numbering stays 
 | 246 | ✅ `sha256 <file>` + `sha256 /verify` (RI3 #246) - BCrypt digest, GNU+BSD list formats, `sha256sum -c` answers | M |
 | - | ✅ host DX - ET gets the whole line (subcommand templates complete), Tab replaces from line start, `g_visible` syncs when a plugin hides the console, clipboard opens against a thread window everywhere (no host hang on a wedged chain) | M |
 
-## v0.25.0 / v0.26.0 - user-requested queue
+## v0.25.0 - user-requested queue - **shipped**
 
 | # | Feature | Size |
 |---|---|---|
-| U25 | ⏳ `note` plugin (user request) - quick-capture popup: type/paste text, link or snippet, Enter saves timestamped Markdown into `[Notes] Folder` (Obsidian/Joplin conventions: `YYYY-MM-DD-HHmm-title.md`, front-matter tags, append mode `note + text`, `note` lists today's notes, `note open` opens the folder) | M |
-| U25b | ⏳ Plugin manager checkboxes (user request) - Settings shows every plugin with an enable/disable check box, persisted to `[PluginState]`, no INI editing needed | S |
+| U25 | ✅ `note` plugin (user request) - quick-capture popup: clipboard-prefilled editor, Ctrl+Enter saves timestamped Markdown into `[Notes] Folder` (Obsidian/Joplin conventions: `YYYY-MM-DD-HHmm-title.md`, `_Captured_` stamp, `note + text` daily-journal bullets, `note list`/`note open`) | M |
+| U25b | ✅ Plugin manager checkboxes (user request) - Settings → Plugins is a click-to-toggle checklist, persisted to `[PluginState]`, disabled plugins stay unloaded and silent | S |
+
+## v0.26.0 - user-requested queue
+
+| # | Feature | Size |
+|---|---|---|
 | U26 | ⏳ `yt <query>` plugin (user request) - top videos in the console, `yt <n>` opens in the browser; optional `[Youtube] ApiKey` (Data API v3), keyless Piped/Invidious JSON fallback, results-URL last resort; network only on the explicit typed command, like `/update` | M |
 

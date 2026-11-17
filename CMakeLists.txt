@@ -48,7 +48,9 @@ endforeach()
 # stopwatch mini-window, shell32 for the tray balloon.
 # sysmon (v0.22, gallery #8): pure user32 (clipboards) + kernel32 stats calls.
 # util (v0.23, RI3 #250/#251): ts + slug, user32 for the clipboard hand-off.
-foreach(P cliphist taskman winlist pwgen timer sysmon util)
+# note (v0.25, user request): quick capture to markdown - shell32 for
+# ShellExecuteW/SHCreateDirectoryExW, gdi32 for the editor fonts.
+foreach(P cliphist taskman winlist pwgen timer sysmon util note)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -60,6 +62,7 @@ target_link_libraries(taskman  PRIVATE shell32)
 target_link_libraries(pwgen    PRIVATE advapi32)
 target_link_libraries(timer    PRIVATE shell32 winmm gdi32)
 target_link_libraries(util     PRIVATE bcrypt)
+target_link_libraries(note     PRIVATE shell32 gdi32)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without
