@@ -148,8 +148,14 @@ Two host-side utility words (they run before aliases, obey `[Exec] Internal=0`):
   rightmon = 80,160,900,200,2       ; + monitor index (0-based, wraps)
   ```
 
-- The spot lives **in memory only**: hide/show and drag keep it, but a restart returns the
-  console to its `[Show]`/`X`/`Y` home (your INI is never rewritten).
+- The spot lives **in memory only** and belongs to the slot itself: since 0.27.1 a `pos`
+  call never inflates the `[Show]` size — hide/show re-applies the slot's own rect, a
+  manual drag releases the active slot (your window management wins), and
+  `pos reset` returns to the `[Show]` home explicitly. A restart always returns to
+  `[Show]`/`X`/`Y` (your INI is never rewritten).
+- Under `TYPEBOX_HEADLESS=1` the same slot math runs, but the rect is applied 32000px
+  off both axes — automated suites verify geometry without ever surfacing a window
+  on the human's screen.
 - `stayawake [min]` — keeps display+system awake (`SetThreadExecutionState`), bare = indefinite,
   `1..1440` minutes rides a timer and clears itself, `stayawake off` clears now. No process or
   service is started; the state dies with TypeBox, so an exit is always a clean `off`.

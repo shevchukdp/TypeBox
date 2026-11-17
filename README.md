@@ -65,12 +65,12 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-**Where TypeBox stands:** everything below ships in **[v0.27.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
-The project evolves in focused waves: one release ships a theme (v0.25 was quick capture + plugin control, v0.26 is the web wave, v0.27 is the power-user console wave), each gated by its
+**Where TypeBox stands:** everything below ships in **[v0.27.1](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
+The project evolves in focused waves: one release ships a theme (v0.25 was quick capture + plugin control, v0.26 is the web wave, v0.27 is the power-user console wave — 0.27.1 fixes window geometry: a `pos` slot can no longer stretch the console, and `pos reset` is new), each gated by its
 own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in
 [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
 
-Working today (v0.27.0 — 13 plugins ship ready-to-use):
+Working today (v0.27.1 — 13 plugins ship ready-to-use):
 - 🔍 **Ctrl+R reverse history search** — bash-style: press Ctrl+R, keep typing to filter your
   command history (newest first, `|bck` marker in the status strip), Ctrl+R cycles further back,
   Enter runs, Esc restores your line, Tab exits with the text kept

@@ -3,6 +3,26 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.27.1] - 2026-11-17
+
+### Geometry fix — the console never "spreads out" again
+
+Reported by the user: «окно иногда расползается на больший размер, чем функционально надо».
+Two real causes, both fixed:
+
+- **A `pos` slot no longer overwrites `[Show]`.** Previously `ApplyPosRect` wrote the slot's
+  width/height straight into `[Show]`/`Width`/`Height`, so after e.g. `pos right` a one-line
+  console stayed half-screen wide until restart — hide/show "restored" the bloated size.
+  Now the slot keeps its own rect (re-applied on every show), `[Show]` stays the restore
+  source, a manual drag releases the active slot, and a new **`pos reset`** returns to the
+  `[Show]` home on demand. INI is still never rewritten.
+- **Test-mode windows are now invisible.** Part of what the user was seeing were the
+  automated suites' own windows: `pos` geometry and the type-pad landed on the work area.
+  In headless mode `pos` applies the computed rect 32000px off both axes (identical math,
+  human-safe), and the harness type-pad parks off-screen under `TYPEBOX_HEADLESS`/`TB_QUIET`.
+- Suites: `test-v0230` pos gates now measure against the parked point (`rc − park`, DPI-space
+  safe) and a new `t09b` gate proves `pos reset` returns the `[Show]` geometry.
+
 ## [0.27.0] - 2026-11-17
 
 ![ctrlr](docs/screenshots/console-ctrlr.png)

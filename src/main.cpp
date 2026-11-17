@@ -2448,6 +2448,13 @@ static bool g_dragged = false;
 // v0.27: once `pos` has deliberately repositioned the console (headless suites
 // depend on the geometry), a re-show must keep that spot, not re-park at -32000.
 static bool g_posMoved = false;
+// v0.27.1: the active `pos` slot keeps ITS OWN geometry (right/bottom are w/h,
+// not edges). The old code wrote the slot straight into g_set, so a one-line
+// console stayed "spread out" at half-screen until restart; and in headless
+// mode the slot landed on the HUMAN's work area during test runs. [Show] now
+// stays the restore source, `pos reset` releases the slot, and headless
+// applies the rect shifted -32000px off both axes.
+static RECT g_posRect = {};
 
 static void ShowBox(HWND mainWnd) {
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
@@ -2458,19 +2465,22 @@ static void ShowBox(HWND mainWnd) {
     else y = g_set.centerY ? (wr.bottom - g_set.height) / 3 : 100;
     if (!g_set.centerX) x = 0;
     if (g_set.dragMove && g_dragged) { x = g_dragX; y = g_dragY; }
+    // v0.27.1: an active `pos` slot outranks everything (position AND size);
+    // in headless mode the same rect is applied -32000 off both axes so the
+    // human never sees it. Otherwise: [Show] geometry / the off-screen park.
+    int ww = g_set.width, hh = g_set.height;
+    if (g_posMoved) { x = g_posRect.left; y = g_posRect.top;
+                      ww = g_posRect.right; hh = g_posRect.bottom; }
 
     if (g_headless) {
         // off-screen and non-activating: suites drive it by posted messages,
-        // the human at the keyboard never sees it nor loses focus. Exception:
-        // after an explicit `pos` the suite owns the geometry - keep that spot.
-        if (g_posMoved)
-            SetWindowPos(mainWnd, nullptr, 0, 0, 0, 0,
-                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        else
-            SetWindowPos(mainWnd, nullptr, -32000, -32000, g_set.width, g_set.height,
-                         SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+        // the human at the keyboard never sees it nor loses focus.
+        int px = -32000, py = -32000;
+        if (g_posMoved) { px = x - 32000; py = y - 32000; }
+        SetWindowPos(mainWnd, nullptr, px, py, ww, hh,
+                     SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
     } else {
-        SetWindowPos(mainWnd, HWND_TOPMOST, x, y, g_set.width, g_set.height, SWP_SHOWWINDOW);
+        SetWindowPos(mainWnd, HWND_TOPMOST, x, y, ww, hh, SWP_SHOWWINDOW);
     }
     if (g_set.transparent < 255) {
         SetWindowLongW(mainWnd, GWL_EXSTYLE,
@@ -2544,11 +2554,16 @@ static void ShowAnswer(HWND mainWnd, const std::wstring& text) {
 
 static bool ApplyPosRect(HWND w, int x, int y, int ww, int hh) {
     if (ww < 40 || hh < 20) return false;
-    if (!SetWindowPos(w, NULL, x, y, ww, hh,
+    // v0.27.1: the slot is computed EXACTLY as the human would get it, but in
+    // headless mode it is applied 32000px off both axes - suites must never
+    // surface a window on the human's screen (that is what "the window keeps
+    // spreading out during tests" really was). g_set stays untouched.
+    g_posRect.left = x;  g_posRect.top = y;
+    g_posRect.right = ww; g_posRect.bottom = hh;   // w/h, not edges
+    int ax = g_headless ? x - 32000 : x;
+    int ay = g_headless ? y - 32000 : y;
+    if (!SetWindowPos(w, NULL, ax, ay, ww, hh,
                       SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW)) return false;
-    g_set.x = x; g_set.y = y; g_set.width = ww; g_set.height = hh;
-    g_set.centerX = false; g_set.centerY = false;
-    g_dragX = x; g_dragY = y; g_dragged = true;    // ShowBox keeps our spot too
     return true;
 }
 
@@ -2609,6 +2624,12 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
             : MonitorFromWindow(mainWnd, MONITOR_DEFAULTTONEAREST);
         if (!hm || !GetMonitorInfoW(hm, &mi)) return EXC_NONE;
         if (rest.empty()) { ShowAnswer(mainWnd, L(STR_PO_USAGE)); return EXC_PLUGIN; }
+        if (!_wcsicmp(rest.c_str(), L"reset")) {   // v0.27.1: release the slot
+            g_posMoved = false;
+            ShowAnswer(mainWnd, L"pos: back to [Show] geometry");
+            LogInfo(L"pos: reset to [Show]");
+            return EXC_PLUGIN;
+        }
         int x, y, ww, hh;
         if (SlotRect(mi.rcWork, rest.c_str(), &x, &y, &ww, &hh)) {
             if (!ApplyPosRect(mainWnd, x, y, ww, hh))
@@ -5434,6 +5455,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_set.dragMove) {
             RECT rc; GetWindowRect(hWnd, &rc);
             g_dragX = rc.left; g_dragY = rc.top; g_dragged = true;
+            g_posMoved = false;   // v0.27.1: a manual drag releases the pos slot
         }
         return 0;
     case WM_HOTKEY:
