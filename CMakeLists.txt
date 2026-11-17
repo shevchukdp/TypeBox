@@ -50,7 +50,9 @@ endforeach()
 # util (v0.23, RI3 #250/#251): ts + slug, user32 for the clipboard hand-off.
 # note (v0.25, user request): quick capture to markdown - shell32 for
 # ShellExecuteW/SHCreateDirectoryExW, gdi32 for the editor fonts.
-foreach(P cliphist taskman winlist pwgen timer sysmon util note)
+# yt (v0.26, user request): console video search - winhttp for the three-tier
+# lookup (Data API / Piped / Invidious), shell32 to open the results.
+foreach(P cliphist taskman winlist pwgen timer sysmon util note yt)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -63,6 +65,7 @@ target_link_libraries(pwgen    PRIVATE advapi32)
 target_link_libraries(timer    PRIVATE shell32 winmm gdi32)
 target_link_libraries(util     PRIVATE bcrypt)
 target_link_libraries(note     PRIVATE shell32 gdi32)
+target_link_libraries(yt       PRIVATE winhttp shell32)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

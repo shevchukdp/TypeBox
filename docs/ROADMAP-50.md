@@ -237,9 +237,10 @@ Items adopted here get numbers in this table at merge time; RI3 numbering stays 
 | U25 | ✅ `note` plugin (user request) - quick-capture popup: clipboard-prefilled editor, Ctrl+Enter saves timestamped Markdown into `[Notes] Folder` (Obsidian/Joplin conventions: `YYYY-MM-DD-HHmm-title.md`, `_Captured_` stamp, `note + text` daily-journal bullets, `note list`/`note open`) | M |
 | U25b | ✅ Plugin manager checkboxes (user request) - Settings → Plugins is a click-to-toggle checklist, persisted to `[PluginState]`, disabled plugins stay unloaded and silent | S |
 
-## v0.26.0 - user-requested queue
+## v0.26.0 - user-requested queue - **shipped**
 
 | # | Feature | Size |
 |---|---|---|
-| U26 | ⏳ `yt <query>` plugin (user request) - top videos in the console, `yt <n>` opens in the browser; optional `[Youtube] ApiKey` (Data API v3), keyless Piped/Invidious JSON fallback, results-URL last resort; network only on the explicit typed command, like `/update` | M |
+| U26 | ✅ `yt <query>` plugin (user request) - top videos in the console, `yt <n>` opens in the browser; `[Youtube] ApiKey` (Data API v3) first tier, keyless Piped/Invidious JSON fallback (live-verified list + `Instances=` override), results-URL last resort; network only on the explicit typed command, like `/update` | M |
+| - | ✅ host ET fix found by the suite - plugin templates reach GetCountET after a space (only a leading `/` line stays an internal command), so `yt /cl`+Tab completes | S |
 

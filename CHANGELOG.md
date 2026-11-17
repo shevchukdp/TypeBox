@@ -3,6 +3,43 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.26.0] - 2026-11-17
+
+![yt](docs/screenshots/console-yt.png)
+*`yt rust programming` - the top videos answered right in the console line,
+durations and channels included. The thirteenth plugin, `yt.dll`, is the web
+wave - and it still honours the offline-first rule to the letter (user request).*
+
+### The web wave - user request
+
+- ✅ **`yt <query>`** - video search without leaving the console. The answer line
+  carries the top rows: `1) Title (12:34) Channel  |  2) ...`. Unicode queries
+  (typed in Cyrillic, tested) go through percent-encoded UTF-8 untouched.
+- ✅ **`yt <n>`** - opens the n-th result of the last search in the default
+  browser; out-of-range n is answered with the valid range. `yt /clear` drops the
+  cache. Tab completes `yt /cl` to `yt /clear` (the host ET now feeds plugin
+  templates the whole line even after a space - caret-word `/…` no longer
+  silences plugin completions).
+- ✅ **Three tiers, offline-first honored** - `[Youtube] ApiKey` uses the official
+  Data API v3 (googleapis.com) first; without a key the plugin tries public
+  Piped and Invidious instances (a fresh list verified live, Piped probe before
+  Invidious on each host, `[Youtube] TimeoutMs` per backend, `[Youtube] Instances=`
+  to override); if everything is silent, the YouTube results page opens in the
+  browser and the answer says so. **Nothing on the network happens at Load(), on a
+  timer, or in the background** - the first packet leaves only when you press
+  Enter on a `yt` line, exactly like `/update`.
+- ✅ **Precedence & the checklist synergy** - plugins run before web quicklinks,
+  so `yt` now shadows the built-in `yt` quicklink; ticking `yt` off in
+  Settings → Plugins gives the quicklink back (both paths asserted in the suite
+  via the log).
+- ✅ `test-v0260.ps1`: 21 gates - version/13-plugins boot, offline-at-load (no
+  plugin traffic before the first typed line), usage, live search rows
+  (3..5 with `(mm:ss)` and `  |  ` separators), cache open/`/clear`/out-of-range,
+  Cyrillic query round-trip, quicklink precedence in the log, dead-instance
+  browser fallback, checklist rows=13 + yt off -> INI -> 12 enabled -> quicklink
+  returns -> re-enable -> alive, ET Tab completion, neighbours (`ts`, `note`)
+  unharmed.
+
 ## [0.25.0] - 2026-11-17
 
 ![note](docs/screenshots/console-note.png)

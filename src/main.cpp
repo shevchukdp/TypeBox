@@ -3007,7 +3007,10 @@ static void TabComplete(HWND edit) {
         }
         if (g_set.etHistory && word.find(L'/') != 0)
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
-        if (g_set.execPlugins && word.find(L'/') != 0)
+        if (g_set.execPlugins && text.find(L'/') != 0)
+            // v0.26: gate on the LINE start, not the caret word - "yt /cl"
+            // must still reach the plugin templates (only leading "/" lines
+            // are internal commands).
             for (auto& p : g_plugins)
                 if (p.GetCountET && p.GetStringET) {
                     // v0.24: whole line, not just the caret word - plugins key

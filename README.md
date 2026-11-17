@@ -28,6 +28,10 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 |---|---|---|
 | ![ring](docs/screenshots/console-clipring.png) | ![note](docs/screenshots/console-note.png) | ![plchk](docs/screenshots/console-plugins-checklist.png) |
 
+| `yt <query>` — videos in the console (v0.26) | `yt` usage — three-tier search, network only on a typed line (v0.26) |
+|---|---|
+| ![yt](docs/screenshots/console-yt.png) | ![ytusage](docs/screenshots/console-0260.png) |
+
 | Settings → Theme (cozy presets) | Settings → Language (20 UI languages) | The same page, Russian UI |
 |---|---|---|
 | ![theme](docs/screenshots/settings-theme.png) | ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
@@ -57,12 +61,12 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-**Where TypeBox stands:** everything below ships in **[v0.25.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
-The project evolves in focused waves: one release ships a theme (v0.24 was the clipboard-picker wave, v0.25 is quick capture + plugin control), each gated by its
+**Where TypeBox stands:** everything below ships in **[v0.26.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
+The project evolves in focused waves: one release ships a theme (v0.25 was quick capture + plugin control, v0.26 is the web wave), each gated by its
 own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in
-[CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md). Next wave: **v0.26.0 — `yt` video search**.
+[CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
 
-Working today (v0.25.0 — 12 plugins ship ready-to-use):
+Working today (v0.26.0 — 13 plugins ship ready-to-use):
 - 🔎 **Web-search quicklinks** — `[WebSearch] so=https://…%s`: `so hello world` opens the default
   browser (built-in g/yt/gh); logged, history-friendly, amber anchor
 - ⌨️ **Alt+1…9 quick-select** — the drop-down numbers its rows; Alt+digit runs one instantly;
@@ -118,7 +122,8 @@ Working today (v0.25.0 — 12 plugins ship ready-to-use):
    `ts clip`, `slug Привет мир` → `privet-mir` with the result on the clipboard, `sha256 file` +
    `sha256 /verify SUMS` checksum checks), **note** (`note` opens the quick-capture editor,
    `note <text>` saves a markdown file, `note + <text>` appends a timestamped bullet to
-   today's journal), plus the calculator example in
+   today's journal), **yt** (`yt <query>` puts the top videos in the console, `yt <n>`
+   opens one in the browser), plus the calculator example in
    [`examples/plugin_calc`](examples/plugin_calc/calc.c)
  - ✅ **Positions & stay-awake** (v0.23) — `pos right` / `pos q3` / `pos center` dock the console
    into FancyZones-style slots of the current monitor, `pos <name>` uses a `[Positions]` preset
@@ -136,6 +141,12 @@ Working today (v0.25.0 — 12 plugins ship ready-to-use):
     your vault stays plain markdown); `note + text` lands a timestamped `- [HH:mm] …` bullet
     in today's journal like Obsidian QuickAdd; and Settings → Plugins is now a checklist —
     click any plugin to turn it off (or back on), persisted to `[PluginState]`, no INI editing
+  - ✅ **YouTube search in the console** (v0.26) — `yt <query>` prints the top videos right in
+    the answer line (`1) title (12:34) channel | 2) …`), `yt <n>` opens one in the browser;
+    three tiers — optional `[Youtube] ApiKey` (Data API v3), keyless public Piped/Invidious
+    instances, then the results page in your browser. The offline-first rule holds: **the
+    network is touched only when you type the command**, exactly like `/update`; no key,
+    no account, no telemetry. Tick `yt` off in the checklist to give the built-in quicklink back
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
   arguments passed through; re-scan with `/reread`
@@ -166,10 +177,6 @@ Working today (v0.25.0 — 12 plugins ship ready-to-use):
 - ✅ INI config next to the exe — portable
 
 Planned (full backlog of 50+ vetted ideas in [docs/ROADMAP-50.md](docs/ROADMAP-50.md) — [docs/PLAN.md](docs/PLAN.md) keeps the original plan):
-- 🏗️ **In progress — v0.26.0**: `yt <query>` video search right in the console —
-  top results with titles/durations, `yt <n>` opens one in the browser; optional
-  `[Youtube] ApiKey` (Data API v3), keyless public-instance fallback, and the
-  network is touched **only** when you type the command, like `/update`
 - Info display (calculator, web results, files, system status — like PowerToys Run modules)
 - Drop-down terminal / bash mode (Guake/Yakuake/Drop style)
 
