@@ -90,6 +90,8 @@ Tab-completed, Shift+Enter-killable — ✅
 ## History  `[History]`
 MaxHistory — ✅; persistence to portable `History.dat` (UTF-8) — ✅; ↑/↓ scroll — ✅;
 per-type save toggles (Internal/Alias/SysAlias/WWW/EMail/Path/Plugins/Unknown) — ✅ ·
+**Ctrl+R** bash-style reverse search over the history (v0.27.0): type to filter newest
+first, Ctrl+R cycles, Enter runs, Esc restores the line, Tab exits keeping text — ✅ ·
 InvertScroll — 📋
 
 ## Undo
@@ -146,7 +148,10 @@ params (`ParseCmdLine`) to prefill/execute — ✅
 TypeBox extras: `/export` `/import` `/undo` `/log` `/sys` `/openconfig` `/path`, and
 `/update` (v0.20.0) — checks the release API for a newer version, verifies the
 download's SHA-256 against the published digest and stages `install.bat`
-(user-typed only; `[Update]` section in [CONFIG.md](CONFIG.md)).
+(user-typed only; `[Update]` section in [CONFIG.md](CONFIG.md));
+`/day` (v0.27.0) — today's execution tally in the console line (per-day counters in
+`Usage.dat`); `/tabs url1 url2 ...` (v0.27.0) — batch browser opener (up to 10 URLs,
+https:// auto-prefixed, every open logged). Both answer in the line and keep it open.
 
 ## Plugins (ABI-compatible with TypeAndRun)
 `Load(HWND) Unload GetInfo GetCount GetString GetCountET GetStringET RunString→TExec` — ✅

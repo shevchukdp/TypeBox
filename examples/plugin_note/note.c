@@ -340,10 +340,30 @@ static LRESULT CALLBACK NoteProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
+/* v0.27 headless test mode - same switches as the host: env TYPEBOX_HEADLESS=1
+ * (what the suites inherit) or [UI] Headless=1 in TypeBox.ini. Off-screen,
+ * never steals focus, never types. */
+static int Headless(void) {
+    wchar_t ev[8];
+    wchar_t ini[MAX_PATH] = {};
+    wchar_t* bs; wchar_t* d; const wchar_t* s;
+    wchar_t tail[] = L"TypeBox.ini";
+    ev[0] = 0;
+    GetEnvironmentVariableW(L"TYPEBOX_HEADLESS", ev, 7);
+    if (ev[0] == L'1') return 1;
+    GetModuleFileNameW(NULL, ini, MAX_PATH);
+    bs = wcsrchr(ini, L'\\');
+    if (bs) bs[1] = 0;
+    d = ini + lstrlenW(ini);
+    for (s = tail; *s; ) *d++ = *s++;
+    *d = 0;
+    return (int)GetPrivateProfileIntW(L"UI", L"Headless", 0, ini);
+}
+
 static void openEditor(void) {
     if (g_noteWnd) {                                     /* already open: raise */
         ShowWindow(g_noteWnd, SW_SHOW);
-        SetForegroundWindow(g_noteWnd);
+        if (!Headless()) SetForegroundWindow(g_noteWnd);
         return;
     }
     {
@@ -364,6 +384,7 @@ static void openEditor(void) {
 
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &rc, 0);
         x = (rc.right - W) / 2; y = (rc.bottom - H) / 3;
+        if (Headless()) { x = -32000; y = -32000; }
 
         g_noteWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_APPWINDOW, NOTE_CLS,
                                     L"TypeBox note - Ctrl+Enter saves, Esc cancels",
@@ -401,8 +422,10 @@ static void openEditor(void) {
             if (c) free(c);
         }
         ShowWindow(g_noteWnd, SW_SHOW);
-        SetForegroundWindow(g_noteWnd);
-        SetFocus(g_noteEdit);
+        if (!Headless()) {
+            SetForegroundWindow(g_noteWnd);
+            SetFocus(g_noteEdit);
+        }
     }
 }
 
@@ -460,7 +483,8 @@ static const char* runMain(const char* rest) {
 
     if (lstrcmpiW(arg, L"open") == 0) {
         wchar_t msg[MAX_PATH + 40];
-        if (ShellExecuteW(NULL, L"open", g_folder, NULL, NULL, SW_SHOWNORMAL) > (HINSTANCE)32) {
+        if (ShellExecuteW(NULL, L"open", g_folder, NULL, NULL,
+                      Headless() ? SW_SHOWMINNOACTIVE : SW_SHOWNORMAL) > (HINSTANCE)32) {
             wsprintfW(msg, L"note: folder opened: %s", g_folder);
             return answerW(msg);
         }

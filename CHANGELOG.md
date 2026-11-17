@@ -3,6 +3,35 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.27.0] - 2026-11-17
+
+![ctrlr](docs/screenshots/console-ctrlr.png)
+*`Ctrl+R` then a few keystrokes - the drop-down turns into a bash-style reverse
+search over your own command history: newest first, `|bck` marks the mode,
+Ctrl+R cycles deeper, Enter runs the selected line.*
+
+### Power-user console wave
+
+- **Ctrl+R reverse history search** (RI3 #12): bash-style. The drop-down becomes a live
+  filter over `History.dat` (newest first), the status strip shows the `|bck` marker;
+  Ctrl+R cycles to older matches, Enter runs, Esc restores the line you were typing,
+  Tab exits keeping the filtered text. The translated `WM_CHAR` of the chord is swallowed,
+  so no stray `r` ever lands in the edit.
+- **/day** (RI3 #40): today's executions tally right in the console line. A per-day
+  counter was added to `Usage.dat` (`word\tcount\tunix\tday\ttoday`) — backwards
+  compatible with the TypeAndRun format.
+- **/tabs url1 url2 …** (RI3 #10): batch browser opener — one Enter opens up to 10 URLs
+  (bare hosts get `https://`), every open logged; the answer stays in the console line.
+- **Headless test mode** (user request: testing must never disturb the human at the
+  keyboard): `TYPEBOX_HEADLESS=1` (or `--headless-tests`, or `[UI] Headless=1`) parks the
+  console, Settings and the clip ring off-screen, skips `SetForegroundWindow`/`SetFocus`,
+  sounds, tray balloons, the OS hotkey registration and the low-level keyboard hook
+  (probes post `WM_HOTKEY` instead), suppresses modal dialogs (with a log line), and
+  opens URLs minimized-inactive. The test probe tool gained `TB_QUIET=1`: its right-click,
+  Ctrl+Enter and pad clicks are posted as window messages, and the “minimise the
+  foreground thief” hammer is gone. Nothing is faked — features stay fully testable,
+  only the disturbance is parked.
+
 ## [0.26.0] - 2026-11-17
 
 ![yt](docs/screenshots/console-yt.png)

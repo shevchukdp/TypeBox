@@ -244,3 +244,12 @@ Items adopted here get numbers in this table at merge time; RI3 numbering stays 
 | U26 | ✅ `yt <query>` plugin (user request) - top videos in the console, `yt <n>` opens in the browser; `[Youtube] ApiKey` (Data API v3) first tier, keyless Piped/Invidious JSON fallback (live-verified list + `Instances=` override), results-URL last resort; network only on the explicit typed command, like `/update` | M |
 | - | ✅ host ET fix found by the suite - plugin templates reach GetCountET after a space (only a leading `/` line stays an internal command), so `yt /cl`+Tab completes | S |
 
+## v0.27.0 - user-requested queue - **shipped**
+
+| # | Feature | Size |
+|---|---|---|
+| U27 | ✅ Ctrl+R bash-style reverse history search (RI3 #12) - drop-down becomes a newest-first history filter, the status strip shows the `bck` marker, Ctrl+R cycles, Enter runs, Esc restores the line, Tab exits keeping text; the chord's translated WM_CHAR is swallowed by a one-shot eat flag | M |
+| U27b | ✅ /day (RI3 #40) - today's execution tally in the console line; Usage.dat gains per-day columns (word TAB count TAB unix TAB day TAB today), old files stay readable | S |
+| U27c | ✅ /tabs url1 url2 ... (RI3 #10) - batch browser opener, https:// auto-prefix, cap 10, every open logged | S |
+| U27d | ✅ Headless test mode (user request: testing must never disturb the human at the keyboard) - TYPEBOX_HEADLESS=1 / --headless-tests / [UI] Headless=1: off-screen windows, no focus steals, no sounds/balloons/hotkey/hook, modal dialogs suppressed to the log, URLs minimized; tbtest TB_QUIET posts messages instead of SendInput and never minimises foreign windows | M |
+

@@ -58,6 +58,8 @@ static HWND g_msgWnd  = NULL;
 static int  g_sampleMs = 2000;
 static int  g_diskMinGB = 0;
 static int  g_popup = 0;
+static int  g_headless = 0;  /* v0.27: TYPEBOX_HEADLESS=1 / [UI] Headless=1 -
+                              * the sys MessageBox is muted for quiet suites */
 
 static ULARGE_INTEGER g_idle, g_kern, g_user;
 static int      g_cpuInit = 0;
@@ -90,6 +92,10 @@ static void loadConfig(void) {
     g_sampleMs  = (int)GetPrivateProfileIntW(L"Sysmon", L"SampleMs", 2000, ini);
     g_diskMinGB = (int)GetPrivateProfileIntW(L"Sysmon", L"DiskMinGB", 0, ini);
     g_popup     = (int)GetPrivateProfileIntW(L"Sysmon", L"Popup", 0, ini);
+    { wchar_t ev[8]; ev[0] = 0;
+      GetEnvironmentVariableW(L"TYPEBOX_HEADLESS", ev, 7);
+      g_headless = (ev[0] == L'1') ||
+                   (int)GetPrivateProfileIntW(L"UI", L"Headless", 0, ini); }
     if (g_sampleMs < 500) g_sampleMs = 500;
     if (g_sampleMs > 60000) g_sampleMs = 60000;
 }
@@ -264,7 +270,7 @@ static const char* runCmd(const char* word) {
     if (!_stricmp(word, "sys")) {
         buildSys(g_result, (int)sizeof(g_result));
         copyToClipboard(g_result);
-        if (g_popup) {
+        if (g_popup && !g_headless) {
             wchar_t w[2048];
             MultiByteToWideChar(CP_UTF8, 0, g_result, -1, w, 2048);
             MessageBoxW(g_mainWnd, w, L"TypeBox \x2014 system", MB_OK | MB_ICONINFORMATION);

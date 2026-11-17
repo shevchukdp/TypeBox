@@ -157,6 +157,10 @@ static BOOL parseHotkey(const wchar_t* s, UINT* mods, UINT* vk) {
     return haveKey && (*mods & (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN)) != 0;
 }
 
+static int g_headless = 0;  /* v0.27: TYPEBOX_HEADLESS=1 / [UI] Headless=1 - the
+                             * suite must never touch the human's keyboard, focus
+                             * or screen. Set in loadConfig. */
+
 static void loadConfig(void) {
     wchar_t mod[MAX_PATH] = {}, ini[MAX_PATH] = {};
     HMODULE self = NULL;
@@ -190,6 +194,10 @@ static void loadConfig(void) {
     if (g_pollMs < 50) g_pollMs = 50;
     if (g_rowChars < 8) g_rowChars = 8;
     g_typeDelay = (int)GetPrivateProfileIntW(L"Clipboard", L"TypeDelayMs", 5, ini);   /* RI3 #261 */
+    { wchar_t ev[8]; ev[0] = 0;
+      GetEnvironmentVariableW(L"TYPEBOX_HEADLESS", ev, 7);
+      g_headless = (ev[0] == L'1') ||
+                   (int)GetPrivateProfileIntW(L"UI", L"Headless", 0, ini); }
     if (g_typeDelay < 0)  g_typeDelay = 0;
     if (g_typeDelay > 50) g_typeDelay = 50;
     {   /* RI3 #260: [Clipboard] Ring=Ctrl+Alt+V ("0" disables the global hotkey) */
@@ -400,6 +408,7 @@ static void loadHistory(void) {
 /* --------------------------------- re-copy ---------------------------------- */
 
 static void trayBalloon(const wchar_t* text) {
+    if (g_headless) return;   /* headless: no tray noise for the human */
     NOTIFYICONDATAW nid;
     if (!g_trayOn) return;
     ZeroMemory(&nid, sizeof(nid));
@@ -485,6 +494,13 @@ static void runList(void) {
 static void doPasteCaret(void) {
     INPUT in[4];
     if (!g_mainWnd) return;
+    if (g_headless) {                    /* only inject while the TEST pad owns
+                                          * the foreground - never the human's app */
+        HWND fg = GetForegroundWindow();
+        wchar_t cls[32] = {};
+        if (fg) GetClassNameW(fg, cls, 31);
+        if (!fg || lstrcmpiW(cls, L"TypeBoxTestPad") != 0) return;
+    }
     ShowWindow(g_mainWnd, SW_HIDE);
     Sleep(150);                                        /* focus handover */
     ZeroMemory(in, sizeof(in));
@@ -548,6 +564,13 @@ static void doTypeString(const wchar_t* w) {
     INPUT in[2];
     const wchar_t* p;
     if (!g_mainWnd) return;
+    if (g_headless) {                    /* only type into the TEST pad, never
+                                          * into whatever the human is using */
+        HWND fg = GetForegroundWindow();
+        wchar_t cls[32] = {};
+        if (fg) GetClassNameW(fg, cls, 31);
+        if (!fg || lstrcmpiW(cls, L"TypeBoxTestPad") != 0) return;
+    }
     ShowWindow(g_mainWnd, SW_HIDE);
     Sleep(150);                                        /* focus handover */
     for (p = w; *p && (DWORD)(p - w) < 8192; ++p) {
@@ -596,18 +619,18 @@ static void ringPick(int ctrl) {
     int sel;
     if (!g_ringList) return;
     sel = (int)SendMessageW(g_ringList, LB_GETCURSEL, 0, 0);
-    if (sel < 0 || sel >= g_count) { closeRing(); SetForegroundWindow(g_mainWnd); return; }
+    if (sel < 0 || sel >= g_count) { closeRing(); if (!g_headless) SetForegroundWindow(g_mainWnd); return; }
     if (ctrl) doTypeString(g_entries[sel]);
     else {
         putOnClipboard(g_entries[sel]);
-        SetForegroundWindow(g_mainWnd);
+        if (!g_headless) SetForegroundWindow(g_mainWnd);
     }
     closeRing();
 }
 
 static LRESULT CALLBACK RingListProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_KEYDOWN) {
-        if (w == VK_ESCAPE) { closeRing(); SetForegroundWindow(g_mainWnd); return 0; }
+        if (w == VK_ESCAPE) { closeRing(); if (!g_headless) SetForegroundWindow(g_mainWnd); return 0; }
         if (w == VK_RETURN) { ringPick((GET_KEYSTATE_LPARAM(l) & MK_CONTROL) != 0); return 0; }
     }
     return CallWindowProcW(g_listOld, h, m, w, l);
@@ -650,7 +673,7 @@ static LRESULT CALLBACK RingProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_CLOSE:
         closeRing();
-        SetForegroundWindow(g_mainWnd);
+        if (!g_headless) SetForegroundWindow(g_mainWnd);
         return 0;
     case WM_ACTIVATE:
         /* Grace: when "clip ring" runs from the console, the host re-activates
@@ -677,6 +700,10 @@ static void openRing(void) {
     rows = g_count ? g_count : 1;
     if (rows > 12) rows = 12;
     hgt = rows * 24 + 8;
+    if (g_headless) {                       /* picker lives off-screen, silently */
+        wa.left = -32000; wa.top = -32000;
+        wa.right = -32000 + wdt; wa.bottom = -32000 + hgt;
+    }
     g_ringWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, RING_CLS,
                                 L"TypeBox \x2014 clip ring",
                                 WS_POPUP | WS_VISIBLE,
@@ -706,8 +733,10 @@ static void openRing(void) {
     if (!g_count) SendMessageW(g_ringList, LB_ADDSTRING, 0, (LPARAM)L"(empty)");
     else          SendMessageW(g_ringList, LB_SETCURSEL, 0, 0);
     g_listOld = (WNDPROC)SetWindowLongPtrW(g_ringList, GWLP_WNDPROC, (LONG_PTR)RingListProc);
-    SetForegroundWindow(g_ringWnd);
-    SetFocus(g_ringList);
+    if (!g_headless) {
+        SetForegroundWindow(g_ringWnd);
+        SetFocus(g_ringList);
+    }
     g_ringShown = GetTickCount();
 }
 

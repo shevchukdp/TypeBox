@@ -32,6 +32,10 @@ One **portable folder** with an **INI file** you can carry on a USB stick, keep 
 |---|---|
 | ![yt](docs/screenshots/console-yt.png) | ![ytusage](docs/screenshots/console-0260.png) |
 
+| Ctrl+R bck-i-search — bash-style history filter (v0.27) | `/tabs` — one Enter, a page of tabs (v0.27) | `/day` — today's usage tally (v0.27) |
+|---|---|---|
+| ![ctrlr](docs/screenshots/console-ctrlr.png) | ![tabs](docs/screenshots/console-tabs.png) | ![day](docs/screenshots/console-day.png) |
+
 | Settings → Theme (cozy presets) | Settings → Language (20 UI languages) | The same page, Russian UI |
 |---|---|---|
 | ![theme](docs/screenshots/settings-theme.png) | ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
@@ -61,12 +65,19 @@ TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, un
 
 ## Features
 
-**Where TypeBox stands:** everything below ships in **[v0.26.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
-The project evolves in focused waves: one release ships a theme (v0.25 was quick capture + plugin control, v0.26 is the web wave), each gated by its
+**Where TypeBox stands:** everything below ships in **[v0.27.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release.
+The project evolves in focused waves: one release ships a theme (v0.25 was quick capture + plugin control, v0.26 is the web wave, v0.27 is the power-user console wave), each gated by its
 own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in
 [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
 
-Working today (v0.26.0 — 13 plugins ship ready-to-use):
+Working today (v0.27.0 — 13 plugins ship ready-to-use):
+- 🔍 **Ctrl+R reverse history search** — bash-style: press Ctrl+R, keep typing to filter your
+  command history (newest first, `|bck` marker in the status strip), Ctrl+R cycles further back,
+  Enter runs, Esc restores your line, Tab exits with the text kept
+- 📊 **/day** — today's usage at a glance: what you ran today and how often, straight in the
+  console line (fed by a per-day tally in `Usage.dat`, the TypeAndRun history format extended)
+- 🗂 **/tabs url1 url2 …** — one Enter opens the whole page of tabs in your browser (https://
+  auto-prefixed, up to 10 at a time); logged, history-friendly
 - 🔎 **Web-search quicklinks** — `[WebSearch] so=https://…%s`: `so hello world` opens the default
   browser (built-in g/yt/gh); logged, history-friendly, amber anchor
 - ⌨️ **Alt+1…9 quick-select** — the drop-down numbers its rows; Alt+digit runs one instantly;

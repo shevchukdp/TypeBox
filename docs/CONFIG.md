@@ -342,6 +342,22 @@ writes this key; Apply switches the whole UI immediately (Arabic also mirrors th
 drop-down RTL). Portable community overrides live in `lang\<code>.ini` next to the
 exe — see [LANGUAGE.md](LANGUAGE.md).
 
+`Headless = 1` turns on the **headless test mode** (TypeBox 0.27.0), so automated
+suites can never disturb a human at the keyboard. Any one switch is enough:
+`[UI] Headless=1` in the INI, the `--headless-tests` command line, or the
+`TYPEBOX_HEADLESS=1` environment variable (what the test suites use — the host
+passes nothing, plugins and probe children simply inherit it). Effects:
+the console, Settings and the clip ring open off-screen at (-32000,-32000);
+no `SetForegroundWindow`/`SetFocus` ever happens; sounds, tray balloons and
+modal dialogs are muted (suppressed dialogs are written to the log instead);
+the global hotkey is not registered and no low-level keyboard hook is installed
+(probes post `WM_HOTKEY` to the window instead); `/tabs` and the `yt`/`note`
+plugins open URLs in a minimized inactive window. Everything stays testable through posted window messages —
+nothing is faked, only the user-visible disturbance is parked. The companion
+probe tool uses `TB_QUIET=1` for the same vow on its side: right-clicks,
+Ctrl+Enter and pad clicks are posted as messages, the physical-cursor path and
+the “minimise the foreground thief” fallback are disabled.
+
 ### `[Theme]` — cozy color schemes + custom themes (TypeBox 0.9.1, studio in 0.15.0)
 ```ini
 [Theme]

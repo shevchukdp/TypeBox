@@ -75,6 +75,9 @@ static void trimA(char* s) {
     while (n && (s[n - 1] == ' ' || s[n - 1] == '\t' || s[n - 1] == '\r' || s[n - 1] == '\n')) s[--n] = 0;
 }
 
+static int g_headless = 0;  /* v0.27: env TYPEBOX_HEADLESS=1 or [UI] Headless=1:
+                             * browser opens go minimized+inactive, no focus steal */
+
 static void loadConfig(void) {
     wchar_t ini[MAX_PATH] = {}, iniPath[MAX_PATH], buf[2048], *ctx, *tok;
     int i;
@@ -82,6 +85,12 @@ static void loadConfig(void) {
     GetModuleFileNameW(NULL, ini, MAX_PATH);
     { wchar_t* bs = wcsrchr(ini, L'\\'); if (bs) bs[1] = 0; }
     wsprintfW(iniPath, L"%sTypeBox.ini", ini);
+    {
+        wchar_t ev[8]; ev[0] = 0;
+        GetEnvironmentVariableW(L"TYPEBOX_HEADLESS", ev, 7);
+        g_headless = (ev[0] == L'1') ||
+                     (int)GetPrivateProfileIntW(L"UI", L"Headless", 0, iniPath);
+    }
 
     {
         wchar_t w[256];
@@ -484,7 +493,8 @@ static void openResultsInBrowser(const wchar_t* qw, const wchar_t* reason) {
     wchar_t url[2300], msg[2400];
     urlEncodeUtf8(qw, enc, sizeof(enc));
     wsprintfW(url, L"https://www.youtube.com/results?search_query=%hs", enc);
-    ShellExecuteW(NULL, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+    ShellExecuteW(NULL, L"open", url, NULL, NULL,
+                  g_headless ? SW_SHOWMINNOACTIVE : SW_SHOWNORMAL);
     wsprintfW(msg, L"yt: %s - opened the results in your browser", reason);
     answerWide(msg);
 }
@@ -521,8 +531,10 @@ static const char* runYt(const char* rest) {
         }
         {
             wchar_t url[160], msg[420];
-            wsprintfW(url, L"https://www.youtube.com/watch?v=%s", g_last[n - 1].id);
-            ShellExecuteW(NULL, L"open", url, NULL, NULL, SW_SHOWNORMAL);
+            const wchar_t* vid = g_last[n - 1].id;
+            wsprintfW(url, L"https://www.youtube.com/watch?v=%s", vid);
+            ShellExecuteW(NULL, L"open", url, NULL, NULL,
+                          g_headless ? SW_SHOWMINNOACTIVE : SW_SHOWNORMAL);
             wsprintfW(msg, L"yt: opened #%d %s", n, g_last[n - 1].title);
             answerWide(msg);
         }

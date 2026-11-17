@@ -153,6 +153,56 @@ static std::wstring              g_iniPath;
 static std::map<std::wstring, int> g_pluginState; // "Name_Load"/"Name_SaveHistory" -> 0/1
 static std::vector<std::wstring> g_history;
 static size_t                    g_histPos = 0;
+// v0.27 (RI3 #12): Ctrl+R bash-style reverse history search. While active the
+// drop-down lists only history rows containing the typed query (newest first);
+// Enter runs the highlighted row, Esc restores the line you were typing.
+static bool                      g_hsrch = false;
+static std::wstring              g_hsrchSaved;
+static bool                      g_hsrchEatChar = false;   // swallow the translated WM_CHAR
+// v0.27: /day + /tabs answer in the console line and keep it open, like the
+// bare `su` hint does (EXC_PLUGIN behaves the same way via con_text).
+static bool                      g_internalAnswer = false;
+// v0.27: HEADLESS TEST MODE - so a running suite cannot disturb a human at the
+// keyboard. Three switches, any one is enough: env TYPEBOX_HEADLESS=1 (what the
+// test suites use), the --headless-tests command line, or [UI] Headless=1 in
+// the INI. Effects: console/settings/ring windows live off-screen at -32000,
+// no SetForegroundWindow/SetFocus ever happens, sounds and tray balloons are
+// muted, no OS hotkey is registered and no low-level keyboard hook is installed
+// (probes post WM_HOTKEY instead), blocking dialogs are suppressed, and URL
+// opens go to a minimized inactive window. Posted messages keep every feature
+// fully testable - nothing is faked, only the user-visible side is parked.
+static bool                      g_headless = false;
+static void LogInfo(const std::wstring&);       // defined with the logging section
+static void DetectHeadless(void) {
+    wchar_t ev[8] = {};
+    if (GetEnvironmentVariableW(L"TYPEBOX_HEADLESS", ev, 7) && ev[0] == L'1')
+        g_headless = true;
+    if (StrStrIW(GetCommandLineW(), L"--headless-tests")) g_headless = true;
+    wchar_t ini[MAX_PATH] = {};
+    GetModuleFileNameW(NULL, ini, MAX_PATH);
+    { wchar_t* bs = wcsrchr(ini, L'\\'); if (bs) bs[1] = 0; }
+    wcscat_s(ini, L"TypeBox.ini");
+    if (GetPrivateProfileIntW(L"UI", L"Headless", 0, ini) != 0) g_headless = true;
+    if (g_headless) LogInfo(L"headless test mode ON (off-screen, quiet, no hooks)");
+}
+
+// One choke point for every modal dialog: in headless test mode a MessageBox
+// would block the main thread waiting on a human, so it is suppressed, logged,
+// and the least-destructive button answer is returned (denials for questions).
+static int TbMessageBox(HWND owner, LPCWSTR text, LPCWSTR cap, UINT type) {
+    if (g_headless) {
+        std::wstring t = cap ? cap : L"";
+        std::wstring b = text ? text : L"";
+        if (b.size() > 140) b = b.substr(0, 140) + L"...";
+        LogInfo(L"[headless] dialog suppressed: [" + t + L"] " + b);
+        UINT kind = type & MB_TYPEMASK;
+        if (kind == MB_YESNO || kind == MB_YESNOCANCEL) return (int)IDNO;
+        if (kind == MB_OKCANCEL || kind == MB_RETRYCANCEL ||
+            kind == MB_CANCELTRYCONTINUE)               return (int)IDCANCEL;
+        return (int)IDOK;
+    }
+    return (int)::MessageBoxW(owner, text, cap, type);
+}
 static std::vector<Alias>        g_aliases;
 static std::vector<SysAlias>     g_sysAliases;
 static std::vector<std::wstring> g_ignores;    // Ignores.ini entries (BadApp)
@@ -414,7 +464,7 @@ static void LogInfo(const std::wstring&);       // defined with the logging sect
 static bool ConfirmDangerLine(const std::wstring& what, HWND owner) {
     std::wstring msg = L"TypeBox \u2014 danger check\n\nThis looks like a destructive command:\n\n"
                        + what + L"\n\nRun it anyway?";
-    if (MessageBoxW(owner, msg.c_str(), L"TypeBox",
+    if (TbMessageBox(owner, msg.c_str(), L"TypeBox",
                     MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
         LogInfo(L"security: blocked dangerous command");
         return false;
@@ -960,7 +1010,7 @@ static void SaveHistory() {
 // Usage.dat lines: word<TAB>count<TAB>unix-seconds (word = lower-cased command
 // name, never a path or /command). The drop-down ranks fuzzy ties by this:
 // the tools you actually use float to the top, quality still dominates.
-struct UsageRec { int count = 0; long long last = 0; };
+struct UsageRec { int count = 0; long long last = 0; int day = 0; int today = 0; };
 static std::map<std::wstring, UsageRec> g_usage;   // key: lower command word
 
 static std::wstring UsageFile() { return ExeDir() + L"Usage.dat"; }
@@ -978,7 +1028,13 @@ static void LoadUsage() {
         if (t2 == std::string::npos) continue;
         UsageRec r;
         r.count = atoi(line.substr(t1 + 1, t2 - t1 - 1).c_str());
-        r.last  = atoll(line.substr(t2 + 1).c_str());
+        size_t t3 = line.find('\t', t2 + 1);
+        r.last  = atoll((t3 == std::string::npos ? line : line.substr(t2 + 1, t3 - t2 - 1)).c_str());
+        if (t3 != std::string::npos) {                    // v0.27: /day fields
+            size_t t4 = line.find('\t', t3 + 1);
+            r.day = atoi(line.substr(t3 + 1, (t4 == std::string::npos ? line.size() : t4) - t3 - 1).c_str());
+            if (t4 != std::string::npos) r.today = atoi(line.substr(t4 + 1).c_str());
+        }
         if (r.count >= 1) g_usage[FromUtf8(line.substr(0, t1))] = r;
     }
 }
@@ -986,7 +1042,12 @@ static void SaveUsage() {
     std::ofstream f(UsageFile().c_str(), std::ios::binary | std::ios::trunc);
     if (!f) return;
     for (auto& kv : g_usage)
-        f << ToUtf8(kv.first) << '\t' << kv.second.count << '\t' << kv.second.last << '\n';
+        f << ToUtf8(kv.first) << '\t' << kv.second.count << '\t' << kv.second.last
+          << '\t' << kv.second.day << '\t' << kv.second.today << '\n';
+}
+static int LocalYmd() {                        // v0.27: today's YYYYMMDD for /day
+    SYSTEMTIME st; GetLocalTime(&st);
+    return st.wYear * 10000 + st.wMonth * 100 + st.wDay;
 }
 static void RecordUsage(const std::wstring& line) {
     std::wstring w = Trim(line);
@@ -1000,6 +1061,9 @@ static void RecordUsage(const std::wstring& line) {
     UsageRec& r = g_usage[Lower(w)];
     r.count += 1;
     r.last   = (long long)time(nullptr);
+    int ymd = LocalYmd();                       // v0.27: per-day tally for /day
+    if (r.day != ymd) { r.day = ymd; r.today = 1; }
+    else              { r.today += 1; }
     SaveUsage();                              // tiny file; deterministic for tests
 }
 // 0..17 — smaller than any real fuzzy delta, still decides ties.
@@ -1022,6 +1086,7 @@ static int FrecencyBoost(const std::wstring& row) {
 // Play the per-execution-type sound (TypeAndRun parity). Paths are absolute or
 // relative to the portable TypeBox folder (bundled Sounds\).
 static void PlayTypeSound(int idx) {
+    if (g_headless) return;                       // silence: no beeps at the user
     if (!g_set.enableSounds || idx < 0 || idx > 8) return;
     std::wstring s = g_set.sound[idx];
     if (s.empty() || _wcsicmp(s.c_str(), L"none") == 0) return;
@@ -1044,7 +1109,7 @@ static void AddTrayIcon(HWND hWnd, bool balloon) {
     g_nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
     std::wstring tip = L"TypeBox " + WVersion() + L" — " + HotkeyText(g_hotkey);
     lstrcpynW(g_nid.szTip, tip.c_str(), ARRAYSIZE(g_nid.szTip));
-    if (balloon && g_set.balloonTips) {
+    if (balloon && g_set.balloonTips && !g_headless) {   // headless: no balloons
         g_nid.uFlags |= NIF_INFO;
         g_nid.dwInfoFlags = NIIF_INFO;
         lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
@@ -1562,7 +1627,7 @@ static void DoUpdate(HWND mainWnd) {
         wsprintfW(msg, L(STR_UP_ERR_API), err.c_str(),
                   LastCheckText().c_str(),
                   g_set.updLatest.empty() ? L"?" : g_set.updLatest.c_str());
-        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
         return;
     }
     std::wstring cur = WVersion();
@@ -1570,7 +1635,7 @@ static void DoUpdate(HWND mainWnd) {
         LogInfo(L"/update: already latest " + cur + L" (tag " + ui.tag + L")");
         wchar_t msg[512];
         wsprintfW(msg, L(STR_UP_UPTODATE), cur.c_str(), LastCheckText().c_str());
-        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
         return;
     }
     wchar_t kb[32];
@@ -1579,7 +1644,7 @@ static void DoUpdate(HWND mainWnd) {
             std::wstring(kb) + L", asset " + ui.asset);
     wchar_t ask[512];
     wsprintfW(ask, L(STR_UP_ASK_DL), ui.tag.c_str(), cur.c_str(), kb);
-    if (MessageBoxW(mainWnd, ask, L"TypeBox — update",
+    if (TbMessageBox(mainWnd, ask, L"TypeBox — update",
                     MB_YESNO | MB_ICONQUESTION) != IDYES) return;
 
     std::wstring dir = UpdateDir();
@@ -1592,7 +1657,7 @@ static void DoUpdate(HWND mainWnd) {
             LogError(L"/update download failed: " + err);   // log before the modal box
             wchar_t msg[1024];
             wsprintfW(msg, L(STR_UP_DL_FAIL), L"download", err.c_str());
-            MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+            TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
             return;
         }
     }
@@ -1600,7 +1665,7 @@ static void DoUpdate(HWND mainWnd) {
     if (!Sha256File(zip, hex)) {
         wchar_t msg[1024];
         wsprintfW(msg, L(STR_UP_DL_FAIL), L"hash", err.c_str());
-        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+        TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
         return;
     }
     if (!ui.digest.empty()) {
@@ -1610,7 +1675,7 @@ static void DoUpdate(HWND mainWnd) {
         if (want != hex) {
             LogError(L"/update digest mismatch: published=" + AscW(want) +
                      L" actual=" + AscW(hex));   // log before the modal box
-            MessageBoxW(mainWnd, L(STR_UP_HASH_BAD), L"TypeBox — update",
+            TbMessageBox(mainWnd, L(STR_UP_HASH_BAD), L"TypeBox — update",
                         MB_OK | MB_ICONERROR);
             return;
         }
@@ -1619,7 +1684,7 @@ static void DoUpdate(HWND mainWnd) {
         LogInfo(L"/update: no published digest, sha256=" + AscW(hex));
         wchar_t warn[1024];
         wsprintfW(warn, L(STR_UP_HASH_WARN), AscW(hex).c_str());
-        if (MessageBoxW(mainWnd, warn, L"TypeBox — update",
+        if (TbMessageBox(mainWnd, warn, L"TypeBox — update",
                         MB_YESNO | MB_ICONWARNING) != IDYES) return;
     }
 
@@ -1647,7 +1712,7 @@ static void DoUpdate(HWND mainWnd) {
     if (!unpacked || !PathFileExistsW((src + L"\\TypeBox.exe").c_str())) {
         wchar_t msg[1024];
         wsprintfW(msg, L(STR_UP_DL_FAIL), L"unpack", L"tar");
-        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+        TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
         return;
     }
 
@@ -1684,7 +1749,7 @@ static void DoUpdate(HWND mainWnd) {
         if (hf == INVALID_HANDLE_VALUE) {
             wchar_t msg[1024];
             wsprintfW(msg, L(STR_UP_DL_FAIL), L"bat", bat.c_str());
-            MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
+            TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONERROR);
             return;
         }
         DWORD wr = 0;
@@ -1696,12 +1761,12 @@ static void DoUpdate(HWND mainWnd) {
     if (!g_set.updAutoRun) {
         wchar_t msg[1024];
         wsprintfW(msg, L(STR_UP_MANUAL), dir.c_str());
-        MessageBoxW(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg, L"TypeBox — update", MB_OK | MB_ICONINFORMATION);
         return;
     }
     wchar_t askr[512];
     wsprintfW(askr, L(STR_UP_RESTART_ASK), ui.tag.c_str());
-    if (MessageBoxW(mainWnd, askr, L"TypeBox — update",
+    if (TbMessageBox(mainWnd, askr, L"TypeBox — update",
                     MB_YESNO | MB_ICONQUESTION) != IDYES) return;
     ShowWindow(mainWnd, SW_HIDE);
     LogInfo(L"/update: installing via install.bat, pid " + std::to_wstring(GetCurrentProcessId()));
@@ -1732,16 +1797,19 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Type an alias, app name, URL, e-mail, file or command and press Enter.\n"
             L"~commands run system actions (~lock ~logoff ~sleep ~screensave ~reboot).\n"
             L"Up/Down browse history, Esc hides, Ctrl+Z restores the last command.\n"
+            L"Ctrl+R searches your command history: type to filter, Enter runs the match,\n"
+            L"another Ctrl+R cycles, Esc restores the line you were typing.\n"
             L"Shift+Enter kills the process started by the last alias.\n\n";
         msg += std::wstring(L(STR_HELP_HEAD)) + L"\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
             L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
+            L"/day prints today's executions  /tabs url1 url2 ... opens them all in the browser\n"
             L"/update checks GitHub Releases for a newer version (user-initiated only)\n"
             L"Utilities (v0.23): pos right | pos <[Positions] name> | stayawake [min] | stayawake off\n"
             L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
-        MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
             L"TypeBox " + WVersion() + L"\n\n" +
@@ -1749,7 +1817,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"\n\nAuthor / Автор: Dima Shevchuk (D. Shevchuk)"
             L"\nhttps://github.com/shevchukdp/TypeBox"
             L"\nLicense / Лицензия: GPL-3.0";
-        MessageBoxW(mainWnd, msg.c_str(), L"About TypeBox", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg.c_str(), L"About TypeBox", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/checkconfig") {
         bool iniOk = PathFileExistsW(g_iniPath.c_str());
         wchar_t msg[512];
@@ -1760,7 +1828,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             (int)g_aliases.size(), (int)g_sysAliases.size(), (int)g_ignores.size(),
             (int)g_history.size(),
             g_hotkey.key ? L"yes" : L"no");
-        MessageBoxW(mainWnd, msg, L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg, L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/settings") {
         OpenSettings(mainWnd, PG_APPEAR);
     } else if (c == L"/config") {
@@ -1779,7 +1847,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             FindClose(hq);
         }
         if (list.empty()) list = L"(no .ini files found)\n";
-        MessageBoxW(mainWnd, list.c_str(), L"TypeBox — ini files", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, list.c_str(), L"TypeBox — ini files", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/path") {
         // Show the own PATH folders and %variables% (OS Environment Variables style).
         std::wstring msg;
@@ -1788,7 +1856,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         msg += L"\nVariables:\n";
         for (auto& v : g_envVars) msg += v.name + L" = " + v.value + L"\n";
         if (g_envVars.empty()) msg += L"(no [Variables])\n";
-        MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — own path & variables",
+        TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — own path & variables",
                     MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/reread") {
         LoadSettings();
@@ -1811,21 +1879,21 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         std::wstring msg = L"Plugins loaded: " + std::to_wstring(g_plugins.size());
         if (g_plugins.empty() && before == 0)
             msg += L"\n(dlls in the portable Plugins\\ folder or [Plugins] entries are picked up)";
-        MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
+        TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/unload") {
         CallPluginsUnload();
     } else if (c == L"/export") {
         // Export settings: copy the portable ini to the given file.
         std::wstring dest = RestWords(line);
         if (dest.empty()) {
-            MessageBoxW(mainWnd, L"Usage: /export <path-to-file>",
+            TbMessageBox(mainWnd, L"Usage: /export <path-to-file>",
                         L"TypeBox — export", MB_OK | MB_ICONINFORMATION);
         } else if (CopyFileW(g_iniPath.c_str(), dest.c_str(), FALSE)) {
             wchar_t msg[512];
             wsprintfW(msg, L"Settings exported to:\n%s", dest.c_str());
-            MessageBoxW(mainWnd, msg, L"TypeBox — export", MB_OK | MB_ICONINFORMATION);
+            TbMessageBox(mainWnd, msg, L"TypeBox — export", MB_OK | MB_ICONINFORMATION);
         } else {
-            MessageBoxW(mainWnd, L"TypeBox: export failed (check the path).",
+            TbMessageBox(mainWnd, L"TypeBox: export failed (check the path).",
                         L"TypeBox — export", MB_OK | MB_ICONERROR);
             LogError(L"/export failed to: " + dest);
         }
@@ -1833,7 +1901,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         // Import settings: restore an exported file (current ini is kept as .bak).
         std::wstring src = RestWords(line);
         if (src.empty() || !PathFileExistsW(src.c_str())) {
-            MessageBoxW(mainWnd, L"Usage: /import <path-to-file>\n(file not found)",
+            TbMessageBox(mainWnd, L"Usage: /import <path-to-file>\n(file not found)",
                         L"TypeBox — import", MB_OK | MB_ICONINFORMATION);
         } else {
             std::wstring bak = g_iniPath + L".bak";
@@ -1844,11 +1912,11 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
                 LoadWebSearch();
                 LoadScripts();
                 ReloadHotkey(mainWnd);
-                MessageBoxW(mainWnd,
+                TbMessageBox(mainWnd,
                     L"Settings imported. Previous config kept as TypeBox.ini.bak",
                     L"TypeBox — import", MB_OK | MB_ICONINFORMATION);
             } else {
-                MessageBoxW(mainWnd, L"TypeBox: import failed.",
+                TbMessageBox(mainWnd, L"TypeBox: import failed.",
                             L"TypeBox — import", MB_OK | MB_ICONERROR);
                 LogError(L"/import failed from: " + src);
             }
@@ -1880,7 +1948,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             (unsigned)(upsec / 86400), (unsigned)((upsec / 3600) % 24),
             (unsigned)((upsec / 60) % 60), bat);
         LogInfo(L"/sys: " + std::wstring(txt));
-        if (g_nid.hWnd) {
+        if (g_nid.hWnd && !g_headless) {
             g_nid.uFlags = NIF_INFO;
             g_nid.dwInfoFlags = NIIF_INFO;
             lstrcpynW(g_nid.szInfoTitle, L"TypeBox — system", ARRAYSIZE(g_nid.szInfoTitle));
@@ -1892,10 +1960,88 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         if (!p.empty() && PathFileExistsW(p.c_str()))
             ShellExecuteW(mainWnd, L"open", p.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         else
-            MessageBoxW(mainWnd, L"Log is empty or not configured ([Log] File).",
+            TbMessageBox(mainWnd, L"Log is empty or not configured ([Log] File).",
                         L"TypeBox — log", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/update") {
         DoUpdate(mainWnd);            // v0.20: release check + install helper
+    } else if (c == L"/day") {
+        // v0.27 (RI3 #40): today's executions, grouped, from Usage.dat.
+        int ymd = LocalYmd();
+        int cmds = 0, runs = 0;
+        long long lastAny = 0;
+        std::vector<std::pair<int, std::wstring>> v;
+        for (auto& kv : g_usage)
+            if (kv.second.day == ymd && kv.second.today > 0) {
+                cmds++; runs += kv.second.today;
+                v.push_back(std::make_pair(kv.second.today, kv.first));
+                if (kv.second.last > lastAny) lastAny = kv.second.last;
+            }
+        std::wstring ans;
+        if (v.empty()) ans = L(STR_DAY_NONE);
+        else {
+            std::sort(v.begin(), v.end(),
+                      [](const std::pair<int, std::wstring>& a,
+                         const std::pair<int, std::wstring>& b) { return a.first > b.first; });
+            wchar_t buf[96];
+            wsprintfW(buf, L"day: %d command%s, %d runs today | ",
+                      cmds, cmds == 1 ? L"" : L"s", runs);
+            ans = buf;
+            int shown = 0;
+            for (auto& p : v) {
+                if (shown >= 8) { ans += L", ..."; break; }
+                if (shown) ans += L", ";
+                ans += p.second + L" " + std::to_wstring(p.first);
+                ++shown;
+            }
+            if (lastAny) {
+                time_t t = (time_t)lastAny; struct tm tb;
+                if (localtime_s(&tb, &t) == 0) {
+                    wsprintfW(buf, L" | last %02d:%02d", tb.tm_hour, tb.tm_min);
+                    ans += buf;
+                }
+            }
+        }
+        LogInfo(L"/day: " + ans);
+        SetWindowTextW(g_edit, ans.c_str());
+        SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        g_internalAnswer = true;
+    } else if (c == L"/tabs") {
+        // v0.27 (RI3 #10): one Enter, a whole page of tabs (batch opener).
+        size_t sp0 = line.find_first_of(L" \t");
+        std::wstring rest = Trim(sp0 == std::wstring::npos ? L"" : line.substr(sp0 + 1));
+        std::vector<std::wstring> urls;
+        size_t i = 0;
+        while (i < rest.size() && (int)urls.size() < 10) {
+            while (i < rest.size() && (rest[i] == L' ' || rest[i] == L'\t')) ++i;
+            size_t s = i;
+            while (i < rest.size() && rest[i] != L' ' && rest[i] != L'\t') ++i;
+            if (i > s) urls.push_back(rest.substr(s, i - s));
+        }
+        if (urls.empty()) {
+            SetWindowTextW(g_edit, L(STR_TABS_NONE));
+            SendMessageW(g_edit, EM_SETSEL, 0, -1);
+            g_internalAnswer = true;
+        } else {
+            int opened = 0;
+            for (auto& u0 : urls) {
+                std::wstring u = u0;
+                if (u.find(L"://") == std::wstring::npos) u = L"https://" + u;   // bare host gets a scheme
+                if ((INT_PTR)ShellExecuteW(mainWnd, L"open", u.c_str(), nullptr, nullptr,
+                                           g_headless ? SW_SHOWMINNOACTIVE
+                                                      : SW_SHOWNORMAL) > 32) {
+                    ++opened;
+                    LogInfo(L"tabs: opened " + u);
+                } else {
+                    LogError(L"tabs: failed " + u);
+                }
+            }
+            wchar_t ans[64];
+            wsprintfW(ans, L(STR_TABS_OPENED), opened);
+            SetWindowTextW(g_edit, ans);
+            SendMessageW(g_edit, EM_SETSEL, 0, -1);
+            PlayTypeSound(opened ? 8 : 2);
+            g_internalAnswer = true;
+        }
     } else if (c == L"/hide") {
         HideBox(mainWnd);
     } else if (c == L"/show") {
@@ -2118,7 +2264,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
             if (g_set.confirmSuspicious && LooksSuspicious(rest)) {
                 std::wstring msg = L"TypeBox \u2014 security check\n\nThe arguments to your script look like an encoded payload:\n\n"
                                    + rest + L"\n\nRun it anyway?";
-                if (MessageBoxW(mainWnd, msg.c_str(), L"TypeBox",
+                if (TbMessageBox(mainWnd, msg.c_str(), L"TypeBox",
                                 MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
                     LogInfo(L"security: blocked suspicious args for script: " + word);
                     return EXC_NONE;
@@ -2165,7 +2311,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         if (g_set.confirmSuspicious && LooksSuspicious(expanded)) {
             std::wstring msg = L"TypeBox \u2014 security check\n\nThis command looks like an encoded payload or fileless one-liner:\n\n"
                                + expanded + L"\n\nRun it anyway?";
-            if (MessageBoxW(mainWnd, msg.c_str(), L"TypeBox",
+            if (TbMessageBox(mainWnd, msg.c_str(), L"TypeBox",
                             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
                 LogInfo(L"security: blocked suspicious command");
                 return EXC_NONE;
@@ -2194,10 +2340,10 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
 // It re-classifies on every keystroke (EN_CHANGE) and is painted in the
 // status strip next to three physical lamp dots.
 static const wchar_t* const kInternalCmds[] = {
-    L"/about", L"/checkconfig", L"/config", L"/exit", L"/export", L"/help",
+    L"/about", L"/checkconfig", L"/config", L"/day", L"/exit", L"/export", L"/help",
     L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
     L"/log", L"/openconfig", L"/path", L"/reread", L"/settings", L"/show",
-    L"/sys", L"/unload", L"/undo", L"/update" };
+    L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" };
 
 struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
 static Anchor g_anchor;
@@ -2299,6 +2445,9 @@ static void DdUpdate(HWND mainWnd);
 // home position, which is exactly what the "return to original on restart" ask means.
 static int  g_dragX = -1, g_dragY = -1;
 static bool g_dragged = false;
+// v0.27: once `pos` has deliberately repositioned the console (headless suites
+// depend on the geometry), a re-show must keep that spot, not re-park at -32000.
+static bool g_posMoved = false;
 
 static void ShowBox(HWND mainWnd) {
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
@@ -2310,19 +2459,35 @@ static void ShowBox(HWND mainWnd) {
     if (!g_set.centerX) x = 0;
     if (g_set.dragMove && g_dragged) { x = g_dragX; y = g_dragY; }
 
-    SetWindowPos(mainWnd, HWND_TOPMOST, x, y, g_set.width, g_set.height, SWP_SHOWWINDOW);
+    if (g_headless) {
+        // off-screen and non-activating: suites drive it by posted messages,
+        // the human at the keyboard never sees it nor loses focus. Exception:
+        // after an explicit `pos` the suite owns the geometry - keep that spot.
+        if (g_posMoved)
+            SetWindowPos(mainWnd, nullptr, 0, 0, 0, 0,
+                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        else
+            SetWindowPos(mainWnd, nullptr, -32000, -32000, g_set.width, g_set.height,
+                         SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW);
+    } else {
+        SetWindowPos(mainWnd, HWND_TOPMOST, x, y, g_set.width, g_set.height, SWP_SHOWWINDOW);
+    }
     if (g_set.transparent < 255) {
         SetWindowLongW(mainWnd, GWL_EXSTYLE,
                        GetWindowLongW(mainWnd, GWL_EXSTYLE) | WS_EX_LAYERED);
         SetLayeredWindowAttributes(mainWnd, 0, (BYTE)g_set.transparent, LWA_ALPHA);
     }
-    SetForegroundWindow(mainWnd);
-    SetFocus(g_edit);
-    if (g_set.applyEnglish) // [Font] ApplyEnglish: type commands in EN layout (TypeAndRun)
-        ActivateKeyboardLayout((HKL)MAKELONG(0x409, 0x0409), 0);
+    if (!g_headless) {
+        SetForegroundWindow(mainWnd);
+        SetFocus(g_edit);
+        if (g_set.applyEnglish) // [Font] ApplyEnglish: type commands in EN layout (TypeAndRun)
+            ActivateKeyboardLayout((HKL)MAKELONG(0x409, 0x0409), 0);
+    }
     SendMessageW(g_edit, EM_SETSEL, 0, -1);
     g_visible = true;
     g_histPos = g_history.size();
+    g_hsrch = false;                          // v0.27: every summon starts clean
+    g_hsrchSaved.clear();
     ResetET();
     g_anchor = Anchor{};             // lights off until the first keystroke
     SetTrayVisual();
@@ -2335,6 +2500,8 @@ static void HideBox(HWND mainWnd) {
     ShowWindow(mainWnd, SW_HIDE);
     SetWindowTextW(g_edit, L"");
     g_visible = false;
+    g_hsrch = false;                          // v0.27: mode never survives a hide
+    g_hsrchSaved.clear();
     KillTimer(mainWnd, 1);
     ResetET();
     SetTrayVisual();
@@ -2434,13 +2601,19 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
 
     if (w == L"pos") {
         MONITORINFO mi; mi.cbSize = sizeof(mi);
-        HMONITOR hm = MonitorFromWindow(mainWnd, MONITOR_DEFAULTTONEAREST);
+        // v0.27 headless: the parked window sits at -32000, which would make
+        // TONEAREST pick some far-off (often left-extended) monitor. The user's
+        // pos contract is the PRIMARY work area, so pin the geometry there.
+        HMONITOR hm = g_headless
+            ? MonitorFromPoint(POINT{ 0, 0 }, MONITOR_DEFAULTTOPRIMARY)
+            : MonitorFromWindow(mainWnd, MONITOR_DEFAULTTONEAREST);
         if (!hm || !GetMonitorInfoW(hm, &mi)) return EXC_NONE;
         if (rest.empty()) { ShowAnswer(mainWnd, L(STR_PO_USAGE)); return EXC_PLUGIN; }
         int x, y, ww, hh;
         if (SlotRect(mi.rcWork, rest.c_str(), &x, &y, &ww, &hh)) {
             if (!ApplyPosRect(mainWnd, x, y, ww, hh))
                 { ShowAnswer(mainWnd, L"pos: SetWindowPos failed"); return EXC_PLUGIN; }
+            g_posMoved = true;
             wchar_t msg[160];
             wsprintfW(msg, L"pos: %s -> %d,%d %dx%d", rest.c_str(), x, y, ww, hh);
             LogInfo(L"pos: " + rest + L" applied");
@@ -2465,6 +2638,7 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
         }
         if (!ApplyPosRect(mainWnd, wa.left+p[0], wa.top+p[1], p[2], p[3]))
             { ShowAnswer(mainWnd, L"pos: SetWindowPos failed"); return EXC_PLUGIN; }
+        g_posMoved = true;
         wchar_t msg[160];
         wsprintfW(msg, L"pos: %s -> %d,%d %dx%d", rest.c_str(), wa.left+p[0], wa.top+p[1], p[2], p[3]);
         LogInfo(L"pos: preset " + rest + L" applied");
@@ -2853,6 +3027,8 @@ static void Submit(HWND mainWnd) {
     std::wstring line = GetEditText(g_edit);
     if (line.empty()) return;
     DdClose();
+    g_hsrch = false;                          // v0.27: Enter ends search mode
+    g_internalAnswer = false;
     g_lastRun = line;
     // v0.18: su/sudo//su prefix -> run the rest elevated. History keeps the
     // typed line (re-runnable), Usage records the real command word.
@@ -2889,6 +3065,10 @@ static void Submit(HWND mainWnd) {
     // and copied - the original TypeAndRun behaved exactly like this. Esc or
     // the hotkey still hides; the next keystroke replaces the result.
     if (t == EXC_PLUGIN) return;
+    if (g_internalAnswer) {                   // v0.27: /day /tabs answered in line
+        g_internalAnswer = false;
+        return;                               // console stays open, text selected
+    }
     SetWindowTextW(g_edit, L"");
     HideBox(mainWnd);
 }
@@ -2988,9 +3168,9 @@ static void TabComplete(HWND edit) {
         if (firstWord) {
             if (g_set.etInternal) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
-                     L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
+                     L"/day", L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
                      L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path", L"/reread", L"/settings",
-                     L"/show", L"/sys", L"/unload", L"/undo", L"/update" })
+                     L"/show", L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" })
                     add(cmd);
             }
             if (g_set.etAlias)
@@ -3072,7 +3252,8 @@ static void DdSyncTitle() {   // cheap state probe for the test harness
     }
     SetWindowTextW(g_ddWnd, (std::wstring(L"TypeBoxDropDown|") +
         std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel) +
-        L"|" + std::to_wstring(g_ddTop) + L"|" + top).c_str());
+        L"|" + std::to_wstring(g_ddTop) + L"|" + top +
+        (g_hsrch ? L"|bck" : L"")).c_str());   // v0.27: |bck marks history-search mode
 }
 
 static int DdVisibleRows() {
@@ -3259,7 +3440,29 @@ static void DdUpdate(HWND mainWnd) {
             if (_wcsicmp(x.c_str(), c.c_str()) == 0) return;
         items.push_back(c); marks.push_back(std::move(mk)); score.push_back(sc);
     };
-    if (word.empty()) {
+    if (g_hsrch) {
+        // v0.27 (RI3 #12): bck-i-search — rows = history containing the query,
+        // newest first, marks on the match. Rebuilt on every keystroke, so the
+        // newest match stays selected (0) exactly like bash.
+        std::wstring q = Trim(text);
+        for (size_t i = g_history.size(); i-- > 0; ) {
+            const std::wstring& h = g_history[i];
+            if (h.empty()) continue;
+            std::vector<size_t> mk;
+            if (!q.empty()) {
+                const wchar_t* f = StrStrIW(h.c_str(), q.c_str());   // shlwapi
+                if (!f) continue;
+                size_t off = (size_t)(f - h.c_str());
+                for (size_t k = 0; k < q.size(); ++k) mk.push_back(off + k);
+            }
+            bool dup = false;
+            for (auto& x : items) if (_wcsicmp(x.c_str(), h.c_str()) == 0) { dup = true; break; }
+            if (dup) continue;
+            if ((int)items.size() >= 100) break;
+            items.push_back(h); marks.push_back(std::move(mk)); score.push_back(1);
+        }
+        if (items.empty()) { DdClose(); return; }
+    } else if (word.empty()) {
         if (g_set.ddOnEmpty)                        // empty console = history (parity)
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
     } else {
@@ -3289,7 +3492,7 @@ static void DdUpdate(HWND mainWnd) {
                 }
     }
     if (items.empty()) { DdClose(); return; }
-    if (!word.empty() && (g_set.fuzzy || g_set.frecency)) {   // best match on top, ties keep source order
+    if (!g_hsrch && !word.empty() && (g_set.fuzzy || g_set.frecency)) {   // best match on top, ties keep source order
         std::vector<size_t> ord(items.size());
         for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
         std::stable_sort(ord.begin(), ord.end(),
@@ -3320,8 +3523,8 @@ static void DdUpdate(HWND mainWnd) {
     g_ddOwner = mainWnd;
     g_ddItems = std::move(items);
     g_ddMarks = std::move(marks);
-    g_ddB = b; g_ddE = e; g_ddSel = -1;
-    g_ddTop = 0; g_ddSelKb = false;
+    g_ddB = b; g_ddE = e; g_ddSel = g_hsrch ? 0 : -1;
+    g_ddTop = 0; g_ddSelKb = g_hsrch;         // v0.27: Enter runs the newest match
 
     DdEnsureFont();
     int rows = (int)g_ddItems.size();
@@ -3346,7 +3549,7 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(menu, MF_STRING, 2, L(STR_TRAY_CONFIG));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 3, L(STR_TRAY_EXIT));
-    SetForegroundWindow(hWnd); // so the menu dismisses on click-away
+    if (!g_headless) SetForegroundWindow(hWnd); // so the menu dismisses on click-away
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
     DestroyMenu(menu);
 }
@@ -3392,7 +3595,7 @@ static void ShowConsoleMenu(HWND hWnd, POINT pt) {
         (IsClipboardFormatAvailable(CF_TEXT) ? MF_ENABLED : MF_GRAYED));
     EnableMenuItem(menu, IDCT_SELALL, MF_BYCOMMAND |
         (GetWindowTextLengthW(g_edit) ? MF_ENABLED : MF_GRAYED));
-    SetForegroundWindow(hWnd);   // click-away dismisses, like the tray menu
+    if (!g_headless) SetForegroundWindow(hWnd);   // click-away dismisses, like the tray menu
     TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hWnd, nullptr);
     DestroyMenu(menu);
 }
@@ -4624,7 +4827,11 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     SettingsShowPage(startPage);
     ShowWindow(g_setWnd, SW_SHOW);
     UpdateWindow(g_setWnd);
-    SetForegroundWindow(g_setWnd);
+    if (g_headless)
+        SetWindowPos(g_setWnd, nullptr, -32000, -32000, 0, 0,
+                     SWP_NOSIZE | SWP_NOACTIVATE);   // off-screen, focus untouched
+    else
+        SetForegroundWindow(g_setWnd);
 }
 
 // ---------------------------------------------------------------- INI + apply
@@ -4825,7 +5032,7 @@ static void OpenSettings(HWND mainWnd, int page) {
     if (g_setWnd) {                        // already open: raise + switch page
         SendMessageW(g_setList, LB_SETCURSEL, page, 0);
         SettingsShowPage(page);
-        SetForegroundWindow(g_setWnd);
+        if (!g_headless) SetForegroundWindow(g_setWnd);
         return;
     }
     SettingsCreate(mainWnd, page);
@@ -4889,6 +5096,18 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         return r;
     }
     bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    // v0.27: the Ctrl+R keydown is consumed by EditProc, but the message loop's
+    // TranslateMessage already queued the matching WM_CHAR - swallow exactly one
+    // so the search key never lands in the console (posted key events can carry
+    // repeat bits in lParam, so the guard eats the whole char message).
+    if (msg == WM_CHAR && (wp == L'r' || wp == L'R')) {
+        if (g_hsrchEatChar) { g_hsrchEatChar = false; return 0; }
+    } else if (msg == WM_CHAR && g_hsrchEatChar) {
+        g_hsrchEatChar = false;               // any other char makes it stale
+    } else if (msg == WM_KEYDOWN && g_hsrchEatChar && wp != VK_CONTROL &&
+               wp != L'R' && wp != L'r') {
+        g_hsrchEatChar = false;
+    }
     switch (msg) {
     case WM_KEYDOWN:
     case WM_SYSKEYDOWN:      // real Alt+digit arrives as WM_SYSKEYDOWN (Alt+1..9 rows)
@@ -4917,9 +5136,22 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
             Submit(mainWnd);  return 0;
         }
         case VK_ESCAPE:
+            if (g_hsrch) {                    // v0.27: Esc leaves bck-i-search,
+                g_hsrch = false;              // the line you typed comes back
+                SetWindowTextW(hWnd, g_hsrchSaved.c_str());
+                SendMessageW(hWnd, EM_SETSEL, -1, 0);
+                DdClose();
+                return 0;
+            }
             if (DdVisible()) { DdClose(); return 0; }   // Esc #1: drop the list
             HideBox(mainWnd); return 0;
         case VK_TAB:
+            if (g_hsrch) {                    // v0.27: Tab leaves search mode
+                g_hsrch = false;              // and drops the row under the caret in
+                if (DdVisible() && g_ddSel >= 0) DdPick(false);
+                else DdClose();
+                return 0;
+            }
             if (DdVisible() && g_ddSel >= 0) { DdPick(false); return 0; }  // accept row
             TabComplete(hWnd);  return 0;
         case VK_UP:
@@ -4957,6 +5189,29 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
             break;
         case L'A': case L'a':
             if (ctrl) { SendMessageW(hWnd, EM_SETSEL, 0, -1); return 0; }   // Ctrl+A
+            break;
+        case L'R': case L'r':
+            // v0.27 (RI3 #12): Ctrl+R = bash-style reverse history search.
+            // First press: remember the line, the console becomes the query.
+            // Every further press cycles the matches, like bash.
+            if (ctrl || (GET_KEYSTATE_WPARAM(lp) & MK_CONTROL)) {
+                if (!g_hsrch) {
+                    g_hsrch = true;
+                    int len = GetWindowTextLengthW(hWnd);
+                    std::wstring raw(len, L'\0');
+                    if (len) GetWindowTextW(hWnd, &raw[0], len + 1);
+                    g_hsrchSaved = raw;
+                    g_hsrchEatChar = true;
+                    SetWindowTextW(hWnd, L"");   // EN_CHANGE -> DdUpdate lists history
+                } else if (DdVisible() && !g_ddItems.empty()) {
+                    g_ddSel = (g_ddSel + 1) % (int)g_ddItems.size();
+                    g_ddSelKb = true;
+                    g_hsrchEatChar = true;
+                    DdKeepVisible(); DdSyncTitle();
+                    InvalidateRect(g_ddWnd, nullptr, FALSE);
+                }
+                return 0;
+            }
             break;
         default:
             if (((GetKeyState(VK_MENU) & 0x8000) || (lp & 0x100000)) &&   // Alt context bit
@@ -5041,6 +5296,13 @@ static void ApplyHotkey(HWND mainWnd) {
     g_hkHookMode = false;
     g_hkEdge = false;
     g_hkWnd  = mainWnd;
+
+    if (g_headless) {
+        // A suite must never steal keys from the human at the keyboard: no OS
+        // hotkey, no low-level hook. Probes post WM_HOTKEY(kHotkeyId) instead.
+        LogInfo(L"hotkey: " + HotkeyText(g_hotkey) + L" [headless: not registered]");
+        return;
+    }
 
     bool wantHook = (g_hotkey.mods() == 0);  // single key: RegisterHotKey would
                                              // eat it system-wide; hook is smarter
@@ -5207,7 +5469,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case kUpdateMsg: {   // v0.20: opt-in startup check result (thread -> UI)
         std::wstring* tag = (std::wstring*)lp;
         if (tag) {
-            if (g_set.balloonTips && g_nid.hWnd && g_set.trayIcon) {
+            if (g_set.balloonTips && g_nid.hWnd && g_set.trayIcon && !g_headless) {
                 g_nid.uFlags = NIF_INFO;
                 g_nid.dwInfoFlags = NIIF_INFO;
                 lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
@@ -5318,6 +5580,8 @@ static std::wstring SecondInstanceArgs() {
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetProcessDPIAware();
+    DetectHeadless();   // v0.27: suites set TYPEBOX_HEADLESS=1 so nothing of this
+                        // run can touch the human at the keyboard
 
     // Smoke-test / user friendly: `TypeBox.exe --version` prints and exits
     // (used by CI to refuse publishing a build that cannot start).
