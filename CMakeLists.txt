@@ -47,7 +47,8 @@ endforeach()
 # timer (v0.21, gallery #7): winmm for the due-alert sound, gdi32 to paint its
 # stopwatch mini-window, shell32 for the tray balloon.
 # sysmon (v0.22, gallery #8): pure user32 (clipboards) + kernel32 stats calls.
-foreach(P cliphist taskman winlist pwgen timer sysmon)
+# util (v0.23, RI3 #250/#251): ts + slug, user32 for the clipboard hand-off.
+foreach(P cliphist taskman winlist pwgen timer sysmon util)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)

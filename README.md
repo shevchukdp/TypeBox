@@ -103,9 +103,15 @@ Working today (v0.12.0):
   `kill notepad`, `top` live CPU ranking, `restart notepad` kill+relaunch) and
   **winlist** (`win notepad` raises the window), **pwgen** (`pw 20 s` strong passwords,
   `[Pwgen]` defaults), **timer** (`timer 25m tea` countdown + `sw` stopwatch with
-   a topmost mini label, `[Timer]` defaults) and **sysmon** (`cpu`, `ram`, `batt`, `disk`, `sys` - sampled
-   CPU percent, clipboard hand-off, `[Sysmon]` defaults), plus the calculator example in
+   a topmost mini label, `[Timer]` defaults), **sysmon** (`cpu`, `ram`, `batt`, `disk`, `sys` - sampled
+   CPU percent, clipboard hand-off, `[Sysmon]` defaults) and **util** (`ts 1763385000` epoch↔ISO,
+   `ts clip`, `slug Привет мир` → `privet-mir` with the result on the clipboard), plus the calculator example in
    [`examples/plugin_calc`](examples/plugin_calc/calc.c)
+ - ✅ **Positions & stay-awake** (v0.23) — `pos right` / `pos q3` / `pos center` dock the console
+   into FancyZones-style slots of the current monitor, `pos <name>` uses a `[Positions]` preset
+   (`mycorner=10,20,300,120`), and `stayawake [min]` keeps the screen on without any service
+   (`SetThreadExecutionState`, off with `stayawake off`) — the console still returns to its INI
+   home position after a restart
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
   arguments passed through; re-scan with `/reread`

@@ -3,6 +3,40 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.23.0] - 2026-11-17
+
+![pos](docs/screenshots/console-pos.png)
+*`pos right` - the console docked into the right half of the work area, one
+keystroke away from everywhere. The FancyZones vocabulary, console-first (RI3 #226).*
+
+### The utilities wave - RI3 #226, #230, #250, #251
+
+- ✅ **`pos`** (RI3 #226) - `left right top bottom tl tr bl br center q1..q4` place the
+  console into work-area slots of the *current* monitor; `pos <name>` reads a
+  `[Positions] name=x,y,w,h[,mon]` preset from the portable INI. The new spot survives
+  hide/show and drags for the session, yet a restart still returns the console to its
+  `[Show]` home - the INI is never rewritten behind the user's back.
+- ✅ **`stayawake`** (RI3 #230) - the caffeine everyone installs separately, in the host:
+  `SetThreadExecutionState(ES_CONTINUOUS|ES_SYSTEM_REQUIRED|ES_DISPLAY_REQUIRED)`,
+  `stayawake 30` self-clears via a callback timer, `stayawake off` clears now, an exit is
+  always a clean off. No extra process, no tray service, nothing on the network.
+- ✅ **`ts`** (RI3 #250, `util.dll` #11) - the epoch converter that lives where you already
+  type: bare `ts` answers `epoch | epoch-ms | ISO local | ISO Z`; `ts 1763385000`,
+  millisecond epochs, `ts 2026-11-16T08:00+03:00`, bare-local ISO and `ts clip`
+  (clipboard auto-detect) all answer in one selected line.
+- ✅ **`slug`** (RI3 #251) - `slug Привет мир` → `privet-mir`, on the clipboard. Compiled
+  RU/UA/BG translit (`ё→e`, `щ→sch`, `ъ/ь` split words), Latin diacritic stripping,
+  trailing `snake`/`pascal`/`camel`/`upper` modes, unknown symbols collapse to a word
+  boundary instead of mojibake - the filename branch the units plugin never covered.
+- ✅ **EasyType** - `po` + Tab completes `pos`, `stayawake` and the `ts` templates are
+  candidates too, all behind the usual `[Exec] Internal` / `[PluginState]` switches.
+- ✅ `test-v0230.ps1`: 32 gates - exact slot geometry asserted against the live work area
+  (`tbtest topwin`), the spot surviving hide/show, `[Positions]` presets, every
+  `stayawake` answer + log line, `ts` epochs cross-checked against .NET (s and ms, Zulu,
+  `+03:00`, now-delta ≤ 5 s, clipboard round-trip), `slug` in all modes including a
+  Cyrillic run pushed through the new `tbtest setmainhex` (UTF-16LE - argv cannot carry it
+  safely) - plus the settings self-test with the eleventh plugin loaded.
+
 ## [0.22.0] - 2026-11-16
 
 ![sysmon popup](docs/screenshots/sysmon-popup.png)

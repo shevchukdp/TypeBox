@@ -1269,6 +1269,7 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
 static void ShowBox(HWND mainWnd);
 static void HideBox(HWND mainWnd);
 static int  RunLine(const std::wstring& line, HWND mainWnd);
+static int  RunUtilityCommands(const std::wstring& line, HWND mainWnd);   // v0.23
 static void ReloadHotkey(HWND mainWnd);
 static void LoadThemes();       // v0.15 (/reread uses these before their definitions)
 static void ApplyThemeVisual();
@@ -1728,6 +1729,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"/inidir /inifiles /load /reread /settings /show /unload\n"
             L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
             L"/update checks GitHub Releases for a newer version (user-initiated only)\n"
+            L"Utilities (v0.23): pos right | pos <[Positions] name> | stayawake [min] | stayawake off\n"
+            L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | cpu ram batt disk sys\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
@@ -1943,6 +1946,13 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
 
     std::wstring word = FirstWord(line);
     std::wstring rest = RestWords(line);
+
+    // v0.23: reserved utility words run ahead of aliases (RI3 #226 pos,
+    // #230 stayawake; ts/slug are console-first plugin commands in util.dll).
+    if (g_set.execInternal) {
+        int u = RunUtilityCommands(line, mainWnd);
+        if (u != EXC_NONE) return u;
+    }
 
     // 1) alias from [Aliases] (TypeBox.ini or legacy Config.ini)
     if (g_set.execAliases) {
@@ -2320,6 +2330,171 @@ static void HideBox(HWND mainWnd) {
     ResetET();
     SetTrayVisual();
     DdClose();
+}
+
+// ---------------------------------------------------------------- utilities (v0.23)
+//
+// RI3 #226 `pos` + #230 `stayawake`. Host-side on purpose: ShowBox re-lays
+// the window out from g_set on every show, so a plugin SetWindowPos would be
+// undone by the next hotkey - pos updates g_set (memory only) so the spot
+// survives hide/show for the session while a restart still returns the
+// console to its INI home position. stayawake lives as long as the host
+// process does: the thread execution state dies with the process, and the
+// optional [min] expiry rides a callback timer on the main window.
+// ts/slug (RI3 #250/#251) are console-first commands in util.dll instead.
+
+#ifndef ES_CONTINUOUS
+#define ES_CONTINUOUS        0x80000000
+#define ES_SYSTEM_REQUIRED   0x00000001
+#define ES_DISPLAY_REQUIRED  0x00000002
+extern "C" DWORD WINAPI SetThreadExecutionState(DWORD esFlags);
+#endif
+
+static UINT_PTR g_awakeTimer = 0;
+
+static VOID CALLBACK AwakeExpireCb(HWND h, UINT m, UINT_PTR id, DWORD t) {
+    (void)m; (void)t;
+    SetThreadExecutionState(ES_CONTINUOUS);
+    KillTimer(h, id);
+    g_awakeTimer = 0;
+    LogInfo(L"stayawake: expired");
+}
+
+static void ShowAnswer(HWND mainWnd, const std::wstring& text) {
+    (void)mainWnd;
+    SetWindowTextW(g_edit, text.c_str());
+    SendMessageW(g_edit, EM_SETSEL, 0, -1);
+}
+
+static bool ApplyPosRect(HWND w, int x, int y, int ww, int hh) {
+    if (ww < 40 || hh < 20) return false;
+    if (!SetWindowPos(w, NULL, x, y, ww, hh,
+                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW)) return false;
+    g_set.x = x; g_set.y = y; g_set.width = ww; g_set.height = hh;
+    g_set.centerX = false; g_set.centerY = false;
+    g_dragX = x; g_dragY = y; g_dragged = true;    // ShowBox keeps our spot too
+    return true;
+}
+
+// FancyZones-flavoured vocabulary on the CURRENT monitor's work area.
+static bool SlotRect(const RECT& wa, const wchar_t* slot,
+                     int* x, int* y, int* w, int* h) {
+    int Lp = wa.left, T = wa.top;
+    int W = wa.right - wa.left, H = wa.bottom - wa.top;
+    if (!_wcsicmp(slot, L"left"))         { *x=Lp;       *y=T;      *w=W/2;     *h=H;     }
+    else if (!_wcsicmp(slot, L"right"))   { *x=Lp+W/2;   *y=T;      *w=W-W/2;   *h=H;     }
+    else if (!_wcsicmp(slot, L"top"))     { *x=Lp;       *y=T;      *w=W;       *h=H/2;   }
+    else if (!_wcsicmp(slot, L"bottom"))  { *x=Lp;       *y=T+H/2;  *w=W;       *h=H-H/2; }
+    else if (!_wcsicmp(slot, L"tl"))      { *x=Lp;       *y=T;      *w=W/2;     *h=H/2;   }
+    else if (!_wcsicmp(slot, L"tr"))      { *x=Lp+W/2;   *y=T;      *w=W-W/2;   *h=H/2;   }
+    else if (!_wcsicmp(slot, L"bl"))      { *x=Lp;       *y=T+H/2;  *w=W/2;     *h=H-H/2; }
+    else if (!_wcsicmp(slot, L"br"))      { *x=Lp+W/2;   *y=T+H/2;  *w=W-W/2;   *h=H-H/2; }
+    else if (!_wcsicmp(slot, L"center"))  { *w=g_set.width; *h=g_set.height;
+                                           *x=Lp+(W-*w)/2; *y=T+(H-*h)/2; }
+    else if (slot[0]==L'q' && slot[1]>=L'1' && slot[1]<=L'4' && !slot[1+1]) {
+        int n = slot[1]-L'1'; *w = W/4; if (n==3) *w = W-3*(W/4);
+        *x = Lp+n*(W/4); *y = T; *h = H;
+    }
+    else return false;
+    return true;
+}
+
+static BOOL CALLBACK MonWorkCb(HMONITOR m, HDC, LPRECT, LPARAM l) {
+    MONITORINFO mi; mi.cbSize = sizeof(mi);
+    if (GetMonitorInfoW(m, &mi)) (*reinterpret_cast<std::vector<RECT>*>(l)).push_back(mi.rcWork);
+    return TRUE;
+}
+
+static int ParseIntsCSV(wchar_t* s, int* out, int max) {
+    int n = 0;
+    while (*s && n < max) {
+        while (*s == L' ' || *s == L',') ++s;
+        if (!*s) break;
+        bool neg = (*s == L'-'); if (neg || *s == L'+') ++s;
+        if (*s < L'0' || *s > L'9') return -1;
+        long v = 0;
+        while (*s >= L'0' && *s <= L'9') { v = v*10 + (*s-L'0'); ++s; }
+        out[n++] = (int)(neg ? -v : v);
+    }
+    return n;
+}
+
+static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
+    std::wstring w = Lower(FirstWord(line));
+    std::wstring rest = Trim(RestWords(line));
+
+    if (w == L"pos") {
+        MONITORINFO mi; mi.cbSize = sizeof(mi);
+        HMONITOR hm = MonitorFromWindow(mainWnd, MONITOR_DEFAULTTONEAREST);
+        if (!hm || !GetMonitorInfoW(hm, &mi)) return EXC_NONE;
+        if (rest.empty()) { ShowAnswer(mainWnd, L(STR_PO_USAGE)); return EXC_PLUGIN; }
+        int x, y, ww, hh;
+        if (SlotRect(mi.rcWork, rest.c_str(), &x, &y, &ww, &hh)) {
+            if (!ApplyPosRect(mainWnd, x, y, ww, hh))
+                { ShowAnswer(mainWnd, L"pos: SetWindowPos failed"); return EXC_PLUGIN; }
+            wchar_t msg[160];
+            wsprintfW(msg, L"pos: %s -> %d,%d %dx%d", rest.c_str(), x, y, ww, hh);
+            LogInfo(L"pos: " + rest + L" applied");
+            ShowAnswer(mainWnd, msg);
+            return EXC_PLUGIN;
+        }
+        wchar_t val[128] = {};
+        GetPrivateProfileStringW(L"Positions", rest.c_str(), L"", val, 127, g_iniPath.c_str());
+        if (!val[0]) {
+            wchar_t msg[256];
+            wsprintfW(msg, L(STR_PO_NOPRESET), rest.c_str());
+            ShowAnswer(mainWnd, msg);
+            return EXC_PLUGIN;
+        }
+        int p[5] = {}, np = ParseIntsCSV(val, p, 5);
+        if (np < 4) { ShowAnswer(mainWnd, L"pos: preset must be x,y,w,h[,mon]"); return EXC_PLUGIN; }
+        RECT wa = mi.rcWork;
+        if (np >= 5) {
+            std::vector<RECT> mons;
+            EnumDisplayMonitors(NULL, NULL, MonWorkCb, (LPARAM)&mons);
+            if (!mons.empty()) wa = mons[p[4] % (int)mons.size()];
+        }
+        if (!ApplyPosRect(mainWnd, wa.left+p[0], wa.top+p[1], p[2], p[3]))
+            { ShowAnswer(mainWnd, L"pos: SetWindowPos failed"); return EXC_PLUGIN; }
+        wchar_t msg[160];
+        wsprintfW(msg, L"pos: %s -> %d,%d %dx%d", rest.c_str(), wa.left+p[0], wa.top+p[1], p[2], p[3]);
+        LogInfo(L"pos: preset " + rest + L" applied");
+        ShowAnswer(mainWnd, msg);
+        return EXC_PLUGIN;
+    }
+
+    if (w == L"stayawake") {
+        if (rest.empty()) {
+            if (g_awakeTimer) { KillTimer(mainWnd, g_awakeTimer); g_awakeTimer = 0; }
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+            LogInfo(L"stayawake: on (indefinite)");
+            ShowAnswer(mainWnd, L(STR_AW_ON));
+            return EXC_PLUGIN;
+        }
+        if (_wcsicmp(rest.c_str(), L"off") == 0) {
+            if (g_awakeTimer) { KillTimer(mainWnd, g_awakeTimer); g_awakeTimer = 0; }
+            SetThreadExecutionState(ES_CONTINUOUS);
+            LogInfo(L"stayawake: off");
+            ShowAnswer(mainWnd, L(STR_AW_OFF));
+            return EXC_PLUGIN;
+        }
+        const wchar_t* s = rest.c_str();
+        if (*s < L'0' || *s > L'9') { ShowAnswer(mainWnd, L(STR_AW_BADMIN)); return EXC_PLUGIN; }
+        int mins = 0;
+        while (*s >= L'0' && *s <= L'9') { mins = mins*10 + (*s-L'0'); ++s; }
+        while (*s == L' ') ++s;
+        if (*s || mins < 1 || mins > 1440) { ShowAnswer(mainWnd, L(STR_AW_BADMIN)); return EXC_PLUGIN; }
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+        if (g_awakeTimer) KillTimer(mainWnd, g_awakeTimer);
+        g_awakeTimer = 7788;
+        SetTimer(mainWnd, 7788, (UINT)mins * 60000u, AwakeExpireCb);
+        wchar_t msg[96];
+        wsprintfW(msg, L(STR_AW_ON_MIN), mins);
+        LogInfo(L"stayawake: on for " + rest + L" min");
+        ShowAnswer(mainWnd, msg);
+        return EXC_PLUGIN;
+    }
+    return EXC_NONE;
 }
 
 // ---------------------------------------------------------------- themes (cozy look)
@@ -3069,8 +3244,10 @@ static void DdUpdate(HWND mainWnd) {
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
     } else {
         bool firstWord = (b == 0);
-        if (firstWord && g_set.etInternal)
+        if (firstWord && g_set.etInternal) {
             for (auto c : kInternalCmds) add(c);
+            add(L"pos"); add(L"stayawake");      // v0.23 host utility words
+        }
         if (firstWord && g_set.etAlias)
             for (auto& a : g_aliases) add(a.name);
         if (firstWord && g_set.etSysAlias)

@@ -211,3 +211,13 @@ Items adopted here get numbers in this table at merge time; RI3 numbering stays 
 |---|---|---|
 | 298 | ✅ `/update` (RI3 #298) - release check + sha256-verified download + AutoRun install helper (`install.bat` swap, `.ini` never overwritten), `[Update]` ApiUrl/AutoRun/CheckOnStart - user request | M |
 
+
+## v0.23.0 - utilities wave (RI3 picks) - **shipped**
+
+| # | Feature | Size |
+|---|---|---|
+| 226 | ✅ `pos` (RI3 #226) - work-area slots (left..q4) + [Positions] presets, INI-homed on restart | S |
+| 230 | ✅ `stayawake` (RI3 #230) - SetThreadExecutionState toggle, [min] self-expiring, clean off on exit | S |
+| 250 | ✅ `ts` (RI3 #250) - epoch/ms/Zulu/+offset/ISO round-trips, `ts clip` - 11th plugin `util.dll` | S |
+| 251 | ✅ `slug` (RI3 #251) - RU/UA/BG translit + diacritics, kebab/snake/pascal/camel/upper, clipboard | M |
+

@@ -133,6 +133,30 @@ Every step is logged (`/update: <tag> available…`, `digest verified`, `staged`
 `installing via install.bat`), so a support request can be answered from the log
 alone.
 
+### `pos` + `stayawake` — positioning & caffeine (TypeBox 0.23.0)
+
+Two host-side utility words (they run before aliases, obey `[Exec] Internal=0`):
+
+- `pos left|right|top|bottom|tl|tr|bl|br|center|q1..q4` — sizes/places the console into a
+  slot of the **current** monitor's work area (taskbar-aware), FancyZones vocabulary.
+  `center` keeps the current width/height; `q1..q4` are fourths of the row.
+- `pos <name>` — a named preset from the portable `[Positions]` section:
+
+  ```ini
+  [Positions]
+  mycorner = 10,20,300,120          ; x,y,w,h relative to the work area
+  rightmon = 80,160,900,200,2       ; + monitor index (0-based, wraps)
+  ```
+
+- The spot lives **in memory only**: hide/show and drag keep it, but a restart returns the
+  console to its `[Show]`/`X`/`Y` home (your INI is never rewritten).
+- `stayawake [min]` — keeps display+system awake (`SetThreadExecutionState`), bare = indefinite,
+  `1..1440` minutes rides a timer and clears itself, `stayawake off` clears now. No process or
+  service is started; the state dies with TypeBox, so an exit is always a clean `off`.
+
+Both answer in the console (`pos: right -> 960,0 960x1032`, `stayawake: on for 30 min`) and
+log to `/log`; `pos` and `stayawake` are EasyType candidates like every other command.
+
 ### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
 
 Drop an INI named `TypeBox.local.ini` next to `TypeBox.ini` and it wins on every
@@ -265,6 +289,7 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `pwgen` | `pw` · `pw 20` · `pw 20 3` · `pw 16 snp` (letters+digits / `n` digits / `s` symbols / `p` pronounceable) — first result copied to clipboard | `[Pwgen] Len=16 Symbols=!@#$%^&*()-_=+[]{}? Popup=0` |
 | `timer` | `timer 5m tea` countdown with tray balloon · `timer` (list) · `timer stop [label]` (no label = soonest) · `sw` start/report/stop the stopwatch · `sw reset` | `[Timer] MiniWindow=1 Sound=1 Max=8` |
 | `sysmon` | `cpu` % (delta of two samples, never a stale 0) · `ram` used/total (load %) · `batt` state+percent · `disk` free/total per fixed drive · `sys` all-in-one line, auto-copied to clipboard | `[Sysmon] SampleMs=2000 DiskMinGB=0 Popup=0` |
+| `util` | `ts` now (epoch s/ms + ISO local/UTC) · `ts 1763385000` · `ts 2026-11-16T08:00+03:00` · `ts clip` · `slug Привет мир` → `privet-mir` (trailing `snake`/`pascal`/`camel`/`upper`, result copied) | — |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per

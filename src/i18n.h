@@ -77,6 +77,10 @@ enum StrId {
     // EN+RU compiled, other languages fall back to EN, lang\*.ini can override).
     STR_UP_UPTODATE, STR_UP_ASK_DL, STR_UP_HASH_BAD, STR_UP_HASH_WARN,
     STR_UP_RESTART_ASK, STR_UP_DL_FAIL, STR_UP_ERR_API, STR_UP_MANUAL,
+    // v0.23: utility commands pos + stayawake (side table columns 17-22,
+    // EN+RU compiled; other packs fall back to English).
+    STR_PO_USAGE, STR_PO_NOPRESET,
+    STR_AW_ON, STR_AW_ON_MIN, STR_AW_OFF, STR_AW_BADMIN,
     STR_LAST
 };
 
@@ -125,7 +129,9 @@ static const char* const kKeyNames[STR_LAST] = {
     "so_admin", "su_hint",
     "se_elevate",
     "up_uptodate", "up_ask_dl", "up_hash_bad", "up_hash_warn",
-    "up_restart_ask", "up_dl_fail", "up_err_api", "up_manual"
+    "up_restart_ask", "up_dl_fail", "up_err_api", "up_manual",
+    "po_usage", "po_nopreset",
+    "aw_on", "aw_on_min", "aw_off", "aw_badmin"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -1076,10 +1082,11 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 };
 
 // v0.16 Scripts folder + payload guard, v0.17 danger-confirm + frecency,
-// v0.18 su chip + usage hint + Elevate checkbox, v0.20 /update dialogs.
-// Columns == STR_EX_SCRIPTS .. STR_UP_MANUAL (update tail compiled EN+RU;
+// v0.18 su chip + usage hint + Elevate checkbox, v0.20 /update dialogs,
+// v0.23 pos + stayawake answers.
+// Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][16] = {
+static const wchar_t* const kExItems[LANG_COUNT][22] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1091,7 +1098,11 @@ static const wchar_t* const kExItems[LANG_COUNT][16] = {
            L"Update verified. Restart TypeBox now and install %s?",
            L"Update %s failed: %s\nCheck disk space and try again.",
            L"Update check failed (%s).\nLast check: %s. Last known latest: %s",
-           L"Update staged: %s\nRun install.bat when ready (settings .ini files are never overwritten)." },
+           L"Update staged: %s\nRun install.bat when ready (settings .ini files are never overwritten).",
+            L"pos: use left, right, top, bottom, tl, tr, bl, br, center, q1..q4 or a [Positions] preset name",
+            L"pos: no such preset: %s (define it in [Positions], as x,y,w,h[,mon])",
+            L"stayawake: on (indefinite)", L"stayawake: on for %d min",
+            L"stayawake: off", L"stayawake: minutes must be 1..1440" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1103,7 +1114,11 @@ static const wchar_t* const kExItems[LANG_COUNT][16] = {
            L"Обновление проверено. Перезапустить TypeBox и установить %s сейчас?",
            L"Ошибка этапа обновления %s: %s\nПроверьте свободное место и повторите.",
            L"Проверка обновления не удалась (%s).\nПоследняя проверка: %s. Последняя известная версия: %s",
-           L"Обновление подготовлено: %s\nЗапустите install.bat, когда будете готовы (файлы .ini не перезаписываются)." },
+           L"Обновление подготовлено: %s\nЗапустите install.bat, когда будете готовы (файлы .ini не перезаписываются).",
+            L"pos: используйте left, right, top, bottom, tl, tr, bl, br, center, q1..q4 или имя пресета из [Positions]",
+            L"pos: нет пресета: %s (опишите его в [Positions] как x,y,w,h[,mon])",
+            L"stayawake: включено (бессрочно)", L"stayawake: включено на %d мин",
+            L"stayawake: выключено", L"stayawake: минуты должны быть 1..1440" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1275,7 +1290,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_UP_MANUAL) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_AW_BADMIN) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail
