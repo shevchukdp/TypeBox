@@ -283,13 +283,13 @@ queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
 | `units` | `conv 10 km mi` · `hex 255` → `FF` · `bin 0xFF` · `dec 0xFF` · `oct 777` | `[Units] Popup=1 CopyResult=1` |
 | `codec` | `b64enc/b64dec` · `urlenc/urldec` · `hexenc/hexdec` | `[Codec] Popup=1 CopyResult=1` |
 | `vol` | `vol +` · `vol -` · `vol mute` · `vol 3` | `[Vol] Step=1 Beeps=0` |
-| `cliphist` | `clip` (list, `*` = pinned) · `clip <n>` re-copy · `clip pin/unpin <n>` · `clip paste <n>` (hide + Ctrl+V at caret) · `clip clear` | `[Clipboard] Max=20 PollMs=500 RowChars=48 Popup=1 Persist=0 Balloons=0 PasteOnSelect=0` |
+| `cliphist` | `clip` (list, `*` = pinned) · `clip <n>` re-copy · `clip pin/unpin <n>` · `clip paste <n>` (hide + Ctrl+V at caret) · `clip type <n>` (per-char SendInput, for apps that eat Ctrl+V) · `clip ring` (topmost picker; also the global `[Clipboard] Ring` hotkey) · `clip clear` | `[Clipboard] Max=20 PollMs=500 RowChars=48 Popup=1 Persist=0 Balloons=0 PasteOnSelect=0 TypeDelayMs=5 Ring=Ctrl+Alt+V` |
 | `taskman` | `task <substr>` (list) · `kill <name|pid>` · `top [n|filter]` (CPU ranking) · `restart <name|pid>` | `[Taskman] Confirm=1 ListMax=300 TopN=8` |
 | `winlist` | `win <title>` activate · `win` (list) · `win <n>` (pick last filter) | `[Winlist] AltTrick=1 Titles=9` |
 | `pwgen` | `pw` · `pw 20` · `pw 20 3` · `pw 16 snp` (letters+digits / `n` digits / `s` symbols / `p` pronounceable) — first result copied to clipboard | `[Pwgen] Len=16 Symbols=!@#$%^&*()-_=+[]{}? Popup=0` |
 | `timer` | `timer 5m tea` countdown with tray balloon · `timer` (list) · `timer stop [label]` (no label = soonest) · `sw` start/report/stop the stopwatch · `sw reset` | `[Timer] MiniWindow=1 Sound=1 Max=8` |
 | `sysmon` | `cpu` % (delta of two samples, never a stale 0) · `ram` used/total (load %) · `batt` state+percent · `disk` free/total per fixed drive · `sys` all-in-one line, auto-copied to clipboard | `[Sysmon] SampleMs=2000 DiskMinGB=0 Popup=0` |
-| `util` | `ts` now (epoch s/ms + ISO local/UTC) · `ts 1763385000` · `ts 2026-11-16T08:00+03:00` · `ts clip` · `slug Привет мир` → `privet-mir` (trailing `snake`/`pascal`/`camel`/`upper`, result copied) | — |
+| `util` | `ts` now (epoch s/ms + ISO local/UTC) · `ts 1763385000` · `ts 2026-11-16T08:00+03:00` · `ts clip` · `slug Привет мир` → `privet-mir` (trailing `snake`/`pascal`/`camel`/`upper`, result copied) · `sha256 <file>` (digest + clipboard) · `sha256 /verify SUMS [base]` (GNU + BSD formats, `sha256sum -c` rules) | — |
 
 `Popup=0` = no MessageBox, the answer goes to the console + clipboard only;
 `CopyResult=0` = nothing lands on the clipboard; `[Vol] Step` = media-key taps per

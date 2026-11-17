@@ -1,11 +1,13 @@
 /*
  * TypeBox plugin: clipboard history — "clip", "clip <n>", "clip pin <n>",
- * "clip unpin <n>", "clip paste <n>", "clip clear".
- * Spec: docs/PLUGIN_GALLERY.md #4 (+ backlog RI #79: pin & paste-at-caret).
- * Zero dependencies beyond user32/shell32/kernel32.
+ * "clip unpin <n>", "clip paste <n>", "clip type <n>", "clip ring",
+ * "clip clear".
+ * Spec: docs/PLUGIN_GALLERY.md #4 (+ backlog RI #79: pin & paste-at-caret,
+ * RI3 #260 ring window + #261 forced typing).
+ * Zero dependencies beyond user32/gdi32/shell32/kernel32.
  *
- * Build (MinGW):  gcc -shared -O2 -DCLIPHIST_BUILDING_DLL cliphist.c -o cliphist.dll -luser32 -lshell32
- * Build (MSVC):   cl /LD /DCLIPHIST_BUILDING_DLL /Fe:cliphist.dll cliphist.c user32.lib shell32.lib
+ * Build (MinGW):  gcc -shared -O2 -DCLIPHIST_BUILDING_DLL cliphist.c -o cliphist.dll -luser32 -lgdi32 -lshell32
+ * Build (MSVC):   cl /LD /DCLIPHIST_BUILDING_DLL /Fe:cliphist.dll cliphist.c user32.lib gdi32.lib shell32.lib
  * Licensed under GPL-3.0.
  *
  * Config (TypeBox.ini next to the host exe, DLL lives in Plugins\ so ini = dllpath\..\TypeBox.ini):
@@ -19,6 +21,10 @@
  *                    0 = never blocks, listing goes to con_text instead.
  *     PasteOnSelect  1 = "clip <n>" also hides the console and types the
  *                    entry at the caret (Ctrl+V injection)  (default 0)
+ *     TypeDelayMs    pacing between injected characters (RI3 #261, clamped
+ *                    0..50, default 5)
+ *     Ring           global hotkey opening the ring picker (RI3 #260),
+ *                    "Ctrl+Alt+V", "0" disables (default Ctrl+Alt+V)
  *
  * Pinned entries (* in the list) survive trimming and Persist reloads; the
  * newest copies always sit above them, so the top of the list stays yours.
@@ -60,6 +66,8 @@ typedef struct {
 #define TIMER_ID    1
 #define CLS_NAME    L"TypeBoxClipHist"
 #define DAT_NAME    L"cliphist.dat"
+#define RING_CLS    L"TypeBoxClipRing"    /* RI3 #260 picker window class    */
+#define RING_HOTID  991                   /* our RegisterHotKey id            */
 
 static HWND     g_mainWnd = NULL;
 static HWND     g_msgWnd  = NULL;
@@ -72,6 +80,18 @@ static BOOL     g_trayOn  = FALSE;
 static int g_max = 20, g_pollMs = 500, g_rowChars = 48;
 static int g_persist = 0, g_balloons = 0, g_popup = 1;
 static int g_pasteOnSelect = 0;
+static int g_typeDelay = 5;                       /* RI3 #261 TypeDelayMs     */
+static UINT  g_ringMods = MOD_CONTROL | MOD_ALT;  /* RI3 #260 ring hotkey     */
+static UINT  g_ringVk   = 'V';
+static BOOL  g_ringHotOn = FALSE;                 /* RegisterHotKey succeeded */
+static HWND  g_ringWnd = NULL, g_ringList = NULL;
+static DWORD g_ringShown = 0;                   /* tick: WA_INACTIVE grace     */
+static WNDPROC g_listOld = NULL;                  /* listbox subclass backup  */
+static HFONT   g_ringFont = NULL;
+static HBRUSH  g_ringBgBrush = NULL;              /* cozy-dark list background*/
+
+static void openRing(void);                       /* defined with the ring    */
+static void closeRing(void);
 
 static char g_result[8192];
 
@@ -91,6 +111,50 @@ static void moduleDir(wchar_t* dir) {
         if (slash) *slash = 0;            /* drop cliphist.dll, keep Plugins\ */
         else       dir[0] = 0;
     }
+}
+
+static void loadConfig(void);
+
+/* RI3 #260: parse "Ctrl+Alt+V" style hotkeys for the ring picker:
+ * modifier tokens + one final A-Z/0-9/F1-F12 key. "0" = disabled.
+ * Hand-rolled tokenizer: MinGW's wcstok is the two-argument C89 flavour. */
+static BOOL parseHotkey(const wchar_t* s, UINT* mods, UINT* vk) {
+    wchar_t buf[64], *tok, *next;
+    BOOL haveKey = FALSE;
+    *mods = 0; *vk = 0;
+    lstrcpynW(buf, s, 64);
+    next = buf;
+    for (;;) {
+        while (*next == L' ' || *next == L'+' || *next == L'\t') ++next;
+        if (!*next) break;
+        tok = next;
+        while (*next && *next != L' ' && *next != L'+' && *next != L'\t') ++next;
+        if (*next) { *next = 0; ++next; }
+        if      (!_wcsicmp(tok, L"CTRL"))  *mods |= MOD_CONTROL;
+        else if (!_wcsicmp(tok, L"ALT"))   *mods |= MOD_ALT;
+        else if (!_wcsicmp(tok, L"SHIFT")) *mods |= MOD_SHIFT;
+        else if (!_wcsicmp(tok, L"WIN") || !_wcsicmp(tok, L"WINDOWS")) *mods |= MOD_WIN;
+        else if (!_wcsicmp(tok, L"0"))     return FALSE;
+        else if ((tok[0] == L'f' || tok[0] == L'F') && tok[1]) {
+            long f = 0;
+            const wchar_t* d;
+            for (d = tok + 1; *d; ++d) {
+                if (*d < L'0' || *d > L'9') { f = 99; break; }
+                f = f * 10 + (*d - L'0');
+            }
+            if (f < 1 || f > 12) return FALSE;
+            *vk = (UINT)(VK_F1 + f - 1); haveKey = TRUE;
+        } else {
+            wchar_t c = tok[0];
+            size_t n = lstrlenW(tok);
+            if (n != 1) return FALSE;
+            if (c >= L'a' && c <= L'z') c = (wchar_t)(c - 32);
+            if ((c >= L'A' && c <= L'Z') || (c >= L'0' && c <= L'9')) {
+                *vk = (UINT)c; haveKey = TRUE;
+            } else return FALSE;
+        }
+    }
+    return haveKey && (*mods & (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN)) != 0;
 }
 
 static void loadConfig(void) {
@@ -125,6 +189,14 @@ static void loadConfig(void) {
     if (g_max > MAX_ENTRIES) g_max = MAX_ENTRIES;
     if (g_pollMs < 50) g_pollMs = 50;
     if (g_rowChars < 8) g_rowChars = 8;
+    g_typeDelay = (int)GetPrivateProfileIntW(L"Clipboard", L"TypeDelayMs", 5, ini);   /* RI3 #261 */
+    if (g_typeDelay < 0)  g_typeDelay = 0;
+    if (g_typeDelay > 50) g_typeDelay = 50;
+    {   /* RI3 #260: [Clipboard] Ring=Ctrl+Alt+V ("0" disables the global hotkey) */
+        wchar_t hk[64] = {};
+        GetPrivateProfileStringW(L"Clipboard", L"Ring", L"Ctrl+Alt+V", hk, 64, ini);
+        if (!parseHotkey(hk, &g_ringMods, &g_ringVk)) { g_ringVk = 0; }
+    }
 }
 
 /* --------------------------------- helpers ---------------------------------- */
@@ -214,7 +286,10 @@ static void captureIfChanged(void) {
     size_t bytes;
     seq = GetClipboardSequenceNumber();
     if (seq == g_lastSeq) return;
-    if (!OpenClipboard(NULL)) return;                /* locked: retry next tick */
+    /* v0.24: open against our msg-only window, not NULL - a wedged clipboard
+     * chain makes OpenClipboard(NULL) BLOCK the host thread; a real thread
+     * window fails fast instead (retry next tick). */
+    if (!OpenClipboard(g_msgWnd ? g_msgWnd : NULL)) return;   /* locked: retry next tick */
     g_lastSeq = seq;
     h = GetClipboardData(CF_UNICODETEXT);
     if (h) {
@@ -338,7 +413,7 @@ static void trayBalloon(const wchar_t* text) {
 
 static int putOnClipboard(const wchar_t* w) {
     int ok = 0;
-    if (!OpenClipboard(NULL)) return -1;               /* caller still echoes */
+    if (!OpenClipboard(g_msgWnd ? g_msgWnd : NULL)) return -1;  /* caller still echoes */
     EmptyClipboard();
     {
         size_t bytes = (lstrlenW(w) + 1) * sizeof(wchar_t);
@@ -359,6 +434,7 @@ static int putOnClipboard(const wchar_t* w) {
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_TIMER && w == TIMER_ID) { captureIfChanged(); return 0; }
+    if (m == WM_HOTKEY && w == RING_HOTID) { openRing(); return 0; }   /* RI3 #260 */
     return DefWindowProcW(h, m, w, l);
 }
 
@@ -464,6 +540,177 @@ static void runPin(int n, int pin) {
     wideToUtf8(line, g_result, sizeof(g_result));
 }
 
+/* RI3 #261: per-character SendInput (KEYEVENTF_UNICODE) at the caret, for the
+ * terminals and apps where Ctrl+V is intercepted or mapped to something else.
+ * \r\n\t and other control chars are dropped - the bracketed-paste guard:
+ * a stray newline in a terminal would RUN things. */
+static void doTypeString(const wchar_t* w) {
+    INPUT in[2];
+    const wchar_t* p;
+    if (!g_mainWnd) return;
+    ShowWindow(g_mainWnd, SW_HIDE);
+    Sleep(150);                                        /* focus handover */
+    for (p = w; *p && (DWORD)(p - w) < 8192; ++p) {
+        wchar_t c = *p;
+        if (c < 0x20 || c == 0x7F) continue;
+        ZeroMemory(in, sizeof(in));
+        in[0].type = INPUT_KEYBOARD;
+        in[0].ki.wScan = c;
+        in[0].ki.dwFlags = KEYEVENTF_UNICODE;
+        in[1].type = INPUT_KEYBOARD;
+        in[1].ki.wScan = c;
+        in[1].ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+        SendInput(2, in, sizeof(INPUT));
+        if (g_typeDelay) Sleep((DWORD)g_typeDelay);
+    }
+}
+
+static void runType(int n) {
+    wchar_t line[128];
+    if (g_count == 0) { wideToUtf8(L"clip: nothing captured yet", g_result, sizeof(g_result)); return; }
+    if (n < 1 || n > g_count) {
+        wsprintfW(line, L"clip: type needs an entry 1..%d", g_count);
+        wideToUtf8(line, g_result, sizeof(g_result));
+        return;
+    }
+    doTypeString(g_entries[n - 1]);
+    wsprintfW(line, L"clip: entry %d typed (%d chars)", n, (int)lstrlenW(g_entries[n - 1]));
+    wideToUtf8(line, g_result, sizeof(g_result));
+}
+
+/* --------------------------- ring picker window (RI3 #260) ------------------ */
+/* A compact always-on-top picker pre-loaded with the ring: arrows move, Enter
+ * copies, Ctrl+Enter types (#261), Esc dismisses, focus-loss dismisses. Paint
+ * matches the host drop-down (cozy-dark + the blue selection bar). */
+
+static void closeRing(void) {
+    if (g_ringList && g_listOld) {
+        SetWindowLongPtrW(g_ringList, GWLP_WNDPROC, (LONG_PTR)g_listOld);
+        g_listOld = NULL;
+    }
+    if (g_ringWnd) { DestroyWindow(g_ringWnd); g_ringWnd = NULL; }
+    g_ringList = NULL;
+}
+
+static void ringPick(int ctrl) {
+    int sel;
+    if (!g_ringList) return;
+    sel = (int)SendMessageW(g_ringList, LB_GETCURSEL, 0, 0);
+    if (sel < 0 || sel >= g_count) { closeRing(); SetForegroundWindow(g_mainWnd); return; }
+    if (ctrl) doTypeString(g_entries[sel]);
+    else {
+        putOnClipboard(g_entries[sel]);
+        SetForegroundWindow(g_mainWnd);
+    }
+    closeRing();
+}
+
+static LRESULT CALLBACK RingListProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    if (m == WM_KEYDOWN) {
+        if (w == VK_ESCAPE) { closeRing(); SetForegroundWindow(g_mainWnd); return 0; }
+        if (w == VK_RETURN) { ringPick((GET_KEYSTATE_LPARAM(l) & MK_CONTROL) != 0); return 0; }
+    }
+    return CallWindowProcW(g_listOld, h, m, w, l);
+}
+
+static LRESULT CALLBACK RingProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+    switch (m) {
+    case WM_MEASUREITEM: {
+        MEASUREITEMSTRUCT* mi = (MEASUREITEMSTRUCT*)l;
+        mi->itemHeight = 24;
+        return TRUE;
+    }
+    case WM_DRAWITEM: {
+        DRAWITEMSTRUCT* di = (DRAWITEMSTRUCT*)l;
+        RECT r = di->rcItem;
+        wchar_t txt[300];
+        HBRUSH bg;
+        if (di->itemID < 0) break;
+        if (di->itemState & ODS_SELECTED) {
+            bg = CreateSolidBrush(RGB(0, 120, 215));
+            SetTextColor(di->hDC, RGB(255, 255, 255));
+        } else {
+            bg = CreateSolidBrush(RGB(34, 29, 26));
+            SetTextColor(di->hDC, RGB(240, 230, 210));
+        }
+        FillRect(di->hDC, &r, bg);
+        DeleteObject(bg);
+        txt[0] = 0;
+        SendMessageW(di->hwndItem, LB_GETTEXT, di->itemID, (LPARAM)txt);
+        r.left += 8;
+        DrawTextW(di->hDC, txt, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_LEFT);
+        return TRUE;
+    }
+    case WM_CTLCOLORLISTBOX: {
+        HDC dc = (HDC)w;
+        SetTextColor(dc, RGB(240, 230, 210));
+        SetBkColor(dc, RGB(34, 29, 26));
+        if (!g_ringBgBrush) g_ringBgBrush = CreateSolidBrush(RGB(34, 29, 26));
+        return (LRESULT)g_ringBgBrush;
+    }
+    case WM_CLOSE:
+        closeRing();
+        SetForegroundWindow(g_mainWnd);
+        return 0;
+    case WM_ACTIVATE:
+        /* Grace: when "clip ring" runs from the console, the host re-activates
+         * its own window to show the answer - that must not kill the picker.
+         * After the grace a real focus-loss closes it (picker feel). */
+        if (LOWORD(w) == WA_INACTIVE) {
+            if (GetTickCount() - g_ringShown > 350) closeRing();
+            return 0;
+        }
+        break;
+    case WM_DESTROY:
+        if (g_ringFont) { DeleteObject(g_ringFont); g_ringFont = NULL; }
+        return 0;
+    }
+    return DefWindowProcW(h, m, w, l);
+}
+
+static void openRing(void) {
+    RECT wa;
+    int i, rows, wdt = 560, hgt;
+    if (!g_msgWnd) return;
+    closeRing();
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    rows = g_count ? g_count : 1;
+    if (rows > 12) rows = 12;
+    hgt = rows * 24 + 8;
+    g_ringWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW, RING_CLS,
+                                L"TypeBox \x2014 clip ring",
+                                WS_POPUP | WS_VISIBLE,
+                                wa.left + ((wa.right - wa.left) - wdt) / 2,
+                                wa.top  + ((wa.bottom - wa.top) - hgt) / 3,
+                                wdt, hgt, NULL, NULL,
+                                GetModuleHandleW(NULL), NULL);
+    if (!g_ringWnd) return;
+    g_ringList = CreateWindowExW(0, L"LISTBOX", NULL,
+                                 WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
+                                 WS_TABSTOP | LBS_NOTIFY | LBS_OWNERDRAWFIXED |
+                                 LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT,
+                                 2, 2, wdt - 4, hgt - 4, g_ringWnd, NULL,
+                                 GetModuleHandleW(NULL), NULL);
+    if (!g_ringList) { DestroyWindow(g_ringWnd); g_ringWnd = NULL; return; }
+    g_ringFont = CreateFontW(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                             OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (g_ringFont) SendMessageW(g_ringList, WM_SETFONT, (WPARAM)g_ringFont, TRUE);
+    for (i = 0; i < g_count; ++i) {
+        wchar_t prev[256], row[300];
+        preview(g_entries[i], prev, (int)(sizeof(prev) / sizeof(prev[0])));
+        if (g_pinned[i]) wsprintfW(row, L"%d) *%s", i + 1, prev);
+        else             wsprintfW(row, L"%d) %s",  i + 1, prev);
+        SendMessageW(g_ringList, LB_ADDSTRING, 0, (LPARAM)row);
+    }
+    if (!g_count) SendMessageW(g_ringList, LB_ADDSTRING, 0, (LPARAM)L"(empty)");
+    else          SendMessageW(g_ringList, LB_SETCURSEL, 0, 0);
+    g_listOld = (WNDPROC)SetWindowLongPtrW(g_ringList, GWLP_WNDPROC, (LONG_PTR)RingListProc);
+    SetForegroundWindow(g_ringWnd);
+    SetFocus(g_ringList);
+    g_ringShown = GetTickCount();
+}
+
 /* ----------------------------------- ABI ------------------------------------ */
 
 PLUGIN_API void __cdecl Load(HWND mainWnd) {
@@ -483,11 +730,27 @@ PLUGIN_API void __cdecl Load(HWND mainWnd) {
         if (g_msgWnd) SetTimer(g_msgWnd, TIMER_ID, (UINT)g_pollMs, NULL);
     }
     if (g_balloons && g_msgWnd) trayAdd();
+    {   /* RI3 #260: ring window class + global hotkey [Clipboard] Ring */
+        WNDCLASSW rw;
+        ZeroMemory(&rw, sizeof(rw));
+        rw.lpfnWndProc   = RingProc;
+        rw.lpszClassName = RING_CLS;
+        rw.hInstance     = GetModuleHandleW(NULL);
+        rw.hbrBackground = CreateSolidBrush(RGB(34, 29, 26));
+        rw.hCursor       = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+        if (RegisterClassW(&rw) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
+            if (g_ringVk && g_msgWnd)
+                g_ringHotOn = RegisterHotKey(g_msgWnd, RING_HOTID,
+                                             g_ringMods | MOD_NOREPEAT, g_ringVk) != 0;
+        }
+    }
 }
 
 PLUGIN_API void __cdecl Unload(void) {
+    closeRing();                                  /* RI3 #260: never orphan it */
     if (g_msgWnd) {
         KillTimer(g_msgWnd, TIMER_ID);
+        if (g_ringHotOn) { UnregisterHotKey(g_msgWnd, RING_HOTID); g_ringHotOn = FALSE; }
         if (g_trayOn) {
             NOTIFYICONDATAW nid;
             ZeroMemory(&nid, sizeof(nid));
@@ -508,8 +771,8 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     TInfo i;
     i.size = sizeof(TInfo);
     i.name = "Clipboard History";
-    i.version = "1.1";
-    i.description = "clip <n> re-copy \u00b7 clip pin <n> keep \u00b7 clip paste <n> type at caret (last 20 kept in RAM)";
+    i.version = "1.2";
+    i.description = "clip <n> re-copy \u00b7 clip type <n> forced typing \u00b7 clip ring picker (Ctrl+Alt+V) \u00b7 clip pin <n> keep (last 20 kept in RAM)";
     i.author = "D. Shevchuk";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";
@@ -548,6 +811,8 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
         if (!la || _strnicmp(a, "pin",   la) == 0) etAdd("clip pin 1");      /* RI #79 */
         if (!la || _strnicmp(a, "unpin", la) == 0) etAdd("clip unpin 1");    /* RI #79 */
         if (!la || _strnicmp(a, "paste", la) == 0) etAdd("clip paste 1");    /* RI #79 */
+        if (!la || _strnicmp(a, "type",  la) == 0) etAdd("clip type 1");     /* RI3 #261 */
+        if (!la || _strnicmp(a, "ring",  la) == 0) etAdd("clip ring");       /* RI3 #260 */
         return g_etCount;
     }
     n = g_count;
@@ -596,6 +861,18 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
         n = strtol(p + 5, &end, 10);
         if (end == p + 5 || n < 1) return ex;
         runRecopy((int)n, 1);                              /* RI #79: Ctrl+V at caret */
+    } else if (!_strnicmp(p, "type", 4) && (p[4] == 0 || isspace((unsigned char)p[4]))) {
+        n = strtol(p + 4, &end, 10);                       /* RI3 #261: forced typing  */
+        if (end == p + 4 || n < 1) return ex;
+        runType((int)n);
+    } else if (!_strnicmp(p, "ring", 4) && (p[4] == 0 || isspace((unsigned char)p[4]))) {
+        openRing();                                        /* RI3 #260: ring picker    */
+        if (g_ringHotOn)
+            wideToUtf8(L"clip: ring opened - arrows, Enter copies, Ctrl+Enter types, Esc closes",
+                       g_result, sizeof(g_result));
+        else
+            wideToUtf8(L"clip: ring opened (global hotkey not registered - check [Clipboard] Ring)",
+                       g_result, sizeof(g_result));
     } else {
         n = strtol(p, &end, 10);
         if (end == p || n < 1) return ex;              /* not ours -> let others try */

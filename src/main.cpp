@@ -1242,6 +1242,7 @@ static void CallPluginsUnload() {
 }
 
 // Ask plugins to handle the line (first plugin that returns run != 0 wins).
+static void DdClose();   // fwd (defined with the drop-down below)
 static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
     std::string ansi = ToAnsi(line);
     for (auto& p : g_plugins) {
@@ -1254,6 +1255,14 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
                 SetWindowTextW(g_edit, text.c_str());
                 SendMessageW(g_edit, EM_SETSEL, ex.con_sel_start,
                              ex.con_sel_start + (ex.con_sel_length < 0 ? 0 : ex.con_sel_length));
+            }
+            // v0.24: a plugin may hide the console itself (clip "paste/type at
+            // caret" -> bare SW_HIDE so the target keeps the focus). Sync the
+            // host's toggle, otherwise the next hotkey press "hides" an
+            // already hidden box and the user needs two presses to show it.
+            if (g_visible && mainWnd && !IsWindowVisible(mainWnd)) {
+                g_visible = false;
+                DdClose();
             }
             g_lastPluginName = PluginKey(p);
             LogInfo(L"plugin: " + g_lastPluginName + L" handled: " + line);
@@ -1730,7 +1739,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
             L"/update checks GitHub Releases for a newer version (user-initiated only)\n"
             L"Utilities (v0.23): pos right | pos <[Positions] name> | stayawake [min] | stayawake off\n"
-            L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | cpu ram batt disk sys\n"
+            L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
         MessageBoxW(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
@@ -3001,7 +3010,9 @@ static void TabComplete(HWND edit) {
         if (g_set.execPlugins && word.find(L'/') != 0)
             for (auto& p : g_plugins)
                 if (p.GetCountET && p.GetStringET) {
-                    std::string a = ToAnsi(word);
+                    // v0.24: whole line, not just the caret word - plugins key
+                    // their subcommand templates on "cmd " (cliphist "clip ri").
+                    std::string a = ToAnsi(text);
                     int cnt = p.GetCountET(a.c_str());
                     for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
                 }
@@ -3016,9 +3027,13 @@ static void TabComplete(HWND edit) {
     if (!g_etList.empty()) {
         std::wstring repl = g_etList[g_etPos % g_etList.size()];
         ++g_etPos;
-        std::wstring nt = text.substr(0, b) + repl + text.substr(e);
+        // Whole-line templates: a candidate that repeats everything left of the
+        // caret ("clip ring" completed on the word "ri") replaces from 0.
+        size_t start = b;
+        if (b > 0 && StartsWithNoCase(repl, text.substr(0, b))) start = 0;
+        std::wstring nt = text.substr(0, start) + repl + text.substr(e);
         SetWindowTextW(edit, nt.c_str());
-        SendMessageW(edit, EM_SETSEL, (WPARAM)(b + repl.size()), (LPARAM)(b + repl.size()));
+        SendMessageW(edit, EM_SETSEL, (WPARAM)(start + repl.size()), (LPARAM)(start + repl.size()));
     }
 }
 
@@ -3200,9 +3215,11 @@ static void DdPick(bool run) {
     size_t b = g_ddB <= text.size() ? g_ddB : text.size();
     size_t e = g_ddE <= text.size() ? g_ddE : text.size();
     if (e < b) e = b;
-    std::wstring nt = text.substr(0, b) + item + text.substr(e);
+    size_t start = b;                            // whole-line template? replace from 0
+    if (b > 0 && StartsWithNoCase(item, text.substr(0, b))) start = 0;
+    std::wstring nt = text.substr(0, start) + item + text.substr(e);
     SetWindowTextW(g_edit, nt.c_str());
-    SendMessageW(g_edit, EM_SETSEL, (WPARAM)(b + item.size()), (LPARAM)(b + item.size()));
+    SendMessageW(g_edit, EM_SETSEL, (WPARAM)(start + item.size()), (LPARAM)(start + item.size()));
     HWND owner = g_ddOwner;
     DdClose();
     if (run) Submit(owner);
@@ -3263,7 +3280,7 @@ static void DdUpdate(HWND mainWnd) {
         if (g_set.execPlugins && word[0] != L'/')
             for (auto& p : g_plugins)
                 if (p.GetCountET && p.GetStringET && PluginLoadAllowed(p)) {
-                    std::string a = ToAnsi(word);
+                    std::string a = ToAnsi(text);   // v0.24: whole line (see EtComplete)
                     int cnt = p.GetCountET(a.c_str());
                     for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
                 }

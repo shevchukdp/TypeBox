@@ -99,19 +99,27 @@ Working today (v0.12.0):
   drop DLLs into the portable `Plugins\` folder; ships ready-to-use **units** (`conv 10 km mi`,
   `hex 255`→`FF`), **codec** (`b64enc`, `urlenc`, `hexdec`), **vol** (`vol + / mute / 3`),
   **cliphist** (`clip 3` re-copies the 3rd last copied text, `clip pin 2` keeps an entry safe
-  from trimming, `clip paste 1` pastes it at the caret), **taskman** (`task chrome`,
+  from trimming, `clip paste 1` pastes it at the caret, `clip type 1` *types* it per char for
+  apps that block Ctrl+V, `clip ring` / `Ctrl+Alt+V` opens the topmost picker), **taskman** (`task chrome`,
   `kill notepad`, `top` live CPU ranking, `restart notepad` kill+relaunch) and
   **winlist** (`win notepad` raises the window), **pwgen** (`pw 20 s` strong passwords,
   `[Pwgen]` defaults), **timer** (`timer 25m tea` countdown + `sw` stopwatch with
    a topmost mini label, `[Timer]` defaults), **sysmon** (`cpu`, `ram`, `batt`, `disk`, `sys` - sampled
    CPU percent, clipboard hand-off, `[Sysmon]` defaults) and **util** (`ts 1763385000` epoch↔ISO,
-   `ts clip`, `slug Привет мир` → `privet-mir` with the result on the clipboard), plus the calculator example in
+   `ts clip`, `slug Привет мир` → `privet-mir` with the result on the clipboard, `sha256 file` +
+   `sha256 /verify SUMS` checksum checks), plus the calculator example in
    [`examples/plugin_calc`](examples/plugin_calc/calc.c)
  - ✅ **Positions & stay-awake** (v0.23) — `pos right` / `pos q3` / `pos center` dock the console
    into FancyZones-style slots of the current monitor, `pos <name>` uses a `[Positions]` preset
    (`mycorner=10,20,300,120`), and `stayawake [min]` keeps the screen on without any service
    (`SetThreadExecutionState`, off with `stayawake off`) — the console still returns to its INI
    home position after a restart
+  - ✅ **Clipboard picker, forced typing, checksums** (v0.24) — `clip ring` (or the
+    `[Clipboard] Ring` hotkey, `Ctrl+Alt+V` by default) opens a topmost picker: arrows move,
+    Enter copies, Ctrl+Enter types the entry straight into the app behind the console,
+    Esc dismisses; `clip type <n>` injects it per-character via SendInput for apps that
+    block Ctrl+V; `sha256 <file>` puts a digest on the clipboard and `sha256 /verify SUMS`
+    checks a GNU/BSD checksum list the way `sha256sum -c` does
 - ✅ **Scripts folder** (v0.16) — any `*.bat/*.cmd/*.ps1/*.py/*.vbs` dropped into the portable
   `Scripts\` folder becomes a command by its file name (`backup C:\Data` → `Scripts\backup.ps1`),
   arguments passed through; re-scan with `/reread`

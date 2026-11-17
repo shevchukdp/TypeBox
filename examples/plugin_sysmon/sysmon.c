@@ -207,10 +207,31 @@ static int buildSys(char* out, int cap) {
     return used;
 }
 
+/* v0.24 hardening: OpenClipboard needs a thread window - NULL can BLOCK the
+ * host thread on a wedged clipboard chain; a real msg-only hwnd fails fast. */
+static HWND ClipWnd(void) {
+    static HWND h;
+    if (!h) {
+        WNDCLASSW wc;
+        HMODULE self = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&ClipWnd, &self);
+        ZeroMemory(&wc, sizeof(wc));
+        wc.lpfnWndProc   = DefWindowProcW;
+        wc.lpszClassName = L"TypeBoxSysmonClip";
+        wc.hInstance     = self;
+        if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+            h = CreateWindowExW(0, wc.lpszClassName, L"clip", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, NULL, self, NULL);
+    }
+    return h;
+}
+
 static void copyToClipboard(const char* text) {
     int i;
     for (i = 0; i < 5; ++i) {
-        if (OpenClipboard(NULL)) {
+        if (OpenClipboard(ClipWnd())) {
             HGLOBAL h;
             wchar_t w[2048];
             int   wl;

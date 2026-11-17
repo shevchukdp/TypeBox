@@ -55,10 +55,11 @@ foreach(P cliphist taskman winlist pwgen timer sysmon util)
     target_link_libraries(${P} PRIVATE user32)
     set_target_properties(${P} PROPERTIES PREFIX "")
 endforeach()
-target_link_libraries(cliphist PRIVATE shell32)
+target_link_libraries(cliphist PRIVATE shell32 gdi32)
 target_link_libraries(taskman  PRIVATE shell32)
 target_link_libraries(pwgen    PRIVATE advapi32)
 target_link_libraries(timer    PRIVATE shell32 winmm gdi32)
+target_link_libraries(util     PRIVATE bcrypt)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

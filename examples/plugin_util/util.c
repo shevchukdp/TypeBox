@@ -1,12 +1,14 @@
 /*
- * TypeBox plugin: developer one-liners - "ts" epochs/ISO + "slug" translit.
- * Spec: docs/IDEAS-RESEARCH-3.md #250 (timestamp converter) and #251 (slugify
- * + translit); shipped as the eleventh bundled plugin in v0.23.0. Console-
- * first: every answer lands in the console (con_text); the slug result is
- * additionally copied to the clipboard (5x retry, never a hard dependency).
+ * TypeBox plugin: developer one-liners - "ts" epochs/ISO, "slug" translit,
+ * "sha256" checksum verify.
+ * Spec: docs/IDEAS-RESEARCH-3.md #250 (timestamp converter), #251 (slugify
+ * + translit) and #246 (sha256 verify); shipped as the eleventh bundled
+ * plugin in v0.23.0, sha256 joins in v0.24.0. Console-first: every answer
+ * lands in the console (con_text); the slug result and a bare sha256 digest
+ * are additionally copied to the clipboard (5x retry, never a hard dependency).
  *
- * Build (MinGW):  gcc -shared -O2 -DUTIL_BUILDING_DLL util.c -o util.dll -luser32
- * Build (MSVC):   cl /LD /DUTIL_BUILDING_DLL /Fe:util.dll util.c user32.lib
+ * Build (MinGW):  gcc -shared -O2 -DUTIL_BUILDING_DLL util.c -o util.dll -luser32 -lbcrypt
+ * Build (MSVC):   cl /LD /DUTIL_BUILDING_DLL /Fe:util.dll util.c user32.lib bcrypt.lib
  * Licensed under the GPL-3.0.
  *
  * Usage:
@@ -19,12 +21,18 @@
  *   slug hello world snake        -> hello_world_123 style joins
  *   slug hello world pascal       -> HelloWorld
  *   modes: (default kebab) snake, pascal, camel, upper
+ *   sha256 <file>                 digest of one file (hex also on clipboard)
+ *   sha256 /verify SHA256SUMS [base]
+ *                                 GNU "hash  name" + BSD "SHA256 (name) = hash"
+ *                                 sets, relative names resolve against [base]
+ *                                 or the sums file folder (sha256sum -c rules)
  *
  * RU/UA/BG translit + diacritic stripping are compiled tables; unknown
  * symbols collapse to a word boundary instead of emitting mojibake.
  */
 #include <windows.h>
 #include <wctype.h>
+#include <bcrypt.h>
 
 #ifdef UTIL_BUILDING_DLL
 #define PLUGIN_API __declspec(dllexport)
@@ -74,11 +82,33 @@ static int isAllDigits(const char* s, int* len) {
     return s[n] == 0 && n > 0;
 }
 
+/* v0.24 hardening: a thread-owned message-only window for OpenClipboard.
+ * OpenClipboard(NULL) can BLOCK the host thread on a wedged clipboard chain;
+ * with a real window it fails fast and the 5x retry loop does its job. */
+static HWND ClipWnd(void) {
+    static HWND h;
+    if (!h) {
+        WNDCLASSW wc;
+        HMODULE self = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&ClipWnd, &self);
+        ZeroMemory(&wc, sizeof(wc));
+        wc.lpfnWndProc   = DefWindowProcW;
+        wc.lpszClassName = L"TypeBoxUtilClip";
+        wc.hInstance     = self;
+        if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+            h = CreateWindowExW(0, wc.lpszClassName, L"TypeBoxUtilClip", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, NULL, self, NULL);
+    }
+    return h;
+}
+
 static void copyToClipboard(const char* ascii) {
     int i;
     for (i = 0; i < 5; ++i) {
         HGLOBAL h; wchar_t* p; int wl;
-        if (!OpenClipboard(NULL)) { Sleep(120); continue; }
+        if (!OpenClipboard(ClipWnd())) { Sleep(120); continue; }
         EmptyClipboard();
         wl = (int)lstrlenA(ascii) + 1;
         h = GlobalAlloc(GMEM_MOVEABLE, (size_t)wl * sizeof(wchar_t));
@@ -166,7 +196,8 @@ static int parseIso(const char* s, Stamp* st, int* offMin) {
     s += 5;
     if (s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9') return 0;
     st->mo = (s[0]-'0')*10 + (s[1]-'0'); s += 2;
-    if (*s != '-') return 0; ++s;
+    if (*s != '-') return 0;
+    ++s;
     if (s[0] < '0' || s[0] > '9' || s[1] < '0' || s[1] > '9') return 0;
     st->d = (s[0]-'0')*10 + (s[1]-'0'); s += 2;
     st->h = 0; st->mi = 0; st->sec = 0;
@@ -226,7 +257,7 @@ static int readClipboardText(char* ascii, int cap) {
     for (i = 0; i < 5; ++i) {
         int ok = 0;
         HANDLE h = NULL;
-        if (!OpenClipboard(NULL)) { Sleep(120); continue; }
+        if (!OpenClipboard(ClipWnd())) { Sleep(120); continue; }
         h = GetClipboardData(CF_UNICODETEXT);
         if (h) {
             wchar_t* src = (wchar_t*)GlobalLock(h);
@@ -483,6 +514,214 @@ static const char* runSlug(const char* rest) {
     return out;
 }
 
+/* ---------------------------------- sha256 ------------------------------------ */
+/* RI3 #246: the release-download ritual, one command. BCrypt is the host's own
+ * crypto provider (same one /update verifies with). Single-line console answer
+ * for a set: "sha256: N checked, N ok" / "... N FAILED: names". */
+
+static int isHex64(const char* s) {
+    int i;
+    for (i = 0; i < 64; ++i) {
+        char c = s[i];
+        int hexd = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        if (!hexd) return 0;
+    }
+    return s[64] == 0 || s[64] == ' ' || s[64] == '\t';
+}
+
+static int sha256FileW(const wchar_t* path, char* hex /* 65 */) {
+    static const wchar_t* algId = L"SHA256";
+    BCRYPT_ALG_HANDLE hAlg = NULL;
+    BCRYPT_HASH_HANDLE hHash = NULL;
+    HANDLE f = INVALID_HANDLE_VALUE;
+    PUCHAR obj = NULL, chunk = NULL;
+    ULONG objLen = 0, hashLen = 0, rd = 0;
+    int ok = 0;
+    f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                    NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (f == INVALID_HANDLE_VALUE) goto done;
+    if (!BCRYPT_SUCCESS(BCryptOpenAlgorithmProvider(&hAlg, algId, NULL, 0))) goto done;
+    if (!BCRYPT_SUCCESS(BCryptGetProperty(hAlg, BCRYPT_OBJECT_LENGTH, (PUCHAR)&objLen,
+                                          sizeof(objLen), &rd, 0))) goto done;
+    if (!BCRYPT_SUCCESS(BCryptGetProperty(hAlg, BCRYPT_HASH_LENGTH, (PUCHAR)&hashLen,
+                                          sizeof(hashLen), &rd, 0))) goto done;
+    if (hashLen != 32) goto done;
+    obj = (PUCHAR)LocalAlloc(LPTR, objLen);
+    chunk = (PUCHAR)LocalAlloc(LPTR, 65536);
+    if (!obj || !chunk) goto done;
+    if (!BCRYPT_SUCCESS(BCryptCreateHash(hAlg, &hHash, obj, objLen, NULL, 0, 0))) goto done;
+    for (;;) {
+        if (!ReadFile(f, chunk, 65536, &rd, NULL) || rd == 0) break;
+        if (!BCRYPT_SUCCESS(BCryptHashData(hHash, chunk, rd, 0))) goto done;
+    }
+    {
+        UCHAR digest[32];
+        int i;
+        if (!BCRYPT_SUCCESS(BCryptFinishHash(hHash, digest, 32, 0))) goto done;
+        for (i = 0; i < 32; ++i) {
+            hex[i * 2]     = "0123456789abcdef"[digest[i] >> 4];
+            hex[i * 2 + 1] = "0123456789abcdef"[digest[i] & 15];
+        }
+        hex[64] = 0;
+        ok = 1;
+    }
+done:
+    if (f != INVALID_HANDLE_VALUE) CloseHandle(f);
+    if (hHash) BCryptDestroyHash(hHash);
+    if (hAlg) BCryptCloseAlgorithmProvider(hAlg, 0);
+    if (obj) LocalFree(obj);
+    if (chunk) LocalFree(chunk);
+    return ok;
+}
+
+/* resolve a (possibly relative) name from a sums file against base/dir */
+static void resolveName(wchar_t* out, int cap, const wchar_t* dir, const char* nameA) {
+    wchar_t nm[512];
+    int i;
+    MultiByteToWideChar(CP_ACP, 0, nameA, -1, nm, 512);
+    for (i = 0; nm[i]; ++i) if (nm[i] == L'/') nm[i] = L'\\';
+    if (nm[1] == L':' || nm[0] == L'\\') { lstrcpynW(out, nm, cap); return; }   /* absolute */
+    out[0] = 0;
+    if (dir && *dir) { lstrcatW(out, dir); if (out[lstrlenW(out) - 1] != L'\\') lstrcatW(out, L"\\"); }
+    lstrcatW(out, nm);
+}
+
+static const char* runSha(const char* rest) {
+    char* out = g_result;
+    while (*rest == ' ') ++rest;
+
+    if (!_strnicmp(rest, "/verify", 7) && (rest[7] == 0 || rest[7] == ' ')) {
+        char sums[512] = {}, base[512] = {};
+        char buf[65536];
+        DWORD rd = 0;
+        HANDLE f;
+        wchar_t wsums[560], wdir[560] = L"";
+        const char* p = rest + 7;
+        int i = 0, checked = 0, failed = 0, more = 0;
+        char fails[3][160];
+        char* line;
+        fails[0][0] = fails[1][0] = fails[2][0] = 0;
+        while (*p == ' ') ++p;
+        if (!*p) { wsprintfA(out, "sha256: use sha256 /verify SHA256SUMS [base]"); return out; }
+        {   int quoted = (*p == '"');
+            if (quoted) ++p;
+            while (*p && i < 510 && (quoted ? *p != '"' : *p != ' ')) sums[i++] = *p++;
+            sums[i] = 0;
+            if (quoted) while (*p == '"') ++p;
+        }
+        while (*p == ' ') ++p;
+        if (*p) {                       /* optional base folder for relative names */
+            int q = (*p == '"');
+            int j = 0;
+            if (q) ++p;
+            while (*p && j < 510 && (q ? *p != '"' : *p != 0)) base[j++] = *p++;
+            base[j] = 0;
+        }
+        MultiByteToWideChar(CP_ACP, 0, sums, -1, wsums, 560);
+        f = CreateFileW(wsums, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (f == INVALID_HANDLE_VALUE) { wsprintfA(out, "sha256: cannot open %s", sums); return out; }
+        if (!ReadFile(f, buf, sizeof(buf) - 1, &rd, NULL)) { CloseHandle(f); wsprintfA(out, "sha256: cannot read %s", sums); return out; }
+        CloseHandle(f);
+        buf[rd] = 0;
+        /* default base = the sums file's own folder (sha256sum -c rules) */
+        if (!base[0]) {
+            int k;
+            lstrcpynW(wdir, wsums, 560);
+            for (k = (int)lstrlenW(wdir) - 1; k >= 0 && wdir[k] != L'\\'; --k) {}
+            if (k >= 0) wdir[k] = 0; else wdir[0] = 0;
+        } else {
+            wchar_t wb[560];
+            MultiByteToWideChar(CP_ACP, 0, base, -1, wb, 560);
+            for (i = 0; wb[i]; ++i) if (wb[i] == L'/') wb[i] = L'\\';
+            lstrcpynW(wdir, wb, 560);
+        }
+        for (line = buf; line && *line;) {
+            char* nl = strchr(line, '\n');
+            char* eq;
+            char name[480];
+            char want[80];
+            char got[65];
+            wchar_t wpath[1200];
+            char* sp;
+            int lineBad = 0;
+            if (nl) *nl = 0;
+            /* trim CR/spaces both ends */
+            {   int e = (int)lstrlenA(line);
+                while (e > 0 && (line[e-1] == '\r' || line[e-1] == ' ' || line[e-1] == '\t')) line[--e] = 0; }
+            while (*line == ' ' || *line == '\t') ++line;
+            if (!*line || *line == '#') { if (nl) line = nl + 1; else break; continue; }
+            want[0] = name[0] = 0;
+            eq = strstr(line, "= ");
+            if (_strnicmp(line, "SHA256 (", 8) == 0 && eq) {       /* BSD flavour */
+                char* lb = line + 7, *rb = strchr(lb, ')');
+                int n = 0;
+                if (!rb) lineBad = 1;
+                else {
+                    ++lb;
+                    while (*lb && n < 470 && lb < rb) name[n++] = *lb++;
+                    name[n] = 0;
+                    lstrcpynA(want, eq + 2, 72);
+                }
+            } else if (isHex64(line)) {                            /* GNU flavour */
+                lstrcpynA(want, line, 65);                         /* 64 hex + NUL (66 kept a space!) */
+                sp = line + 64;
+                while (*sp == ' ' || *sp == '\t') ++sp;
+                if (*sp == '*' || *sp == '?') ++sp;                /* binary/text flag */
+                lstrcpynA(name, sp, 480);
+            } else lineBad = 1;
+            if (lineBad || !want[0] || !name[0]) {
+                ++checked; ++failed;
+                if (failed <= 3) lstrcpynA(fails[failed - 1], "<malformed>", 160);
+                else ++more;
+                if (nl) line = nl + 1; else break;
+                continue;
+            }
+            {   int k; for (k = 0; want[k]; ++k)
+                    if (want[k] >= 'A' && want[k] <= 'F') want[k] = (char)(want[k] + 32); }
+            resolveName(wpath, 1200, wdir, name);
+            ++checked;
+            if (sha256FileW(wpath, got) && lstrcmpA(got, want) == 0) {
+                if (nl) line = nl + 1; else break;   /* MUST advance - a bare
+                                                      * continue here hung the
+                                                      * host thread on the first OK line */
+                continue;
+            }
+            ++failed;
+            if (failed <= 3) lstrcpynA(fails[failed - 1], name, 160);
+            else ++more;
+            if (nl) line = nl + 1; else break;
+        }
+        if (failed == 0) wsprintfA(out, "sha256: %d checked, all ok", checked);
+        else {
+            int n = wsprintfA(out, "sha256: %d checked, %d FAILED: %s", checked, failed, fails[0]);
+            if (fails[1][0]) n += wsprintfA(out + n, ", %s", fails[1]);
+            if (fails[2][0]) n += wsprintfA(out + n, ", %s", fails[2]);
+            if (more > 0)    wsprintfA(out + n, " (+%d more)", more);
+        }
+        return out;
+    }
+
+    if (*rest) {                                       /* single-file digest   */
+        char file[512];
+        wchar_t wfile[560];
+        char hex[65];
+        const char* p = rest;
+        int i = 0, q = (*p == '"');
+        if (q) ++p;
+        while (*p && i < 510 && (q ? *p != '"' : *p != 0)) file[i++] = *p++;
+        file[i] = 0;
+        if (!file[0]) { wsprintfA(out, "sha256: use sha256 <file> or sha256 /verify SHA256SUMS [base]"); return out; }
+        MultiByteToWideChar(CP_ACP, 0, file, -1, wfile, 560);
+        if (!sha256FileW(wfile, hex)) { wsprintfA(out, "sha256: cannot open %s", file); return out; }
+        wsprintfA(out, "sha256: %s  %s", hex, file);
+        copyToClipboard(hex);
+        return out;
+    }
+    wsprintfA(out, "sha256: use sha256 <file> or sha256 /verify SHA256SUMS [base]");
+    return out;
+}
+
 /* ----------------------------------- ABI ------------------------------------- */
 
 PLUGIN_API void __cdecl Load(HWND mainWnd) { g_mainWnd = mainWnd; }
@@ -492,19 +731,19 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     TInfo i;
     i.size = sizeof(TInfo);
     i.name = "Util";
-    i.version = "1.0";
-    i.description = "ts epoch/ISO converter + slug translit - developer one-liners";
+    i.version = "1.1";
+    i.description = "ts epoch/ISO converter \u00b7 slug translit \u00b7 sha256 file + /verify sums";
     i.author = "D. Shevchuk";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";
     return i;
 }
 
-PLUGIN_API int __cdecl GetCount(void) { return 2; }
+PLUGIN_API int __cdecl GetCount(void) { return 3; }
 
 PLUGIN_API const char* __cdecl GetString(int n) {
-    static const char* k[2] = { "ts", "slug" };
-    return (n >= 0 && n < 2) ? k[n] : NULL;
+    static const char* k[3] = { "ts", "slug", "sha256" };
+    return (n >= 0 && n < 3) ? k[n] : NULL;
 }
 
 static char g_etRows[4][256];
@@ -524,6 +763,10 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
         etAdd("slug hello world"); etAdd("slug hello world snake"); etAdd("slug hello world pascal");
     } else if (len > 4 && _strnicmp(input, "slug", 4) == 0) {
         etAdd("slug hello world snake"); etAdd("slug hello world pascal");
+    } else if (len <= 6 && _strnicmp(input, "sha256", len) == 0) {
+        etAdd("sha256 file.bin"); etAdd("sha256 /verify SHA256SUMS");
+    } else if (len > 6 && _strnicmp(input, "sha256", 6) == 0) {
+        etAdd("sha256 /verify SHA256SUMS");
     }
     return g_etCount;
 }
@@ -543,6 +786,8 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
         text = runTs(str + 2);
     else if (_strnicmp(str, "slug", 4) == 0 && (str[4] == 0 || str[4] == ' '))
         text = runSlug(str + 4);
+    else if (_strnicmp(str, "sha256", 6) == 0 && (str[6] == 0 || str[6] == ' '))
+        text = runSha(str + 6);                      /* RI3 #246                  */
     if (!text || !text[0]) return ex;
     ex.run = 1;
     ex.con_text = g_result;

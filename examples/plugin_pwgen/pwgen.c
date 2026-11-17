@@ -201,9 +201,30 @@ static void makePw(int len, const char* flags, wchar_t* out, int outc) {
 
 /* ------------------------------- clipboard ----------------------------------- */
 
+/* v0.24 hardening: OpenClipboard needs a thread window - NULL can BLOCK the
+ * host thread on a wedged clipboard chain; a real msg-only hwnd fails fast. */
+static HWND ClipWnd(void) {
+    static HWND h;
+    if (!h) {
+        WNDCLASSW wc;
+        HMODULE self = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&ClipWnd, &self);
+        ZeroMemory(&wc, sizeof(wc));
+        wc.lpfnWndProc   = DefWindowProcW;
+        wc.lpszClassName = L"TypeBoxPwgenClip";
+        wc.hInstance     = self;
+        if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+            h = CreateWindowExW(0, wc.lpszClassName, L"clip", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, NULL, self, NULL);
+    }
+    return h;
+}
+
 static int putOnClipboard(const wchar_t* w) {
     int ok = 0;
-    if (!OpenClipboard(NULL)) return 0;
+    if (!OpenClipboard(ClipWnd())) return 0;
     EmptyClipboard();
     {
         size_t bytes = (lstrlenW(w) + 1) * sizeof(wchar_t);

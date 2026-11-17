@@ -3,6 +3,42 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.24.0] - 2026-11-17
+
+![ring](docs/screenshots/console-clipring.png)
+*`clip ring` - the clipboard history as a topmost picker: arrows, Enter copies,
+Ctrl+Enter types it into whatever sits behind the console, Esc closes. RI3 #260.*
+
+### The clipboard-picker wave - RI3 #246, #260, #261
+
+- ✅ **`clip ring`** (RI3 #260) - a compact always-on-top list pre-loaded with the ring:
+  arrows move, Enter copies, Ctrl+Enter types, Esc or focus-loss dismisses; a second
+  `[Clipboard] Ring=` global hotkey (`Ctrl+Alt+V` by default, blank = off) opens it from
+  anywhere. The row preview shows `1) …` numbering and `(empty)` when the ring is clear.
+- ✅ **`clip type <n>`** (RI3 #261) - the Ctrl+V that cannot be blocked: the entry is
+  injected per character through `SendInput` (keybd_event fallback) into the window that
+  had the focus, so apps that swallow synthetic pastes still receive it. `[Clipboard]
+  TypeDelayMs=5` paces it for slow edits.
+- ✅ **`sha256`** (RI3 #246, `util.dll` #12) - `sha256 file.bin` prints the digest (BCrypt,
+  no subprocess) and copies it; `sha256 /verify SUMS [base]` understands both `sha256sum`
+  GNU (`hash  name`, `*` binary flag) and BSD (`SHA256 (name) = hash`) formats, resolves
+  relative names against the list directory or an explicit `[base]`, and answers
+  `3 checked, all ok` / `3 checked, 1 FAILED: bad.txt` like `sha256sum -c`.
+- ✅ **EasyType** - `GetCountET` now receives the **whole line**, so subcommand templates
+  (`clip ring`, `clip type`, `sha256 /verify …`) complete properly, and Tab replaces from
+  the line start when the candidate repeats what is left of the caret (`clip ri`+Tab →
+  `clip ring`).
+- ✅ **Hardening** found by the new suite: the host re-syncs its shown/hidden state when a
+  plugin hides the console itself (one hotkey press is enough again); every bundled plugin
+  opens the clipboard against its own message-only window - a wedged clipboard chain now
+  fails fast instead of blocking the host thread; the ring ignores focus flicker within
+  350 ms of opening (the host re-activates its window to print the answer).
+- ✅ `test-v0240.ps1`: 24 gates - ring window class/items/selection keys, Enter-copy lands
+  on the clipboard, Esc closes, empty ring; the forced typing asserted end-to-end by a
+  real pad window that reads back exactly what was injected; `sha256` against known
+  digests, clipboard round-trip, GNU/BSD/base/tampered/malformed lists; regressions of
+  the full plugin matrix with the tenth plugin loaded.
+
 ## [0.23.0] - 2026-11-17
 
 ![pos](docs/screenshots/console-pos.png)

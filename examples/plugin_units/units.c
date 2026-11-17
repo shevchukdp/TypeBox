@@ -63,8 +63,29 @@ static void loadConfig(void) {
     g_popup      = (int)GetPrivateProfileIntW(L"Units", L"Popup", 1, ini);
 }
 
+/* v0.24 hardening: OpenClipboard needs a thread window - NULL can BLOCK the
+ * host thread on a wedged clipboard chain; a real msg-only hwnd fails fast. */
+static HWND ClipWnd(void) {
+    static HWND h;
+    if (!h) {
+        WNDCLASSW wc;
+        HMODULE self = NULL;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                           GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCWSTR)&ClipWnd, &self);
+        ZeroMemory(&wc, sizeof(wc));
+        wc.lpfnWndProc   = DefWindowProcW;
+        wc.lpszClassName = L"TypeBoxUnitsClip";
+        wc.hInstance     = self;
+        if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS)
+            h = CreateWindowExW(0, wc.lpszClassName, L"clip", 0, 0, 0, 0, 0,
+                                HWND_MESSAGE, NULL, self, NULL);
+    }
+    return h;
+}
+
 static void copyClip(const char* txt) {
-    if (!g_copyResult || !OpenClipboard(NULL)) return;
+    if (!g_copyResult || !OpenClipboard(ClipWnd())) return;
     EmptyClipboard();
     size_t n = lstrlenA(txt) + 1;
     HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, n);
