@@ -4587,7 +4587,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     g_uiFont = CreateFontIndirectW(&lfUI);
 
     RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
-    int W = 640, H = 460;
+    int W = 640, H = 540;
     int sx = GetPrivateProfileIntW(L"Coordinates", L"SettingsX", -1, g_iniPath.c_str());
     int sy = GetPrivateProfileIntW(L"Coordinates", L"SettingsY", -1, g_iniPath.c_str());
     if (sx < 0) sx = (wa.right - W) / 2;
@@ -4606,7 +4606,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     for (int i = 0; i < PG_COUNT; ++i) {
         g_setPage[i] = CreateWindowExW(0, L"TypeBoxPage", L"",
             WS_CHILD | WS_CLIPCHILDREN, Sc(g_setDpi, 156), Sc(g_setDpi, 8),
-            Sc(g_setDpi, 470), Sc(g_setDpi, 360), g_setWnd, nullptr, hInst, nullptr);
+            Sc(g_setDpi, 470), Sc(g_setDpi, 440), g_setWnd, nullptr, hInst, nullptr);
         SendMessageW(g_setPage[i], WM_SETFONT, (WPARAM)g_uiFont, TRUE);
         SetWindowSubclass(g_setPage[i], PageProc, 6, 0);
     }
@@ -4795,9 +4795,12 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     // v0.29.1: rows became dpi-driven 20 logical px (the height v0.25 always
     // INTENDED - comctl silently measured the font instead), so 14 rows need
     // 320px to stay fully visible; the hint label moved below the list.
+    // v0.30.0: 18 plugins = 360 rows px, list grew to 400 (hint y=412) so a
+    // human sees every plugin at a glance - and tbtest pltoggle still does
+    // LB_SETTOPINDEX first for the case rows ever outgrow the list again.
     g_plLb = MkOn(g_setPage[PG_PLUGINS], L"LISTBOX", L"",
                   WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
-                  LBS_OWNERDRAWFIXED | LBS_HASSTRINGS, 8, 8, 180, 320);
+                  LBS_OWNERDRAWFIXED | LBS_HASSTRINGS, 8, 8, 180, 400);
     SetWindowSubclass(g_plLb, PlChkProc, 8, 0);     // click = enable/disable
     int px = 200;
     g_plLoadChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_LOAD), px, 12, 180);
@@ -4808,7 +4811,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_UNLOAD),  px + 90, 240, 80, IDB_PL_UNLOAD);
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_ABOUT),   px, 270, 80, IDB_PL_ABOUT);
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_OPTIONS), px + 90, 270, 80, IDB_PL_OPTIONS);
-    MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 332, 190);
+    MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 412, 190);
 
     // --- Environment (own PATH folders + %variables%, like the OS dialog)
     MkLabel(g_setPage[PG_ENV], L(STR_EN_PATHHINT), 16, 10, 430);

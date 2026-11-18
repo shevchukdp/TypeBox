@@ -806,3 +806,34 @@ hold `nettools` until the plain-HTTP policy (or `wininet` decision) is settled.
 drop-down filter/replace, `[Exec] Plugins`, `[PluginState]`) and follow the
 idioms of `examples/plugin_calc/calc.c`. ABI reference:
 [docs/PLUGIN_API.md](PLUGIN_API.md).*
+
+## Shipped beyond the gallery
+
+The gallery grew past its first ten as waves landed. Current roster (18 DLLs,
+all under `examples/`): `calc units codec vol cliphist taskman winlist pwgen
+timer sysmon util note yt weather` plus the **v0.30.0 plugin wave**:
+
+- **#15 nettools** - shipped in v0.30.0 as
+  [`examples/plugin_nettools/nettools.c`](../examples/plugin_nettools/nettools.c).
+  The "hold until the plain-HTTP policy settles" note is settled: winhttp
+  (HTTPS) copied from `yt.c`, `iphlpapi` for adapters + ICMP helpers,
+  `ws2_32` for `GetAddrInfoW` - and the offline-first rule holds: zero network
+  at `Load()`, requests only on typed lines. Watch the IcmpSendEcho reply
+  layout (old iphlpapi order, Address first - see the v0.30.0 changelog entry).
+- **#16 off** - shipped in v0.30.0 as
+  [`examples/plugin_off/off.c`](../examples/plugin_off/off.c). Power plugin
+  pattern: the headless dry-run gate runs **before** any action (`TYPEBOX_HEADLESS=1`
+  turns everything into `would run ...` answers), confirm-window via
+  `[Off] Confirm/WarnSec`, hibernate probe via the registry key
+  `HKLM\...\Control\Power\HibernateEnabled` (mingw-w64 lacks `POWER_CAPABILITIES`).
+- **#17 todo** - shipped in v0.30.0 as
+  [`examples/plugin_todo/todo.c`](../examples/plugin_todo/todo.c). File-backed
+  list (cliphist-style escaping, UTF-8), trailing when-parser instead of a
+  date editor.
+- **#18 json** - shipped in v0.30.0 as
+  [`examples/plugin_json/json.c`](../examples/plugin_json/json.c). One
+  tokenizer (`emitVal`) serves fmt/min/get/keys and the JWT decoder; watch
+  that member names emit their own quotes (a suite-caught bug).
+
+Still open from the wishlist: `wol` (Wake-on-LAN "power ON" - the sibling of
+`off`), `wifi` (netsh parser - CP_ACP SSID caution stands).

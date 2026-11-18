@@ -55,7 +55,14 @@ endforeach()
 # weather (v0.28, user request): one-line weather + 2-day forecast - winhttp,
 # Open-Meteo (forecast + geocoding) and ipwho.is, ALL keyless, network only
 # on an explicitly typed `weather` line (offline-first rule).
-foreach(P cliphist taskman winlist pwgen timer sysmon util note yt weather)
+# v0.30.0 plugin wave (docs/RESEARCH-PLUGINS-2026-11-18.md top-5):
+# nettools: ip/weather/dns/netinfo/ping - winhttp + iphlpapi (adapters, ICMP)
+#   + ws2_32 (GetAddrInfoW); typed-lines-only networking, same rule.
+# off: shutdown/restart/sleep/hibernate/hybrid/logoff - advapi32 (privileges)
+#   + powrprof (SetSuspendState/GetPwrCapabilities); headless = dry-run always.
+# todo: persistent list w/ natural-date due - kernel32 file IO only.
+# json: fmt/min/get/keys + jwt decode - pure computation, no extra libs.
+foreach(P cliphist taskman winlist pwgen timer sysmon util note yt weather nettools off todo json)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -70,6 +77,8 @@ target_link_libraries(util     PRIVATE bcrypt)
 target_link_libraries(note     PRIVATE shell32 gdi32)
 target_link_libraries(yt       PRIVATE winhttp shell32)
 target_link_libraries(weather  PRIVATE winhttp)
+target_link_libraries(nettools PRIVATE winhttp iphlpapi ws2_32)
+target_link_libraries(off      PRIVATE advapi32 powrprof)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

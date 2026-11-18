@@ -60,9 +60,28 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.29.1)
+## Working today (v0.30.0)
 
-Everything below ships in **[v0.29.1](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release. The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
+Everything below ships in **[v0.30.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release. The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
+
+**Four new plugins (v0.30)**
+
+- **`nettools`** — `ip` (public IP, cached), `weather <city>` (one-line wttr.in, remembers the
+  last city), `dns <host>` (answers offline for localhost/hosts-file names), `netinfo`
+  (adapters with IPv4/mask/gateway), `ping <host> [n]` (real ICMP round-trips) — the same
+  offline-first rule: the network is touched only on a line you typed
+- **`off`** — `off [now|<min>|cancel]`, `restart [min]`, `off sleep|hibernate|hybrid|logoff`;
+  `[Off] Confirm/WarnSec` guard a stray Enter, and in headless mode every power action is a
+  dry-run answer (`off: [headless] would run shutdown /s /t 1800`) — test suites can never
+  touch your power state
+- **`todo`** — `todo buy milk tomorrow 18:00` (parses `today · tomorrow · fri · +2d · +5h ·
+  18:00 · 2026-11-20`), plus `todo`, `todo today`, `todo done <n>`, `todo del <n>` — a plain
+  UTF-8 `todo.txt` next to the exe, overdue items flagged `!!`
+- **`json`** — `json fmt|min|keys <text>`, `json get a.b[2].c <text>`, and `jwt <token>`
+  decode with humanized `iat`/`exp` (UTC + expired verdict) — pure computation, zero network
+- All four speak the TypeAndRun-compatible plugin ABI, land in the (now 18-row)
+  Settings → Plugins checklist, and are proven by `test-v0300`: **59 assertions** on the
+  real host, power actions verified as dry-runs
 
 **Sharp on any monitor (v0.29)**
 
@@ -191,7 +210,7 @@ The full backlog of 50+ vetted ideas lives in [docs/ROADMAP-50.md](docs/ROADMAP-
 **Install:** download `TypeBox-<version>-windows-x64.zip` from the
 [releases page](https://github.com/shevchukdp/TypeBox/releases), unzip anywhere, run
 `TypeBox.exe`. No installer, no registry, no `%APPDATA%` — the portable `Plugins\` with all
-**14 plugins** ships inside the zip, ready to use.
+**18 plugins** ships inside the zip, ready to use.
 
 **Update:** type `/update` in the console — the one command that talks to the release API (never
 at startup, never on a timer unless you flip `[Update] CheckOnStart`). It reports the latest
@@ -207,7 +226,7 @@ The schema is compatible with the legacy `TypeAndRun.ini` (sections `[HotKey]`, 
 
 ## Plugins
 
-**14 plugins ship ready-to-use** in the portable `Plugins\` folder, built on the
+**18 plugins ship ready-to-use** in the portable `Plugins\` folder, built on the
 **TypeAndRun-compatible ABI** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`) —
 legacy TypeAndRun plugin DLLs drop in too:
 
@@ -235,7 +254,7 @@ each checked against the host implementation.
 ## Building
 
 The canonical build (what CI runs on `windows-latest`): CMake + Ninja, MSVC or MinGW-w64 —
-it builds `TypeBox.exe` **and all 14 plugin DLLs**:
+it builds `TypeBox.exe` **and all 18 plugin DLLs**:
 
 ```
 cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release

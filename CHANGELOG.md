@@ -3,6 +3,45 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.30.0] - 2026-11-18
+
+### The plugin wave: four new plugins, checklist grows to 18
+
+![four new plugins](docs/screenshots/plugins-wave-18.png)
+
+- **nettools.dll** (gallery #15) - `ip` (public IP via checkip, cached `[NetTools] CacheSec`),
+  `weather <city>` / `w <city>` (one line from wttr.in, last city kept in `[NetTools] LastCity`),
+  `dns <host>` (GetAddrInfoW - answers offline for localhost/hosts names), `netinfo`
+  (adapters: name, IPv4, mask, gateway), `ping <host> [n]` (ICMP echo, min/avg/max ms).
+  Offline-first by contract: Load() and timers do zero network - requests ride typed lines only.
+- **off.dll** (gallery #16) - `off [now|<min>|cancel]`, `restart [min]` (InitiateSystemShutdownExW,
+  cancel via `shutdown /a`), `off sleep`, `off hibernate` (honest
+  `hibernate: disabled in system - enable with powercfg /h on` when the registry says so),
+  `off hybrid`, `off logoff`. `[Off] Confirm=1` demands the same line twice within `WarnSec`
+  seconds. **Headless = dry-run always**: with `TYPEBOX_HEADLESS=1` every action answers
+  `off: [headless] would run ...` - no shutdown/suspend/exit API is ever called, so the
+  suites are safe by construction.
+- **todo.dll** (gallery #17) - `todo <text> [when]` with a trailing when-parser
+  (`today · tomorrow · mon..sun · +Nd · +Nh · HH:MM · YYYY-MM-DD`, combinable),
+  `todo` list with `!!` overdue marks, `todo today`, `todo done <n>` (archives to DoneFile),
+  `todo del <n>`. Persistence is one plain UTF-8 file (`[Todo] File=todo.txt` next to the exe).
+- **json.dll** (gallery #18) - `json fmt|min|keys <text>`, `json get a.b[2].c <text>`
+  (strings unquoted, values compact), `jwt <token>` / `jwt decode` (base64url header+payload,
+  `iat`/`exp` humanized in UTC with an `expired` verdict). Pure computation - zero network,
+  zero dialogs, by construction.
+- Settings → Plugins checklist now shows all **18 rows** (list 400 logical px, hint moved to
+  y=412, dialog 540 px) so every plugin is visible at a glance; `tbtest pltoggle` still
+  scrolls rows into view before clicking.
+- Gates: `test-v0300` - **59 assertions** on the real host (live `ip`/`weather`/`ping`,
+  offline `dns`/`netinfo`, INI contract for dead endpoints, ET completion from the plugin's
+  own rows, every power action proven a dry-run, todo persistence across restarts, jwt
+  verdicts). Full regression v0.18.0→v0.29.0 re-run green.
+- Two ABI traps were caught by the suite and fixed where they live: `GetAddrInfoW` needs
+  `struct addrinfoW` in mingw-w64, and the IcmpSendEcho reply on modern Windows uses the
+  **old iphlpapi layout** (Address first) - reading "Status" per the doc layout turns every
+  successful ping into a fake failure (proven byte-for-byte with `icmpprobe.c`: offset 0 of
+  an 8.8.8.8 reply is `08080808`).
+
 ## [0.29.1] - 2026-11-18
 
 ### Patch: the checklist grew into its shoes
