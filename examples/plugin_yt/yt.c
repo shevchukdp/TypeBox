@@ -183,7 +183,11 @@ static int jsonStr(const char* body, const char** from, const char* key, char* o
                 default:   cp = (unsigned char)*p; ++p; break;
                 }
             } else {
-                cp = (unsigned char)*p++;
+                /* raw JSON byte: the body is already UTF-8 - copy verbatim,
+                 * re-encoding a continuation byte here would double-encode it
+                 * (this is why Cyrillic titles used to render as mojibake) */
+                if (n + 1 < cap) out[n++] = *p++;
+                continue;
             }
             if (cp < 0x80) {
                 if (n + 1 < cap) out[n++] = (char)cp;

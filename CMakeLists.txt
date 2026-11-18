@@ -52,7 +52,10 @@ endforeach()
 # ShellExecuteW/SHCreateDirectoryExW, gdi32 for the editor fonts.
 # yt (v0.26, user request): console video search - winhttp for the three-tier
 # lookup (Data API / Piped / Invidious), shell32 to open the results.
-foreach(P cliphist taskman winlist pwgen timer sysmon util note yt)
+# weather (v0.28, user request): one-line weather + 2-day forecast - winhttp,
+# Open-Meteo (forecast + geocoding) and ipwho.is, ALL keyless, network only
+# on an explicitly typed `weather` line (offline-first rule).
+foreach(P cliphist taskman winlist pwgen timer sysmon util note yt weather)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -66,6 +69,7 @@ target_link_libraries(timer    PRIVATE shell32 winmm gdi32)
 target_link_libraries(util     PRIVATE bcrypt)
 target_link_libraries(note     PRIVATE shell32 gdi32)
 target_link_libraries(yt       PRIVATE winhttp shell32)
+target_link_libraries(weather  PRIVATE winhttp)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

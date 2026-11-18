@@ -3,6 +3,37 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.28.0] - 2026-11-18
+
+![weather](docs/screenshots/console-weather.png)
+*`weather Kyiv` — one line: now (° + condition + feels + wind) plus today and
+tomorrow highs/lows. Keyless Open-Meteo; the network wakes up only for a line you typed.*
+
+### The weather wave (user request)
+
+- **weather.dll** — plugin #14, the user's «плагин погоды, небольшая строчка со статусом
+  погоды и прогнозом на 1-2 дня»: `weather <city>` answers one line — current °, condition,
+  feels-like, wind — **plus today and tomorrow** highs/lows; `weather` alone = last cached
+  place → `[Weather] City` → IP geolocation; `weather /clear` forgets the cache. All sources
+  keyless: Open-Meteo geocoding + forecast, ipwho.is as last-resort geolocator; WMO condition
+  labels localized RU/EN by `[UI] Language`.
+- **Offline-first to the letter**: nothing touches the network at `Load()`, on a timer or in the
+  background — a request goes out only when a `weather` line is typed, exactly like `yt` and
+  `/update`. Every WinHTTP call is capped (`WinHttpSetTimeouts`, `TimeoutMs` clamped to
+  1500..15000), so an unreachable network answers honestly in one line and never hangs.
+- **New INI keys** (all optional): `[Weather] City= / Units=m|im / TimeoutMs=6000`
+  — `im` switches to °F and mph.
+- **Fixed on the way**: `jsonStr` in the winhttp plugins **double-encoded raw UTF-8 bytes**
+  from JSON bodies (only `\uXXXX` escapes were meant to be re-encoded) — Cyrillic city names
+  from the geocoder and Cyrillic `yt` titles rendered as mojibake; both plugins verified again.
+  Also caught: `wsprintfW` mishandles `%+d` on this CRT (it AV'd inside the answer render) —
+  plugin coding rule now baked in: explicit sign strings instead, `snprintf` for floats.
+- **`test-v0280`: 25/25 gates** — live one-line format, cache identity, `/clear` → IP-geo,
+  `no such place` honesty, ET Tab `weather /clear`, `[Weather] City=`, °F+mph after restart,
+  TimeoutMs clamp, checklist toggle off→dead→re-enable (Weather row located by its own label),
+  neighbours (`ts`/`yt`/`note`), settings self-test; offline-first proven by zero
+  `weather handled` log lines before the first typed command.
+
 ## [0.27.1] - 2026-11-17
 
 ### Geometry fix — the console never "spreads out" again
