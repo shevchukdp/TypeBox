@@ -361,17 +361,20 @@ rows also work when the user adds arguments after `clip` — not required today.
 
 ## 5. taskman — process list & kill (`taskman.dll`)
 
-> **Status: shipped in v0.16.0, 1.1 in v0.19.0** — implemented as `examples/plugin_taskman/taskman.c`
+> **Status: shipped in v0.16.0, 1.1 in v0.19.0, 1.2 in v0.31.0** — implemented as `examples/plugin_taskman/taskman.c`
 > (console-first: results are console lines; the only popup is the one kill confirmation,
 > and `[Taskman] Confirm=0` removes it too — automation-safe. v0.19.0 adds
 > `top [n|filter]` — live CPU ranking from two `GetProcessTimes` samples 300 ms apart,
-> integer tenths, no psapi — and `restart <name|pid>`: image path via
-> `QueryFullProcessImageNameW`, terminate, wait 2 s, `ShellExecuteW` relaunch).
+> integer tenths, no psapi — and `relaunch <name|pid>`: image path via
+> `QueryFullProcessImageNameW`, terminate, wait 2 s, `ShellExecuteW` relaunch.
+> v0.31.0 renames that verb `restart` → `relaunch`: the global word audit
+> (`tools/audit-words.ps1`) found `restart` also claimed by `off.dll` (reboot), and
+> alphabetical discovery already gave the win to off — so taskman speaks `relaunch` now).
 
 | Field | Value |
 |---|---|
 | DLL | `Plugins\taskman.dll` |
-| Triggers | `kill <name>` (terminate) · `task <substr>` (list) · `top [n|filter]` (CPU ranking) · `restart <name|pid>` (kill + relaunch) |
+| Triggers | `kill <name>` (terminate) · `task <substr>` (list) · `top [n|filter]` (CPU ranking) · `relaunch <name|pid>` (kill + relaunch) |
 | Build | `gcc -shared -O2 -static -o taskman.dll taskman.c -lkernel32 -luser32 -lshell32` |
 | LOC | ~470 |
 
@@ -380,8 +383,8 @@ rows also work when the user adds arguments after `clip` — not required today.
 | Field | Value |
 |---|---|
 | name | `Task Manager Lite` |
-| version | `1.1` |
-| description | `kill <proc> / task <filter> / top / restart <proc> - list, kill, CPU rank, relaunch` |
+| version | `1.2` |
+| description | `kill <proc> / task <filter> / top / relaunch <proc> - list, kill, CPU rank, relaunch` |
 
 **What it does.** `kill notepad` terminates every process whose image name
 matches (exact, case-insensitive, `.exe` optional) after one `MB_YESNO`
@@ -400,13 +403,14 @@ never walks the toolhelp snapshot.
 | `ListMax` | max rows in the `task` window | `300` |
 | `TopN` | rows shown by `top` (1..30) | `8` |
 
-**GetCount/GetString**: `4` — `"kill"`, `"task"`, `"top"`, `"restart"`.
+**GetCount/GetString**: `4` — `"kill"`, `"task"`, `"top"`, `"relaunch"` (v0.31.0: was `"restart"`; that word belongs to `off.dll`).
 
 **Example dropdown rows** (two-mode, because ET only sees the caret word):
 
 - typing the command word `kil` -> `kill notepad.exe`, `kill chrome.exe`, `kill cmd.exe` (top candidates from the cached snapshot, most recently seen first)
 - typing an argument after `kill `, word `note` -> `notepad.exe`, `notepad++.exe` (bare names; the host replaces just the caret word, so the line lands as `kill notepad.exe`)
 - `tas` -> `task `, `task chrome`
+- `relaun` -> `relaunch explorer.exe`, `relaunch notepad.exe` (same cached snapshot, most recently seen first)
 
 **Edge cases / failure behavior.** Match on the protected set
 (`csrss, wininit, winlogon, services, lsass, smss, System, Registry`) ->
@@ -809,7 +813,7 @@ idioms of `examples/plugin_calc/calc.c`. ABI reference:
 
 ## Shipped beyond the gallery
 
-The gallery grew past its first ten as waves landed. Current roster (18 DLLs,
+The gallery grew past its first ten as waves landed. Current roster (19 DLLs,
 all under `examples/`): `calc units codec vol cliphist taskman winlist pwgen
 timer sysmon util note yt weather` plus the **v0.30.0 plugin wave**:
 
@@ -837,6 +841,19 @@ timer sysmon util note yt weather` plus the **v0.30.0 plugin wave**:
   [`examples/plugin_json/json.c`](../examples/plugin_json/json.c). One
   tokenizer (`emitVal`) serves fmt/min/get/keys and the JWT decoder; watch
   that member names emit their own quotes (a suite-caught bug).
+- **#19 wol** - shipped in v0.31.0 as
+  [`examples/plugin_wol/wol.c`](../examples/plugin_wol/wol.c). The "power ON"
+  sibling of `off`: `wol <MAC|name> [host [port]]` builds the magic packet
+  (6x FF + 16x MAC) and puts it on UDP broadcast - `ws2_32` is the only new
+  link flag. The power-family contract holds: under `TYPEBOX_HEADLESS=1` (or
+  `[UI] Headless=1`) the packet is **never** sent, the answer is
+  `wol: [headless] would send magic packet to ... via h:p (N packets)`, so
+  suites cannot wake anything. `[Wol]` INI holds named presets
+  (`pc = AA:BB:CC:DD:EE:FF [host [port]]`) plus `Host/Port/Repeat` defaults;
+  MAC accepts `:`, `-`, `.` separators or plain hex. The plugin parses the INI
+  itself (BOM-aware, mtime-cached rows) instead of the kernel32 profile APIs -
+  those keep a per-process cache that can enumerate zero keys for a section
+  after an external edit. Command words are checked against the global
+  uniqueness law (`tools/audit-words.ps1`).
 
-Still open from the wishlist: `wol` (Wake-on-LAN "power ON" - the sibling of
-`off`), `wifi` (netsh parser - CP_ACP SSID caution stands).
+Still open from the wishlist: `wifi` (netsh parser - CP_ACP SSID caution stands).

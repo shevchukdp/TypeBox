@@ -62,7 +62,9 @@ endforeach()
 #   + powrprof (SetSuspendState/GetPwrCapabilities); headless = dry-run always.
 # todo: persistent list w/ natural-date due - kernel32 file IO only.
 # json: fmt/min/get/keys + jwt decode - pure computation, no extra libs.
-foreach(P cliphist taskman winlist pwgen timer sysmon util note yt weather nettools off todo json)
+# v0.31.0: wol (RI3 #238): magic packet over UDP broadcast - ws2_32 only;
+#   headless = "would send", never a real packet (power-family contract).
+foreach(P cliphist taskman winlist pwgen timer sysmon util note yt weather nettools off todo json wol)
     string(TOUPPER ${P} PU)
     add_library(${P} SHARED examples/plugin_${P}/${P}.c)
     target_compile_definitions(${P} PRIVATE ${PU}_BUILDING_DLL)
@@ -79,6 +81,7 @@ target_link_libraries(yt       PRIVATE winhttp shell32)
 target_link_libraries(weather  PRIVATE winhttp)
 target_link_libraries(nettools PRIVATE winhttp iphlpapi ws2_32)
 target_link_libraries(off      PRIVATE advapi32 powrprof)
+target_link_libraries(wol      PRIVATE ws2_32)
 
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without

@@ -1,7 +1,7 @@
 /*
  * TypeBox plugin: task manager lite — "kill <name|pid>", "task <filter>",
- * "top [n|filter]", "restart <name|pid>".
- * Spec: docs/PLUGIN_GALLERY.md #5 (+ backlog RI #80: CPU ranking + restart),
+ * "top [n|filter]", "relaunch <name|pid>".
+ * Spec: docs/PLUGIN_GALLERY.md #5 (+ backlog RI #80: CPU ranking + relaunch),
  * console-first: no modal list window, the host is NEVER blocked except the
  * optional kill confirmation (Confirm=0 disables even that) and the 300 ms
  * CPU sampling window of `top`. Zero dependencies beyond kernel32/user32/shell32.
@@ -20,7 +20,7 @@
  * no psapi). Refreshed at RunString time; the ET path serves from the cache
  * and refreshes only when it is older than 2000 ms.
  * `top` samples GetProcessTimes twice 300 ms apart (kernel32 only, no psapi);
- * `restart` reads the image path with QueryFullProcessImageNameW, terminates
+ * `relaunch` reads the image path with QueryFullProcessImageNameW, terminates
  * and relaunches it — no confirm popup, the process comes back by design.
  */
 #include <windows.h>
@@ -283,18 +283,20 @@ static void doTop(const wchar_t* arg) {
         if (shown > 1) lstrcatW(out, L", ");
         wsprintfW(one, L"%s %d.%d%% (%lu)", g_topBuf[best].name,
                   picked / 10, picked % 10, g_topBuf[best].pid);
-        if (lstrlenW(out) + lstrlenW(one) > 700) { lstrcatW(out, L" \x2026"); break; }
+        if (lstrlenW(out) + lstrlenW(one) > 700) { lstrcatW(out, L" ..."); break; }
         lstrcatW(out, one);
     }
     if (!shown) { wideToUtf8(L"top: no CPU samples (everything idle?)", g_result, sizeof(g_result)); return; }
     wideToUtf8(out, g_result, sizeof(g_result));
 }
 
-/* --------------------------------- restart ------------------------------------ */
+/* --------------------------------- relaunch ----------------------------------- */
 /* RI #80: kill + relaunch from the image path. No confirm popup by design —
- * the process comes back, so this is a refresh, not a destruction. */
+ * the process comes back, so this is a refresh, not a destruction.
+ * v0.31.0: word renamed restart->relaunch - `restart` belongs to off.dll
+ * (reboot), see the global word-uniqueness audit (audit-words). */
 
-static void doRestart(const wchar_t* arg) {
+static void doRelaunch(const wchar_t* arg) {
     DWORD pids[MAX_HITS];
     wchar_t disp[MAX_PATH], q[MAX_PATH], line[256], path[MAX_PATH * 2];
     int i, n = 0, ok = 0, fail = 0, asPid = 1;
@@ -305,7 +307,7 @@ static void doRestart(const wchar_t* arg) {
     if (asPid && q[0]) pid = (DWORD)wcstoul(q, NULL, 10);
 
     disp[0] = 0;
-    for (i = 0; i < g_nprocs && n < 8; ++i) {                /* cap: 8 restarts */
+    for (i = 0; i < g_nprocs && n < 8; ++i) {                /* cap: 8 relaunches */
         int hit = asPid ? (g_procs[i].pid == pid) : nameMatch(g_procs[i].name, q);
         if (hit) {
             if (n == 0) lstrcpynW(disp, g_procs[i].name, MAX_PATH);
@@ -313,7 +315,7 @@ static void doRestart(const wchar_t* arg) {
         }
     }
     if (!n) {
-        wsprintfW(line, L"restart: no process named %s", q);
+        wsprintfW(line, L"relaunch: no process named %s", q);
         wideToUtf8(line, g_result, sizeof(g_result));
         return;
     }
@@ -337,14 +339,14 @@ static void doRestart(const wchar_t* arg) {
         if ((INT_PTR)r > 32) ++ok; else ++fail;
     }
     if (ok > 0) {
-        wsprintfW(line, L"restart: %s \x2014 restarted %d process(es)", disp, ok);
+        wsprintfW(line, L"relaunch: %s - relaunched %d process(es)", disp, ok);
         if (fail > 0) {
             wchar_t extra[64];
             wsprintfW(extra, L", %d failed", fail);
             lstrcatW(line, extra);
         }
     } else {
-        wsprintfW(line, L"restart: %s \x2014 failed for %d process(es)", disp, fail);
+        wsprintfW(line, L"relaunch: %s - failed for %d process(es)", disp, fail);
     }
     wideToUtf8(line, g_result, sizeof(g_result));
 }
@@ -391,7 +393,7 @@ static void doKill(const wchar_t* arg) {
         CloseHandle(h);
     }
     if (ok > 0) {
-        wsprintfW(line, L"kill: %s \x2014 terminated %d process(es)", disp, ok);
+        wsprintfW(line, L"kill: %s - terminated %d process(es)", disp, ok);
         if (denied > 0) {
             wchar_t extra[80];
             wsprintfW(extra, L", access denied for %d process(es)", denied);
@@ -419,8 +421,8 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     TInfo i;
     i.size = sizeof(TInfo);
     i.name = "Task Manager Lite";
-    i.version = "1.1";
-    i.description = "kill <proc> / task <filter> / top / restart <proc> - console process tools";
+    i.version = "1.2";
+    i.description = "kill <proc> / task <filter> / top / relaunch <proc> - console process tools";
     i.author = "D. Shevchuk";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";
@@ -430,7 +432,7 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
 PLUGIN_API int __cdecl GetCount(void) { return 4; }
 
 PLUGIN_API const char* __cdecl GetString(int n) {
-    static const char* k[4] = { "kill", "task", "top", "restart" };
+    static const char* k[4] = { "kill", "task", "top", "relaunch" };
     return (n >= 0 && n < 4) ? k[n] : NULL;
 }
 
@@ -467,16 +469,16 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
         etAdd("kill notepad.exe");
         etAdd("task chrome.exe");
         etAdd("top");
-        etAdd("restart explorer.exe");
+        etAdd("relaunch explorer.exe");
         return g_etCount;
     }
     if (!_strnicmp(input, "kill ", 5) || !_strnicmp(input, "task ", 5)
-        || !_strnicmp(input, "restart ", 8)) {
+        || !_strnicmp(input, "relaunch ", 9)) {
         const wchar_t* verb;
         int skip;
-        if (input[0] == 'k' || input[0] == 'K')      { verb = L"kill";    skip = 5; }
-        else if (input[0] == 'r' || input[0] == 'R') { verb = L"restart"; skip = 8; }
-        else                                          { verb = L"task";    skip = 5; }
+        if (input[0] == 'k' || input[0] == 'K')      { verb = L"kill";     skip = 5; }
+        else if (input[0] == 'r' || input[0] == 'R') { verb = L"relaunch"; skip = 9; }
+        else                                         { verb = L"task";     skip = 5; }
         MultiByteToWideChar(CP_UTF8, 0, input + skip, -1, arg, MAX_PATH);
         lowerW(arg);
         etFill(verb, arg);
@@ -484,7 +486,7 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
     }
     if (_strnicmp(input, "kill", (int)lstrlenA(input)) == 0) { etFill(L"kill", NULL); return g_etCount; }
     if (_strnicmp(input, "task", (int)lstrlenA(input)) == 0) { etFill(L"task", NULL); return g_etCount; }
-    if (_strnicmp(input, "restart", (int)lstrlenA(input)) == 0) { etFill(L"restart", NULL); return g_etCount; }
+    if (_strnicmp(input, "relaunch", (int)lstrlenA(input)) == 0) { etFill(L"relaunch", NULL); return g_etCount; }
     if (_strnicmp(input, "top", (int)lstrlenA(input)) == 0) {
         etAdd("top");
         etAdd("top 5");
@@ -510,11 +512,11 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
     if     (_strnicmp(str, "kill",    4) == 0 && (!str[4]  || isspace((unsigned char)str[4])))  { verb = 0; vlen = 4; }
     else if(_strnicmp(str, "task",    4) == 0 && (!str[4]  || isspace((unsigned char)str[4])))  { verb = 1; vlen = 4; }
     else if(_strnicmp(str, "top",     3) == 0 && (!str[3]  || isspace((unsigned char)str[3])))  { verb = 2; vlen = 3; }
-    else if(_strnicmp(str, "restart", 7) == 0 && (!str[7]  || isspace((unsigned char)str[7])))  { verb = 3; vlen = 7; }
+    else if(_strnicmp(str, "relaunch", 8) == 0 && (!str[8]  || isspace((unsigned char)str[8])))  { verb = 3; vlen = 8; }
     else return ex;
     p = str + vlen;
     while (*p == ' ') ++p;
-    if (!*p && verb != 2) return ex;                      /* bare kill/task/restart: not ours */
+    if (!*p && verb != 2) return ex;                      /* bare kill/task/relaunch: not ours */
     lstrcpynA(a, p, sizeof(a));
     {   /* trim trailing spaces */
         size_t n = strlen(a);
@@ -526,7 +528,7 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
     if      (verb == 0) doKill(argW);
     else if (verb == 1) doTask(argW);
     else if (verb == 2) doTop(argW);
-    else                doRestart(argW);
+    else                doRelaunch(argW);
     if (!g_result[0]) return ex;
     ex.run = 1;
     ex.con_text = g_result;

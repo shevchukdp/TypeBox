@@ -60,9 +60,24 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.30.1)
+## Working today (v0.31.0)
 
-Everything below ships in **[v0.30.1](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.30.0 opened the plugin wave; v0.30.1 split the `weather`/`w` command words after our release-bytes gate caught nettools shadowing weather.dll). The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
+Everything below ships in **[v0.31.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.30 opened the plugin wave, v0.30.1 split the `weather`/`w` command words after our release-bytes gate caught nettools shadowing weather.dll, v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law). The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Wake-on-LAN + the word law (v0.31)**
+
+- **`wol`** (plugin #19, RI3 #238) — `wol <MAC|name> [host [port]]` sends the magic packet
+  (6×FF + 16×MAC over UDP broadcast, ws2_32 only): MAC accepts `AA:BB:CC:DD:EE:FF`,
+  `AA-BB-…`, `AA.BB.CC.DD.EE.FF` or plain `AABBCCDDEEFF`; `[Wol]` INI gives named presets
+  (`gatepc = AA:BB:CC:DD:EE:FF 192.168.1.255 7`), `Host/Port/Repeat` defaults and
+  `wol list` — pure INI, zero network until you type the line
+- **Power-family safety, same contract as `off`**: under `TYPEBOX_HEADLESS=1` the packet is
+  NEVER put on the wire — the answer is `wol: [headless] would send magic packet to
+  AA:BB:CC:DD:EE:FF via 255.255.255.255:9 (3 packets)`, so test suites can never wake anything
+- **The word law** — every command word across the host and all 19 plugins is globally unique,
+  asserted by `tools/audit-words.ps1` as a hard build gate (the v0.30.0 shadowing bug is now
+  structurally impossible); first act of the law: taskman's `restart <proc>` became
+  **`relaunch`** — `restart` belongs to `off.dll` alone (off.dll keeps the reboot word)
 
 **Four new plugins (v0.30)**
 
@@ -212,7 +227,7 @@ The full backlog of 50+ vetted ideas lives in [docs/ROADMAP-50.md](docs/ROADMAP-
 **Install:** download `TypeBox-<version>-windows-x64.zip` from the
 [releases page](https://github.com/shevchukdp/TypeBox/releases), unzip anywhere, run
 `TypeBox.exe`. No installer, no registry, no `%APPDATA%` — the portable `Plugins\` with all
-**18 plugins** ships inside the zip, ready to use.
+**19 plugins** ships inside the zip, ready to use.
 
 **Update:** type `/update` in the console — the one command that talks to the release API (never
 at startup, never on a timer unless you flip `[Update] CheckOnStart`). It reports the latest
@@ -228,18 +243,22 @@ The schema is compatible with the legacy `TypeAndRun.ini` (sections `[HotKey]`, 
 
 ## Plugins
 
-**18 plugins ship ready-to-use** in the portable `Plugins\` folder, built on the
+**19 plugins ship ready-to-use** in the portable `Plugins\` folder, built on the
 **TypeAndRun-compatible ABI** (`Load/Unload/GetInfo/GetCount/GetString/RunString → TExec`) —
 legacy TypeAndRun plugin DLLs drop in too:
 
 **units** (`conv 10 km mi`, `hex 255`→`FF`) · **codec** (`b64enc`, `urlenc`, `hexdec`) ·
 **vol** (`vol + / mute / 3`) · **cliphist** (`clip ring`, `clip type`, `clip pin`) ·
-**taskman** (`task chrome`, `kill notepad`, `top` live CPU ranking, `restart notepad`) ·
+**taskman** (`task chrome`, `kill notepad`, `top` live CPU ranking, `relaunch notepad`) ·
 **winlist** (`win notepad` raises the window) · **pwgen** (`pw 20 s`) ·
 **timer** (`timer 25m tea`, `sw` stopwatch with a topmost mini label) ·
 **sysmon** (`cpu`, `ram`, `batt`, `disk`, `sys`) · **util** (`ts`, `slug`, `sha256`) ·
 **note** (`note`, `note +`, `note list`) · **yt** (`yt <query>`, `yt <n>`) ·
 **weather** (`weather <city>` — now + today/tomorrow, keyless Open-Meteo) ·
+**nettools** (`ip`, `w <city>`, `dns`, `netinfo`, `ping`) ·
+**off** (`off now`, `restart 30`, `off sleep|hibernate|logoff` — dry-run under headless) ·
+**todo** (`todo buy milk tomorrow 18:00`) · **json** (`json fmt`, `json get a.b[2]`, `jwt`) ·
+**wol** (`wol <MAC|name> [host [port]]` magic packet, `[Wol]` presets — dry-run under headless) ·
 plus the calculator example ([`examples/plugin_calc/calc.c`](examples/plugin_calc/calc.c)).
 
 Settings → Plugins is a **checklist**: click any plugin to turn it off (or back on), persisted to
@@ -256,7 +275,7 @@ each checked against the host implementation.
 ## Building
 
 The canonical build (what CI runs on `windows-latest`): CMake + Ninja, MSVC or MinGW-w64 —
-it builds `TypeBox.exe` **and all 18 plugin DLLs**:
+it builds `TypeBox.exe` **and all 19 plugin DLLs**:
 
 ```
 cmake -S . -B build -G "Ninja" -DCMAKE_BUILD_TYPE=Release

@@ -3,6 +3,34 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.31.0] - 2026-11-18
+
+### Wake-on-LAN + the word law
+
+![wol and the 19-plugin roster](docs/screenshots/plugins-wave-19.png)
+
+- **wol.dll** (gallery #19, RI3 #238) - `wol <MAC|name> [host [port]]` fires the magic packet
+  (6x FF + 16x MAC over UDP broadcast, ws2_32 only). MAC spelling is yours: `AA:BB:CC:DD:EE:FF`,
+  `AA-BB-...`, `AA.BB.CC.DD.EE.FF` or `AABBCCDDEEFF`. Named presets live in `[Wol]`
+  (`gatepc = AA:BB:CC:DD:EE:FF 192.168.1.255 7` - target host/port optional per row),
+  `Host`/`Port`/`Repeat` set the defaults, `wol list` shows the fleet (pure INI, zero network).
+  **Headless = dry-run always**, same contract as `off`: `wol: [headless] would send magic
+  packet to AA:BB:CC:DD:EE:FF via 255.255.255.255:9 (3 packets)` - suites cannot wake anything.
+  The INI is parsed by the plugin itself (BOM-aware, mtime-cached rows) - immune to the
+  kernel32 profile cache after external edits.
+- **taskman 1.2: `restart` -> `relaunch`** - the roster audit found taskman's `restart <proc>`
+  colliding with off.dll's reboot `restart`; the word law keeps `restart` with `off.dll`
+  (alphabetics already made it win), taskman renamed its verb (answers now say
+  `relaunch: <proc> - relaunched N process(es)`).
+- **The word law is now machine-enforced**: `tools/audit-words.ps1` parses every example
+  plugin's `k[]`/`GetString` words plus the host's own words (`pos`, `stayawake`) and FAILS
+  the build on any collision - it runs inside `build-plugins`, CI and the release gate, so
+  the v0.30.0 shadowing class of bug is structurally impossible.
+- `test-v0310`: 26 assertions - dry-run matrix (4 MAC spellings, presets, per-row target,
+  line overrides, Repeat=5), ET rows, the routing split (`restart` reaches off.dll,
+  `relaunch` reaches taskman.dll, both proven via log lines), checklist 19 rows, wol
+  toggle dead/alive; the suite is additionally zero-network.
+
 ## [0.30.1] - 2026-11-18
 
 ### Patch: the weather word split (release-bytes gate caught it)
