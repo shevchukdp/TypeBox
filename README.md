@@ -60,9 +60,22 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.28.0)
+## Working today (v0.29.0)
 
-Everything below ships in **[v0.28.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release. The project evolves in focused waves (v0.25 quick capture + plugin control, v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
+Everything below ships in **[v0.29.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release. The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
+
+**Sharp on any monitor (v0.29)**
+
+- **Per-Monitor V2 DPI** — drag the console between displays with different scaling: geometry,
+  fonts, the status strip, the drop-down, the settings dialog and plugin windows all re-scale
+  live through `WM_DPICHANGED`; on Win8.1 it degrades to Per-Monitor, on Win7/8 to the old
+  system awareness — same binary, no manifest games
+- **Your INI never changes with your monitor** — every pixel value (`[Show]`, `[Positions]`,
+  `[Font] Size`, the strip, the settings dialog) is 96-logical and scaled per window with
+  `MulDiv`, so `Width=720` means 720 logical px at 100% and 1080 crisp physical px at 150%
+- **Honest gates for it** — a windowless `--dpi-math` table (exact MulDiv values 96..240) and
+  synthetic DPI-change injection in the harness prove the real code path on a 100%-scaled
+  test machine, pixel-exact round trips included (`test-v0290`: 28 assertions)
 
 **The power-user console (v0.27)**
 

@@ -54,6 +54,20 @@ typedef struct {
 
 static HWND   g_mainWnd = NULL;     /* host console window                     */
 static HWND   g_noteWnd = NULL, g_noteEdit = NULL;
+/* v0.29 DPI wave: the editor keeps its own dpi (driven by WM_DPICHANGED's
+ * wParam, so the suites can exercise the math on a 96-DPI machine).
+ * Geometry below is 96-logical and scaled through Scp(). */
+static int    g_noteDpi = 96;
+static HFONT  g_noteFont = NULL;
+static HWND   g_noteBtn1 = NULL, g_noteBtn2 = NULL;
+typedef UINT (WINAPI *NoteGDFW)(HWND);
+static int DpiOf(HWND h) {
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    NoteGDFW f = u ? (NoteGDFW)(void*)GetProcAddress(u, "GetDpiForWindow") : NULL;
+    int d = f && h ? (int)f(h) : 96;
+    return (d >= 96 && d <= 480) ? d : 96;
+}
+static int Scp(int dpi, int v) { return MulDiv(v, dpi >= 96 ? dpi : 96, 96); }
 static WNDPROC g_oldEditProc = NULL;
 static wchar_t g_folder[MAX_PATH] = L"";
 static BOOL   g_prefill = TRUE;     /* [Notes] Prefill: seed editor from clipboard */
@@ -327,14 +341,51 @@ static LRESULT CALLBACK NoteEditProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return CallWindowProcW(g_oldEditProc, h, m, w, l);
 }
 
+static void noteApplyFont(void) {
+    HFONT nf = CreateFontW(-Scp(g_noteDpi, 12), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           VARIABLE_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (!nf) return;
+    if (g_noteFont) DeleteObject(g_noteFont);
+    g_noteFont = nf;
+    if (g_noteEdit) SendMessageW(g_noteEdit, WM_SETFONT, (WPARAM)nf, TRUE);
+    if (g_noteBtn1) SendMessageW(g_noteBtn1, WM_SETFONT, (WPARAM)nf, TRUE);
+    if (g_noteBtn2) SendMessageW(g_noteBtn2, WM_SETFONT, (WPARAM)nf, TRUE);
+}
+static void noteRelayout(void) {                /* children follow the dpi  */
+    int W = Scp(g_noteDpi, 520), H = Scp(g_noteDpi, 360);
+    if (g_noteEdit) MoveWindow(g_noteEdit, Scp(g_noteDpi, 8), Scp(g_noteDpi, 8),
+                               W - Scp(g_noteDpi, 24), H - Scp(g_noteDpi, 92), TRUE);
+    if (g_noteBtn1) MoveWindow(g_noteBtn1, W - Scp(g_noteDpi, 200), H - Scp(g_noteDpi, 100),
+                               Scp(g_noteDpi, 180), Scp(g_noteDpi, 26), TRUE);
+    if (g_noteBtn2) MoveWindow(g_noteBtn2, W - Scp(g_noteDpi, 200), H - Scp(g_noteDpi, 66),
+                               Scp(g_noteDpi, 180), Scp(g_noteDpi, 26), TRUE);
+}
+
 static LRESULT CALLBACK NoteProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+    case WM_DPICHANGED: {                                 /* v0.29 PMv2 wave */
+        int d = (int)LOWORD(w);
+        RECT* pr = (RECT*)l;
+        g_noteDpi = (d >= 96 && d <= 480) ? d : 96;
+        if (pr) SetWindowPos(h, NULL, pr->left, pr->top,
+                             pr->right - pr->left, pr->bottom - pr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+        noteApplyFont();
+        noteRelayout();
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    }
     case WM_COMMAND:
         if (LOWORD(w) == 1) { saveEditor(); return 0; }          /* Save button  */
         if (LOWORD(w) == 2) { closeEditor(); return 0; }         /* Cancel       */
         break;
     case WM_CLOSE:
         closeEditor();
+        return 0;
+    case WM_DESTROY:
+        if (g_noteFont) { DeleteObject(g_noteFont); g_noteFont = NULL; }
+        g_noteBtn1 = g_noteBtn2 = NULL;
         return 0;
     }
     return DefWindowProcW(h, m, w, l);
@@ -370,7 +421,9 @@ static void openEditor(void) {
         HMODULE self = NULL;
         WNDCLASSW wc;
         RECT rc;
-        int x, y, W = 520, H = 360;
+        int x, y, W = 520, H = 360, w, hh;
+        g_noteDpi = DpiOf(g_mainWnd);                        /* v0.29 */
+        w = Scp(g_noteDpi, W); hh = Scp(g_noteDpi, H);
         GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
                            GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                            (LPCWSTR)&openEditor, &self);
@@ -383,38 +436,39 @@ static void openEditor(void) {
         RegisterClassW(&wc);
 
         SystemParametersInfoW(SPI_GETWORKAREA, 0, &rc, 0);
-        x = (rc.right - W) / 2; y = (rc.bottom - H) / 3;
+        x = (rc.right - w) / 2; y = (rc.bottom - hh) / 3;
         if (Headless()) { x = -32000; y = -32000; }
 
         g_noteWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_APPWINDOW, NOTE_CLS,
                                     L"TypeBox note - Ctrl+Enter saves, Esc cancels",
                                     WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU |
                                     WS_THICKFRAME | WS_MINIMIZEBOX,
-                                    x, y, W, H, NULL, NULL, self, NULL);
+                                    x, y, w, hh, NULL, NULL, self, NULL);
         if (!g_noteWnd) return;
         g_noteEdit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                                      WS_CHILD | WS_VISIBLE | WS_VSCROLL |
                                      ES_MULTILINE | ES_WANTRETURN |
                                      ES_AUTOHSCROLL | WS_TABSTOP,
-                                     8, 8, W - 24, H - 92, g_noteWnd,
+                                     Scp(g_noteDpi, 8), Scp(g_noteDpi, 8),
+                                     w - Scp(g_noteDpi, 24), hh - Scp(g_noteDpi, 92), g_noteWnd,
                                      (HMENU)(INT_PTR)3, self, NULL);
         if (!g_noteEdit) { DestroyWindow(g_noteWnd); g_noteWnd = NULL; return; }
         g_oldEditProc = (WNDPROC)SetWindowLongPtrW(g_noteEdit, GWLP_WNDPROC,
                                                    (LONG_PTR)NoteEditProc);
         {
-            HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
             HWND b1, b2;
-            SendMessageW(g_noteEdit, WM_SETFONT, (WPARAM)f, TRUE);
-            b1 = CreateWindowExW(0, L"BUTTON", L"Save (Ctrl+Enter)",
+            g_noteBtn1 = b1 = CreateWindowExW(0, L"BUTTON", L"Save (Ctrl+Enter)",
                                  WS_CHILD | WS_VISIBLE | BS_DEFPUSHBUTTON,
-                                 W - 200, H - 100, 180, 26, g_noteWnd,
+                                 w - Scp(g_noteDpi, 200), hh - Scp(g_noteDpi, 100),
+                                 Scp(g_noteDpi, 180), Scp(g_noteDpi, 26), g_noteWnd,
                                  (HMENU)1, self, NULL);
-            b2 = CreateWindowExW(0, L"BUTTON", L"Cancel (Esc)",
+            g_noteBtn2 = b2 = CreateWindowExW(0, L"BUTTON", L"Cancel (Esc)",
                                  WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-                                 W - 200, H - 66, 180, 26, g_noteWnd,
+                                 w - Scp(g_noteDpi, 200), hh - Scp(g_noteDpi, 66),
+                                 Scp(g_noteDpi, 180), Scp(g_noteDpi, 26), g_noteWnd,
                                  (HMENU)2, self, NULL);
-            if (b1) SendMessageW(b1, WM_SETFONT, (WPARAM)f, TRUE);
-            if (b2) SendMessageW(b2, WM_SETFONT, (WPARAM)f, TRUE);
+            (void)b1; (void)b2;
+            noteApplyFont();                                 /* v0.29: scaled font + WM_SETFONT */
         }
         if (g_prefill) {                                 /* capture-first: clipboard seed */
             wchar_t* c = clipGet();

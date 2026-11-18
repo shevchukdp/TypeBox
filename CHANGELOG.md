@@ -3,6 +3,38 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.29.0] - 2026-11-18
+
+![dpi](docs/screenshots/console-dpi.png)
+*The same console, the same INI, two scales: 100% and 150%. Every pixel in the config is
+96-logical now - TypeBox does the `MulDiv` for each monitor, text stays crisp everywhere.*
+
+### The sharp-screen wave (Per-Monitor V2)
+
+- **Per-Monitor V2 awareness** - set dynamically at startup (`SetProcessDpiAwarenessContext`,
+  falling back to Per-Monitor, then to plain `SetProcessDPIAware`): no manifest, and an old
+  Windows simply keeps the old behavior. Drag the console between a 100% and a 150% monitor -
+  it re-scales in real time (geometry, console font, the 20 px status strip and its lamps /
+  chips / clock, the drop-down) via `WM_DPICHANGED`, no restart.
+- **The INI is 96-logical everywhere** (the contract, now written into docs/CONFIG.md):
+  `[Show] Width/Height`, `[Positions]` presets, `[Font] Size`, the strip height, the
+  640×460 settings dialog, drop-down row heights - all scale by `MulDiv(v, windowDpi, 96)`
+  per window, so your config survives every monitor swap and every scale change.
+- **Settings dialog, plugin checklist, theme-studio preview card, `MkOn` control grid,
+  the font chooser and the font preview** all follow the tracked dpi (controls re-lay out
+  at the right metrics; checklist rows are dpi-driven because comctl measures them before
+  the scaled font lands).
+- **Plugins ride the same wave**: the clip ring, the note editor and the timer mini-window
+  rebuild their fonts on `WM_DPICHANGED` and adopt the system's proposed rect.
+- **Testable at 100% scaling** - the machine under test is 96 DPI, so the wave ships with
+  two honest gates: a windowless `TypeBox.exe --dpi-math` table (exact MulDiv values for
+  96..240, CI-friendly) and synthetic `WM_DPICHANGED` injection through the harness
+  (`tbtest dpichg <dpi>` / `fontinfo`), which re-enters the REAL handler with a
+  dpi-correct proposed rect. Chain 96→144→240→96 must round-trip pixel-exact.
+- Suite **test-v0290.ps1: 28/28** (boot log `dpi: per-monitor v2`, table vs PS-computed
+  MulDiv, rect round-trip ±2 px, font metrics ratio ≥1.4×, drop-down/settings/checklist
+  scaling, `pos center` at 150%); full regression **v0180..v0280 all green**.
+
 ## [0.28.0] - 2026-11-18
 
 ![weather](docs/screenshots/console-weather.png)

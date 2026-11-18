@@ -2420,10 +2420,38 @@ static Anchor ClassifyAnchor(const std::wstring& lineRaw) {
     a.lamp = 2; a.labelId = STR_AN_UNKNOWN; return a;
 }
 
+// ---------------------------------------------------------------- Per-Monitor V2 DPI (v0.29)
+// The contract (docs/CONFIG.md): every pixel value that lives in the INI -
+// [Show] Width/Height, [Positions] presets, [Font] Size, the 20px strip - is
+// 96-DPI LOGICAL. Each top-level window keeps its own dpi, initialized from
+// GetDpiForWindow and updated from WM_DPICHANGED's wParam (the message, not
+// a re-query, drives the number - which is also how the suites exercise the
+// scaling math on a 96-DPI machine). On Win7/8/8.1 PMv2 is unavailable, the
+// dpi stays 96 and every Sc() below is the identity: old behavior preserved.
+static int g_mainDpi = 96, g_ddDpi = 96, g_setDpi = 96;
+static const wchar_t* g_dpiMode = L"system aware";
+typedef BOOL (WINAPI* SetDpiCtxFn)(HANDLE);        // DPI_AWARENESS_CONTEXT is a HANDLE
+typedef UINT (WINAPI* GetDpiForWindow_t)(HWND);
+static GetDpiForWindow_t pGetDpiForWindow = nullptr;
+static void DpiInit() {
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    if (u) pGetDpiForWindow = (GetDpiForWindow_t)GetProcAddress(u, "GetDpiForWindow");
+}
+static int WindowDpi(HWND h) {
+    if (pGetDpiForWindow && h) { UINT d = pGetDpiForWindow(h); if (d >= 96 && d <= 480) return (int)d; }
+    HDC dc = GetDC(h);
+    int d = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+    if (dc) ReleaseDC(h, dc);
+    return (d >= 96 && d <= 480) ? d : 96;
+}
+static int Sc(int dpi, int v) { return MulDiv(v, dpi >= 96 ? dpi : 96, 96); }
+
 // ---------------------------------------------------------------- UI
 
 static void ApplyFont(HWND edit) {
-    HFONT f = CreateFontW(-MulDiv(g_set.fontSize, 96, 72), 0, 0, 0,
+    HWND root = GetAncestor(edit, GA_ROOT);
+    int d = (edit == g_edit) ? g_mainDpi : (root ? WindowDpi(root) : 96);
+    HFONT f = CreateFontW(-MulDiv(MulDiv(g_set.fontSize, 96, 72), d, 96), 0, 0, 0,
         g_set.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
         OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
         FIXED_PITCH | FF_MODERN,
@@ -2457,18 +2485,20 @@ static bool g_posMoved = false;
 static RECT g_posRect = {};
 
 static void ShowBox(HWND mainWnd) {
+    // v0.29: [Show] px are 96-logical - scale them to THIS window's dpi
+    const int lw = Sc(g_mainDpi, g_set.width), lh = Sc(g_mainDpi, g_set.height);
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
     int x, y;
     if (g_set.x >= 0) x = g_set.x;
-    else              x = (wr.right - g_set.width) / 2;
+    else              x = (wr.right - lw) / 2;
     if (g_set.y >= 0 && !g_set.centerY) y = g_set.y;
-    else y = g_set.centerY ? (wr.bottom - g_set.height) / 3 : 100;
+    else y = g_set.centerY ? (wr.bottom - lh) / 3 : 100;
     if (!g_set.centerX) x = 0;
     if (g_set.dragMove && g_dragged) { x = g_dragX; y = g_dragY; }
     // v0.27.1: an active `pos` slot outranks everything (position AND size);
     // in headless mode the same rect is applied -32000 off both axes so the
     // human never sees it. Otherwise: [Show] geometry / the off-screen park.
-    int ww = g_set.width, hh = g_set.height;
+    int ww = lw, hh = lh;
     if (g_posMoved) { x = g_posRect.left; y = g_posRect.top;
                       ww = g_posRect.right; hh = g_posRect.bottom; }
 
@@ -2568,7 +2598,9 @@ static bool ApplyPosRect(HWND w, int x, int y, int ww, int hh) {
 }
 
 // FancyZones-flavoured vocabulary on the CURRENT monitor's work area.
-static bool SlotRect(const RECT& wa, const wchar_t* slot,
+// `dpi` scales the two INI-fed geometries (the `center` slot reuses the
+// 96-logical [Show] size); every other slot is pure work-area math.
+static bool SlotRect(const RECT& wa, const wchar_t* slot, int dpi,
                      int* x, int* y, int* w, int* h) {
     int Lp = wa.left, T = wa.top;
     int W = wa.right - wa.left, H = wa.bottom - wa.top;
@@ -2580,7 +2612,7 @@ static bool SlotRect(const RECT& wa, const wchar_t* slot,
     else if (!_wcsicmp(slot, L"tr"))      { *x=Lp+W/2;   *y=T;      *w=W-W/2;   *h=H/2;   }
     else if (!_wcsicmp(slot, L"bl"))      { *x=Lp;       *y=T+H/2;  *w=W/2;     *h=H-H/2; }
     else if (!_wcsicmp(slot, L"br"))      { *x=Lp+W/2;   *y=T+H/2;  *w=W-W/2;   *h=H-H/2; }
-    else if (!_wcsicmp(slot, L"center"))  { *w=g_set.width; *h=g_set.height;
+    else if (!_wcsicmp(slot, L"center"))  { *w=Sc(dpi, g_set.width); *h=Sc(dpi, g_set.height);
                                            *x=Lp+(W-*w)/2; *y=T+(H-*h)/2; }
     else if (slot[0]==L'q' && slot[1]>=L'1' && slot[1]<=L'4' && !slot[1+1]) {
         int n = slot[1]-L'1'; *w = W/4; if (n==3) *w = W-3*(W/4);
@@ -2631,7 +2663,7 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
             return EXC_PLUGIN;
         }
         int x, y, ww, hh;
-        if (SlotRect(mi.rcWork, rest.c_str(), &x, &y, &ww, &hh)) {
+        if (SlotRect(mi.rcWork, rest.c_str(), g_mainDpi, &x, &y, &ww, &hh)) {
             if (!ApplyPosRect(mainWnd, x, y, ww, hh))
                 { ShowAnswer(mainWnd, L"pos: SetWindowPos failed"); return EXC_PLUGIN; }
             g_posMoved = true;
@@ -2657,11 +2689,14 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
             EnumDisplayMonitors(NULL, NULL, MonWorkCb, (LPARAM)&mons);
             if (!mons.empty()) wa = mons[p[4] % (int)mons.size()];
         }
-        if (!ApplyPosRect(mainWnd, wa.left+p[0], wa.top+p[1], p[2], p[3]))
+        // [Positions] presets are 96-logical too (v0.29): scale x/y/w/h
+        int sx = Sc(g_mainDpi, p[0]), sy = Sc(g_mainDpi, p[1]);
+        int sw = Sc(g_mainDpi, p[2]), sh = Sc(g_mainDpi, p[3]);
+        if (!ApplyPosRect(mainWnd, wa.left+sx, wa.top+sy, sw, sh))
             { ShowAnswer(mainWnd, L"pos: SetWindowPos failed"); return EXC_PLUGIN; }
         g_posMoved = true;
         wchar_t msg[160];
-        wsprintfW(msg, L"pos: %s -> %d,%d %dx%d", rest.c_str(), wa.left+p[0], wa.top+p[1], p[2], p[3]);
+        wsprintfW(msg, L"pos: %s -> %d,%d %dx%d", rest.c_str(), wa.left+sx, wa.top+sy, sw, sh);
         LogInfo(L"pos: preset " + rest + L" applied");
         ShowAnswer(mainWnd, msg);
         return EXC_PLUGIN;
@@ -2955,10 +2990,19 @@ static void PaintFrame(HDC dc, const RECT& rc) {
 // A 20px cozy strip at the bottom of the drop-down: mini ">_", alias/plugin
 // counts, EasyType + theme chips, sound / language / clock on the right.
 static const int SB_H = 20;
+// status strip height for the console (logical 20px scaled to the console dpi)
+static int SbH() { return Sc(g_mainDpi, SB_H); }
 static HFONT g_sbFont = nullptr;
+// (re)build the 96-logical 11px strip font at the console's current dpi
+static void RebuildSbFont() {
+    if (g_sbFont) { DeleteObject(g_sbFont); g_sbFont = nullptr; }
+    g_sbFont = CreateFontW(-Sc(g_mainDpi, 11), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           VARIABLE_PITCH | FF_DONTCARE, L"Segoe UI");
+}
 
-static void PaintStatusBar(HDC dc, RECT rc) {
-    rc.top = rc.bottom - SB_H;
+static void PaintStatusBar(HDC dc, RECT rc, int dpi) {
+    rc.top = rc.bottom - Sc(dpi, SB_H);
     HBRUSH b = CreateSolidBrush(MixColor(g_effBg, RGB(0, 0, 0), 12));
     FillRect(dc, &rc, b);
     DeleteObject(b);
@@ -2971,7 +3015,7 @@ static void PaintStatusBar(HDC dc, RECT rc) {
 
     HFONT oldF = (HFONT)SelectObject(dc, g_sbFont);
     SetBkMode(dc, TRANSPARENT);
-    int y = rc.top + 3;
+    int y = rc.top + Sc(dpi, 3);
 
     // visual anchors: three physical lamps previewing what Enter will do
     static const COLORREF lit[3] = { RGB(0x98, 0xC9, 0x74),   // green: your own
@@ -2986,25 +3030,25 @@ static void PaintStatusBar(HDC dc, RECT rc) {
                                                     on ? 45 : 25));
         HPEN o2 = (HPEN)SelectObject(dc, p2);
         HBRUSH o3 = (HBRUSH)SelectObject(dc, b2);
-        Ellipse(dc, x, rc.top + 6, x + 8, rc.top + 14);
+        Ellipse(dc, x, rc.top + Sc(dpi, 6), x + Sc(dpi, 8), rc.top + Sc(dpi, 14));
         SelectObject(dc, o2); SelectObject(dc, o3);
         DeleteObject(b2); DeleteObject(p2);
-        x += 12;
+        x += Sc(dpi, 12);
     }
-    x += 4;
+    x += Sc(dpi, 4);
     if (g_anchor.lamp >= 0 && g_anchor.labelId >= 0 && g_anchor.lamp < 3) {
         const wchar_t* lbl = L(g_anchor.labelId);
         SIZE ls; GetTextExtentPoint32W(dc, lbl, (int)wcslen(lbl), &ls);
         SetTextColor(dc, MixColor(g_effBg, lit[g_anchor.lamp], 85));
         TextOutW(dc, x, y, lbl, (int)wcslen(lbl));
-        x += ls.cx + 14;
+        x += ls.cx + Sc(dpi, 14);
     } else {
-        x += 6;
+        x += Sc(dpi, 6);
     }
 
     SetTextColor(dc, g_accent);
     TextOutW(dc, x, y, L">_", 2);
-    x += 17;
+    x += Sc(dpi, 17);
     size_t plg = 0, plgOn = 0;
     for (auto& p : g_plugins) { ++plg; if (p.loaded) ++plgOn; }
     std::wstring left = std::to_wstring(g_aliases.size()) + L" al   \u25CF" +
@@ -3012,7 +3056,7 @@ static void PaintStatusBar(HDC dc, RECT rc) {
     SetTextColor(dc, ReadableMix(g_effBg, g_effFg, 62));          // contrast guard
     TextOutW(dc, x, y, left.c_str(), (int)left.size());
     SIZE sz; GetTextExtentPoint32W(dc, left.c_str(), (int)left.size(), &sz);
-    x += sz.cx + 12;
+    x += sz.cx + Sc(dpi, 12);
 
     const wchar_t* mode = g_set.easyType == 0 ? L(STR_ET_OFF)
                         : g_set.easyType == 1 ? L(STR_ET_EASY) : L(STR_ET_LINUX);
@@ -3025,12 +3069,13 @@ static void PaintStatusBar(HDC dc, RECT rc) {
         HPEN   cp = CreatePen(PS_SOLID, 1, MixColor(g_effBg, g_accent, 55));
         HPEN   o2 = (HPEN)SelectObject(dc, cp);
         HBRUSH o3 = (HBRUSH)SelectObject(dc, cb);
-        RoundRect(dc, x, rc.top + 2, x + cs.cx + 10, rc.top + SB_H - 3, 7, 7);
+        RoundRect(dc, x, rc.top + Sc(dpi, 2), x + cs.cx + Sc(dpi, 10),
+                  rc.top + Sc(dpi, SB_H) - Sc(dpi, 3), Sc(dpi, 7), Sc(dpi, 7));
         SelectObject(dc, o2); SelectObject(dc, o3);
         DeleteObject(cb); DeleteObject(cp);
         SetTextColor(dc, ReadableMix(chipBg, g_accent, 85));      // contrast guard
-        TextOutW(dc, x + 5, y, chip, (int)wcslen(chip));
-        x += cs.cx + 18;
+        TextOutW(dc, x + Sc(dpi, 5), y, chip, (int)wcslen(chip));
+        x += cs.cx + Sc(dpi, 18);
     }
 
     SYSTEMTIME st; GetLocalTime(&st);
@@ -3039,7 +3084,7 @@ static void PaintStatusBar(HDC dc, RECT rc) {
                          std::wstring(kLangs[g_langIdx].code) + L"  " + clk;
     SIZE rs; GetTextExtentPoint32W(dc, right.c_str(), (int)right.size(), &rs);
     SetTextColor(dc, ReadableMix(g_effBg, g_effFg, 62));          // clock: contrast guard
-    TextOutW(dc, rc.right - rs.cx - 8, y, right.c_str(), (int)right.size());
+    TextOutW(dc, rc.right - rs.cx - Sc(dpi, 8), y, right.c_str(), (int)right.size());
 
     SelectObject(dc, oldF);
 }
@@ -3304,7 +3349,10 @@ static void DdClose() {
 
 static void DdEnsureFont() {
     if (g_ddFont) return;
-    g_ddFont = CreateFontW(-MulDiv(g_set.fontSize, 96, 72) - 1, 0, 0, 0,
+    // v0.29: the dd font follows g_ddDpi (row height is derived from its
+    // metrics below, so the whole list scales with it)
+    g_ddFont = CreateFontW(-MulDiv(MulDiv(g_set.fontSize, 96, 72) + 1, g_ddDpi, 96),
+        0, 0, 0,
         g_set.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
         OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
         FIXED_PITCH | FF_MODERN, ConsoleFontSuggestion(g_set.fontName.c_str()));
@@ -3313,7 +3361,7 @@ static void DdEnsureFont() {
     TEXTMETRICW tm = {};
     GetTextMetricsW(dc, &tm);
     SelectObject(dc, old); ReleaseDC(nullptr, dc);
-    g_ddRowH = (int)tm.tmHeight + 8;
+    g_ddRowH = (int)tm.tmHeight + Sc(g_ddDpi, 8);   // v0.29: row padding rides the dpi too
 }
 
 static void PaintDropDown(HDC dc) {
@@ -3329,20 +3377,21 @@ static void PaintDropDown(HDC dc) {
     int vis = DdVisibleRows();
     for (int i = 0; i < vis; ++i) {
         int di = g_ddTop + i;
-        RECT rr = { 2, i * g_ddRowH + 2, rc.right - 2, (i + 1) * g_ddRowH + 2 };
+        RECT rr = { Sc(g_ddDpi, 2), i * g_ddRowH + Sc(g_ddDpi, 2),
+                    rc.right - Sc(g_ddDpi, 2), (i + 1) * g_ddRowH + Sc(g_ddDpi, 2) };
         if (rr.top >= rc.bottom) break;
         if (di == g_ddSel) {
             HBRUSH sb = CreateSolidBrush(MixColor(g_effBg, g_accent, 24));
             FillRect(dc, &rr, sb); DeleteObject(sb);
         }
         const std::wstring& it = g_ddItems[di];
-        int px = rr.left + 6, py = rr.top + 3;
+        int px = rr.left + Sc(g_ddDpi, 6), py = rr.top + Sc(g_ddDpi, 3);
         if (i < 9) {                                   // Alt+1..9 gutter (Flow/Listary)
             wchar_t dg = (wchar_t)(L'1' + i);
             SetTextColor(dc, MixColor(g_effBg, g_accent, 70));
             TextOutW(dc, px, py, &dg, 1);
             SIZE ds = { 0, 0 }; GetTextExtentPoint32W(dc, &dg, 1, &ds);
-            px += ds.cx + 6;
+            px += ds.cx + Sc(g_ddDpi, 6);
         }
         COLORREF hot = MixColor(g_effBg, g_accent, 88);           // matched chars
         COLORREF dim = MixColor(g_effBg, g_effFg, di == g_ddSel ? 100 : 72);
@@ -3367,6 +3416,17 @@ static void DdPick(bool run);   // used by the mouse handler below
 static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_ERASEBKGND:  return 1;                       // all painting in WM_PAINT
+    case WM_DPICHANGED: {                                 // v0.29 PMv2 wave
+        g_ddDpi = LOWORD(w) >= 96 ? (int)LOWORD(w) : 96;
+        if (g_ddFont) { DeleteObject(g_ddFont); g_ddFont = nullptr; }
+        DdEnsureFont();                                  // row height rides the new metrics
+        RECT* pr = (RECT*)l;
+        if (pr) SetWindowPos(h, HWND_TOPMOST, pr->left, pr->top,
+                             pr->right - pr->left, pr->bottom - pr->top,
+                             SWP_NOACTIVATE);
+        InvalidateRect(h, nullptr, TRUE);
+        return 0;
+    }
     case WM_PAINT: {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
@@ -3381,7 +3441,7 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         return TRUE;
     case WM_MOUSEMOVE: {
-        int idx = g_ddTop + ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
+        int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
         if (idx >= 0 && idx < (int)g_ddItems.size() && idx != g_ddSel) {
             g_ddSel = idx; g_ddSelKb = false;     // hover alone must not arm Enter
             DdSyncTitle();
@@ -3390,7 +3450,7 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return 0;
     }
     case WM_LBUTTONUP: {
-        int idx = g_ddTop + ((int)HIWORD(l) - 2) / (g_ddRowH > 0 ? g_ddRowH : 22);
+        int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
         if (idx >= 0 && idx < (int)g_ddItems.size()) { g_ddSel = idx; DdPick(true); }
         return 0;
     }
@@ -3542,6 +3602,7 @@ static void DdUpdate(HWND mainWnd) {
         if (!g_ddWnd) { LogInfo(L"drop-down: create failed"); g_set.dropDown = false; return; }
     }
     g_ddOwner = mainWnd;
+    g_ddDpi = g_mainDpi;          // v0.29: the dd rides right below the console
     g_ddItems = std::move(items);
     g_ddMarks = std::move(marks);
     g_ddB = b; g_ddE = e; g_ddSel = g_hsrch ? 0 : -1;
@@ -3550,7 +3611,7 @@ static void DdUpdate(HWND mainWnd) {
     DdEnsureFont();
     int rows = (int)g_ddItems.size();
     if (rows > g_set.ddLines) rows = g_set.ddLines;
-    int h = rows * g_ddRowH + 4;
+    int h = rows * g_ddRowH + Sc(g_ddDpi, 4);       // v0.29: dd total scales with rows
     RECT wr; GetWindowRect(mainWnd, &wr);
     RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     int x = wr.left, y = wr.bottom + 1;
@@ -3815,7 +3876,7 @@ static void UpdateFontPreview() {
     if (!g_fontPreview) return;
     static HFONT prev = nullptr;
     if (prev) { DeleteObject(prev); prev = nullptr; }
-    prev = CreateFontW(-MulDiv(g_draft.fontSize, 96, 72), 0, 0, 0,
+    prev = CreateFontW(-MulDiv(MulDiv(g_draft.fontSize, 96, 72), g_setDpi, 96), 0, 0, 0,
         g_draft.fontBold ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
         OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
         VARIABLE_PITCH, g_draft.fontName.c_str());
@@ -3825,8 +3886,12 @@ static void UpdateFontPreview() {
 
 static HWND MkOn(HWND host, const wchar_t* cls, const wchar_t* text, DWORD style,
                  int x, int y, int w, int h) {
+    // v0.29: every caller speaks 96-logical px; this one place scales them to
+    // the settings dialog's dpi (the only host Mk* builds into).
+    int sx = Sc(g_setDpi, x), sy = Sc(g_setDpi, y);
+    int sw = Sc(g_setDpi, w), sh = Sc(g_setDpi, h);
     HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style,
-                             x, y, w, h, host, nullptr,
+                             sx, sy, sw, sh, host, nullptr,
                              (HINSTANCE)(LONG_PTR)GetWindowLongPtrW(host, GWLP_HINSTANCE), nullptr);
     SendMessageW(c, WM_SETFONT, (WPARAM)g_uiFont, TRUE);
     return c;
@@ -4159,11 +4224,43 @@ static LRESULT CALLBACK PlChkProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, 
     return r;
 }
 
+static BOOL CALLBACK DdpiFontCb(HWND c, LPARAM f) {
+    SendMessageW(c, WM_SETFONT, (WPARAM)f, TRUE);
+    return TRUE;
+}
+
 static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+    case WM_DPICHANGED: {                         // v0.29: dialog follows its monitor
+        int d = LOWORD(w);
+        g_setDpi = (d >= 96 && d <= 480) ? d : 96;
+        RECT* pr = (RECT*)l;
+        if (pr) SetWindowPos(h, NULL, pr->left, pr->top,
+                             pr->right - pr->left, pr->bottom - pr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+        if (g_uiFont) DeleteObject(g_uiFont);      // pending-delete while still selected
+        NONCLIENTMETRICSW ncm = { sizeof(ncm) };
+        SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
+        LOGFONTW lfUI = ncm.lfMessageFont;
+        lfUI.lfHeight = MulDiv(lfUI.lfHeight, g_setDpi, 96);
+        g_uiFont = CreateFontIndirectW(&lfUI);
+        EnumChildWindows(h, DdpiFontCb, (LPARAM)g_uiFont);   // live controls get the new font;
+                                                             // full re-layout comes with the next open (MkOn)
+        InvalidateRect(h, nullptr, TRUE);
+        wchar_t mm[96];
+        wsprintfW(mm, L"dpi: settings -> %d (%d%%)", g_setDpi, MulDiv(g_setDpi, 100, 96));
+        LogInfo(mm);
+        return 0;
+    }
     case WM_MEASUREITEM: {                          // plugin checklist row height
         LPMEASUREITEMSTRUCT mi = (LPMEASUREITEMSTRUCT)l;
-        if (mi->itemID == (UINT)-1) { mi->itemHeight = 20; return TRUE; }
+        // comctl sends this ONCE at list creation (observed itemID 0, docs say
+        // -1) BEFORE the scaled g_uiFont arrives - so the height must come
+        // from the dpi, never from the not-yet-set font. Accept both ids.
+        if (mi->itemID == (UINT)-1 || mi->itemID == 0) {
+            mi->itemHeight = Sc(g_setDpi, 20);
+            return TRUE;
+        }
         break;
     }
     case WM_DRAWITEM: {
@@ -4176,10 +4273,10 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                                           ? COLOR_HIGHLIGHT : COLOR_WINDOW));
                 {
                     RECT cb = di->rcItem;
-                    cb.left += 6;
-                    cb.top += (cb.bottom - cb.top - 13) / 2;
-                    cb.bottom = cb.top + 13;
-                    cb.right  = cb.left + 13;
+                    cb.left += Sc(g_setDpi, 6);
+                    cb.top += (cb.bottom - cb.top - Sc(g_setDpi, 13)) / 2;
+                    cb.bottom = cb.top + Sc(g_setDpi, 13);
+                    cb.right  = cb.left + Sc(g_setDpi, 13);
                     DrawFrameControl(di->hDC, &cb, DFC_BUTTON,
                                      DFCS_BUTTON3STATE | (on ? DFCS_CHECKED : 0));
                 }
@@ -4193,7 +4290,8 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                                      ? GetSysColor(COLOR_HIGHLIGHTTEXT)
                                      : (on ? GetSysColor(COLOR_WINDOWTEXT)
                                            : GetSysColor(COLOR_GRAYTEXT)));
-                    TextOutW(di->hDC, di->rcItem.left + 28, di->rcItem.top + 2,
+                    TextOutW(di->hDC, di->rcItem.left + Sc(g_setDpi, 28),
+                             di->rcItem.top + Sc(g_setDpi, 2),
                              nm, lstrlenW(nm));
                 }
             }
@@ -4205,7 +4303,7 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             FillRect(di->hDC, &di->rcItem, b);
             DeleteObject(b);
             RECT bar = di->rcItem;
-            bar.bottom = bar.top + 4;
+            bar.bottom = bar.top + Sc(g_setDpi, 4);
             HBRUSH ab = CreateSolidBrush(t.accent);
             FillRect(di->hDC, &bar, ab);
             DeleteObject(ab);
@@ -4222,18 +4320,18 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             const wchar_t* fam = t.fontName.empty() ? L"Consolas" : t.fontName.c_str();
             int px = 16;
             if (t.fontSize > 0) { px = MulDiv(t.fontSize, 96, 72); if (px > 30) px = 30; if (px < 10) px = 10; }
-            HFONT f = CreateFontW(-px, 0, 0, 0,
+            HFONT f = CreateFontW(-Sc(g_setDpi, px), 0, 0, 0,
                                   (t.fontBold > 0) ? FW_BOLD : FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                                   OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY,
                                   FIXED_PITCH | FF_MODERN, fam);
             HFONT oldF = (HFONT)SelectObject(di->hDC, f);
             SetBkMode(di->hDC, TRANSPARENT);
-            int tx = di->rcItem.left + 12, ty = di->rcItem.top + 24;
+            int tx = di->rcItem.left + Sc(g_setDpi, 12), ty = di->rcItem.top + Sc(g_setDpi, 24);
             SetTextColor(di->hDC, t.accent);
             TextOutW(di->hDC, tx, ty, L">_", 2);
             std::wstring s = std::wstring(L" TypeBox \u2014 ") + t.name;
             SetTextColor(di->hDC, t.fg);
-            TextOutW(di->hDC, tx + 22, ty, s.c_str(), (int)s.size());
+            TextOutW(di->hDC, tx + Sc(g_setDpi, 22), ty, s.c_str(), (int)s.size());
             SelectObject(di->hDC, oldF);
             DeleteObject(f);
             return TRUE;
@@ -4341,13 +4439,13 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     CHOOSEFONTW cf = { sizeof(cf) };
                     LOGFONTW lf = {};
                     lstrcpynW(lf.lfFaceName, g_draft.fontName.c_str(), LF_FACESIZE);
-                    lf.lfHeight = -MulDiv(g_draft.fontSize, 96, 72);
+                    lf.lfHeight = -Sc(g_setDpi, MulDiv(g_draft.fontSize, 96, 72));
                     lf.lfWeight = g_draft.fontBold ? FW_BOLD : FW_NORMAL;
                     cf.lpLogFont = &lf; cf.Flags = CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT;
                     cf.hwndOwner = h;
                     if (ChooseFontW(&cf)) {
                         g_draft.fontName = lf.lfFaceName;
-                        g_draft.fontSize = MulDiv(-lf.lfHeight, 72, 96);
+                        g_draft.fontSize = MulDiv(-lf.lfHeight, 72, g_setDpi >= 96 ? g_setDpi : 96);
                         if (g_draft.fontSize < 6) g_draft.fontSize = 6;
                         if (g_draft.fontSize > 72) g_draft.fontSize = 72;
                         g_draft.fontBold = lf.lfWeight >= FW_BOLD;
@@ -4477,7 +4575,16 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     NONCLIENTMETRICSW ncm = { sizeof(ncm) };
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
-    g_uiFont = CreateFontIndirectW(&ncm.lfMessageFont);
+    // v0.29: the settings dialog lives at the console's tracked dpi (its owner;
+    // the system sends WM_DPICHANGED later if it lands on another monitor).
+    // Tracked, not re-queried, is also what lets the suites drive real scaling
+    // math on a 96-DPI machine via the synthetic dpichg path.
+    // Its message font is scaled the same 96-logical way, controls are laid
+    // out in logical px and scaled centrally in MkOn below.
+    g_setDpi = g_mainDpi;
+    LOGFONTW lfUI = ncm.lfMessageFont;
+    lfUI.lfHeight = MulDiv(lfUI.lfHeight, g_setDpi, 96);
+    g_uiFont = CreateFontIndirectW(&lfUI);
 
     RECT wa; SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
     int W = 640, H = 460;
@@ -4488,7 +4595,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     g_setWnd = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_TOPMOST,
         L"TypeBoxSettings", (std::wstring(L(STR_DLG_TITLE)) + L" — " + WVersion()).c_str(),
-        WS_CAPTION | WS_SYSMENU, sx, sy, W, H, mainWnd, nullptr, hInst, nullptr);
+        WS_CAPTION | WS_SYSMENU, sx, sy, Sc(g_setDpi, W), Sc(g_setDpi, H), mainWnd, nullptr, hInst, nullptr);
 
     g_setList = MkOn(g_setWnd, L"LISTBOX", L"", WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
                      8, 8, 140, 360);
@@ -4498,7 +4605,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     for (int i = 0; i < PG_COUNT; ++i) {
         g_setPage[i] = CreateWindowExW(0, L"TypeBoxPage", L"",
-            WS_CHILD | WS_CLIPCHILDREN, 156, 8, 470, 360, g_setWnd, nullptr, hInst, nullptr);
+            WS_CHILD | WS_CLIPCHILDREN, Sc(g_setDpi, 156), Sc(g_setDpi, 8),
+            Sc(g_setDpi, 470), Sc(g_setDpi, 360), g_setWnd, nullptr, hInst, nullptr);
         SendMessageW(g_setPage[i], WM_SETFONT, (WPARAM)g_uiFont, TRUE);
         SetWindowSubclass(g_setPage[i], PageProc, 6, 0);
     }
@@ -5354,10 +5462,65 @@ static void ReloadHotkey(HWND mainWnd) {
 static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
+        g_mainDpi = WindowDpi(hWnd);            // v0.29: this window's dpi (96 on Win7/8)
         g_edit = CreateWindowExW(0, L"EDIT", L"",
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
             0, 0, 0, 0, hWnd, nullptr, nullptr, nullptr);
         SetWindowSubclass(g_edit, EditProc, 1, (DWORD_PTR)hWnd);
+        return 0;
+    }
+    case WM_DPICHANGED: {                        // v0.29 PMv2: one console, any monitor
+        int d = LOWORD(wp);
+        g_mainDpi = (d >= 96 && d <= 480) ? d : 96;
+        RECT* pr = (RECT*)lp;
+        if (pr) SetWindowPos(hWnd, NULL, pr->left, pr->top,
+                             pr->right - pr->left, pr->bottom - pr->top,
+                             SWP_NOZORDER | SWP_NOACTIVATE);
+        RebuildSbFont();                         // strip font follows
+        ApplyFont(g_edit);                       // console font follows, relayout via WM_SIZE
+        if (g_ddWnd) {                           // an open drop-down re-scales too
+            g_ddDpi = g_mainDpi;
+            if (g_ddFont) { DeleteObject(g_ddFont); g_ddFont = nullptr; }
+            DdEnsureFont();
+            InvalidateRect(g_ddWnd, nullptr, TRUE);
+        }
+        InvalidateRect(hWnd, nullptr, TRUE);
+        wchar_t m[96];
+        wsprintfW(m, L"dpi: -> %d (%d%%)", g_mainDpi, MulDiv(g_mainDpi, 100, 96));
+        LogInfo(m);
+        return 0;
+    }
+    // v0.29 suite hooks (tbtest dpichg/fontinfo). A 96-DPI machine cannot get
+    // a real WM_DPICHANGED, so the suite injects the very same path: we build
+    // the proposed rect the way the system would (origin kept, size MulDiv'd)
+    // and re-enter the handler above. lParam is never dereferenced from
+    // another process - only the integer wParam crosses the boundary.
+    case WM_APP + 31: {
+        int d = (int)wp;
+        if (d < 96 || d > 480) return 0;
+        RECT cur, pr;
+        GetWindowRect(hWnd, &cur);
+        pr.left = cur.left; pr.top = cur.top;
+        // the system's proposed rect converts PHYSICAL size from the window's
+        // CURRENT dpi to the new one - the suite chain 96->144->240->96 must
+        // round-trip exactly, so the divisor is g_mainDpi, never 96.
+        pr.right  = cur.left + MulDiv(cur.right  - cur.left, d, g_mainDpi);
+        pr.bottom = cur.top  + MulDiv(cur.bottom - cur.top,  d, g_mainDpi);
+        return SendMessageW(hWnd, WM_DPICHANGED, MAKEWPARAM(d, d), (LPARAM)&pr);
+    }
+    case WM_APP + 32: {
+        HFONT f = g_edit ? (HFONT)SendMessageW(g_edit, WM_GETFONT, 0, 0) : nullptr;
+        if (!f) return 0;
+        HDC dc = GetDC(hWnd);
+        HFONT old = (HFONT)SelectObject(dc, f);
+        TEXTMETRICW tm = {};
+        GetTextMetricsW(dc, &tm);
+        SelectObject(dc, old);
+        ReleaseDC(hWnd, dc);
+        wchar_t m[128];
+        wsprintfW(m, L"fontinfo: tmHeight=%d tmAscent=%d dpi=%d",
+                  (int)tm.tmHeight, (int)tm.tmAscent, g_mainDpi);
+        LogInfo(m);
         return 0;
     }
     case WM_SIZE: {
@@ -5365,9 +5528,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         // height follows the font (UX A4: a fixed 24 clipped the 18pt glyphs)
         // v0.15: a custom theme may draw a bw-px frame -> the edit sits inside it
         int bw = g_borderW > 0 ? g_borderW : 0;
-        int above = (int)HIWORD(lp) - SB_H - bw;
-        if (above < 16) above = 16;
-        int eh = 24;
+        int above = (int)HIWORD(lp) - SbH() - bw;
+        if (above < Sc(g_mainDpi, 16)) above = Sc(g_mainDpi, 16);
+        int eh = Sc(g_mainDpi, 24);
         if (HFONT f = (HFONT)SendMessageW(g_edit, WM_GETFONT, 0, 0)) {
             HDC dc = GetDC(hWnd);
             HFONT old = (HFONT)SelectObject(dc, f);
@@ -5383,7 +5546,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == 1 && g_visible) HideBox(hWnd);   // [Show] AutoHide
         else if (wp == 2) {                        // clock: refresh the strip
             RECT rc; GetClientRect(hWnd, &rc);
-            rc.top = rc.bottom - SB_H;
+            rc.top = rc.bottom - SbH();
             if (g_visible) InvalidateRect(hWnd, &rc, TRUE);
         }
         return 0;
@@ -5392,7 +5555,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = BeginPaint(hWnd, &ps);
         RECT rc; GetClientRect(hWnd, &rc);
         if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
-        if (g_sbFont) PaintStatusBar(dc, rc);
+        if (g_sbFont) PaintStatusBar(dc, rc, g_mainDpi);
         PaintFrame(dc, rc);                     // v0.15 custom-theme frame on top
         EndPaint(hWnd, &ps);
         return 0;
@@ -5401,7 +5564,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         HDC dc = (HDC)wp;
         RECT rc; GetClientRect(hWnd, &rc);
         if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
-        if (g_sbFont) PaintStatusBar(dc, rc);
+        if (g_sbFont) PaintStatusBar(dc, rc, g_mainDpi);
         PaintFrame(dc, rc);
         return 0;
     }
@@ -5434,7 +5597,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             ScreenToClient(hWnd, &cp);
             RECT rc; GetClientRect(hWnd, &rc);
             if (cp.x >= 0 && cp.x <= rc.right &&
-                cp.y >= rc.bottom - SB_H && cp.y < rc.bottom)
+                cp.y >= rc.bottom - SbH() && cp.y < rc.bottom)
                 return (LRESULT)HTCAPTION;
         }
         break;
@@ -5601,7 +5764,23 @@ static std::wstring SecondInstanceArgs() {
 }
 
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
-    SetProcessDPIAware();
+    // v0.29 wave: Per-Monitor V2 (Win10 1703+), plain PM (Win8.1+), else the
+    // old system awareness. Dynamic import on purpose: no manifest, and a
+    // missing export simply falls through to the previous behavior.
+    {
+        HMODULE u = LoadLibraryW(L"user32.dll");
+        SetDpiCtxFn f = u ? (SetDpiCtxFn)GetProcAddress(u, "SetProcessDpiAwarenessContext") : nullptr;
+        bool pm2 = false, pm = false;
+        if (f) {
+            pm2 = f((HANDLE)-4) != 0;                       // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+            if (!pm2) pm = f((HANDLE)-3) != 0;              // ..._PER_MONITOR_AWARE
+        }
+        if (pm2)       g_dpiMode = L"per-monitor v2";
+        else if (pm)   g_dpiMode = L"per-monitor";
+        else         { SetProcessDPIAware(); g_dpiMode = L"system aware"; }
+        if (u) FreeLibrary(u);   // user32 stays loaded anyway (we use it forever)
+    }
+    DpiInit();
     DetectHeadless();   // v0.27: suites set TYPEBOX_HEADLESS=1 so nothing of this
                         // run can touch the human at the keyboard
 
@@ -5612,6 +5791,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
         bool wantVersion = false;
         bool wantCheckI18n = false;
+        bool wantDpiMath = false;
         for (int i = 1; i < argc; ++i)
             if (_wcsicmp(argv[i], L"--version") == 0 || _wcsicmp(argv[i], L"/version") == 0)
                 wantVersion = true;
@@ -5620,6 +5800,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 g_testSettings = true;
             if (_wcsicmp(argv[i], L"--check-i18n") == 0)
                 wantCheckI18n = true;
+            if (_wcsicmp(argv[i], L"--dpi-math") == 0)
+                wantDpiMath = true;
         }
         if (argv) LocalFree(argv);
         // CI gate (v0.13.1): dump the CURRENT language pack's compiled literals to
@@ -5656,6 +5838,36 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 GetCurrentDirectoryW(MAX_PATH, cwd);
                 tryWrite(std::wstring(cwd) + L"\\i18n-check.txt");
             }
+            return 0;
+        }
+        if (wantDpiMath) {
+            // v0.29 CI/suite gate: proves the PMv2 scaling math (the very Sc()/
+            // MulDiv() the window code uses) at every supported dpi, windowless
+            // and deterministic - same in-process pattern as --check-i18n.
+            g_iniPath = ExeDir() + L"TypeBox.ini";
+            LoadSettings();
+            static const int ds[] = { 96, 120, 144, 168, 192, 216, 240 };
+            std::wstring out = L"dpi-math mode=" + std::wstring(g_dpiMode) + L"\r\n";
+            for (int di = 0; di < 7; ++di) {
+                int d = ds[di];
+                out += L"dpi=" + std::to_wstring(d) +
+                    L" show=" + std::to_wstring(Sc(d, 720)) + L"x" + std::to_wstring(Sc(d, 56)) +
+                    L" strip=" + std::to_wstring(Sc(d, 20)) +
+                    L" sbFont=" + std::to_wstring(MulDiv(11, d, 96)) +
+                    L" font=" + std::to_wstring(MulDiv(MulDiv(g_set.fontSize, 96, 72), d, 96)) +
+                    L"\r\n";
+            }
+            out += L"dpi-math OK\r\n";
+            std::wstring p = ExeDir() + L"dpi-math.txt";
+            HANDLE f = CreateFileW(p.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (f != INVALID_HANDLE_VALUE) {
+                std::string u8 = ToUtf8(out);
+                DWORD wr = 0;
+                WriteFile(f, u8.data(), (DWORD)u8.size(), &wr, nullptr);
+                CloseHandle(f);
+            }
+            LogInfo(L"dpi-math: table written (mode " + std::wstring(g_dpiMode) + L")");
             return 0;
         }
         if (wantVersion) {
@@ -5728,9 +5940,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         0, 0, g_set.width, g_set.height, nullptr, nullptr, hInst, nullptr);
     if (!mainWnd) return 1;
 
-    g_sbFont = CreateFontW(-11, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
-                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
-                           VARIABLE_PITCH | FF_DONTCARE, L"Segoe UI");
+    RebuildSbFont();                          // v0.29: 11 logical px @ console dpi
     ApplyThemeVisual();
     ApplyFont(g_edit);
     CallPluginsLoad(mainWnd);
@@ -5745,6 +5955,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 std::to_wstring(g_aliases.size()) + L" aliases, " +
                 std::to_wstring(g_plugins.size()) + L" plugins, " +
                 std::to_wstring(enabled) + L" enabled");
+        LogInfo(L"dpi: " + std::wstring(g_dpiMode) + L", console " +
+                std::to_wstring(g_mainDpi) + L" (window dpi)");
         if (!g_pathDirs.empty() || !g_envVars.empty())
             LogInfo(L"own PATH: " + std::to_wstring(g_pathDirs.size()) +
                     L" folders, variables: " + std::to_wstring(g_envVars.size()));

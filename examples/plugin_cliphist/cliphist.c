@@ -88,6 +88,18 @@ static HWND  g_ringWnd = NULL, g_ringList = NULL;
 static DWORD g_ringShown = 0;                   /* tick: WA_INACTIVE grace     */
 static WNDPROC g_listOld = NULL;                  /* listbox subclass backup  */
 static HFONT   g_ringFont = NULL;
+/* v0.29 DPI wave: the ring keeps its own dpi (WM_DPICHANGED wParam drives it,
+ * which is also how the suites exercise the math on a 96-DPI machine).
+ * All ring geometry below is 96-logical and scaled through Scp(). */
+static int     g_ringDpi = 96;
+typedef UINT (WINAPI *RingGDFW)(HWND);
+static int DpiOf(HWND h) {
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    RingGDFW f = u ? (RingGDFW)(void*)GetProcAddress(u, "GetDpiForWindow") : NULL;
+    int d = f && h ? (int)f(h) : 96;
+    return (d >= 96 && d <= 480) ? d : 96;
+}
+static int Scp(int dpi, int v) { return MulDiv(v, dpi >= 96 ? dpi : 96, 96); }
 static HBRUSH  g_ringBgBrush = NULL;              /* cozy-dark list background*/
 
 static void openRing(void);                       /* defined with the ring    */
@@ -638,9 +650,28 @@ static LRESULT CALLBACK RingListProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 
 static LRESULT CALLBACK RingProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
+    case WM_DPICHANGED: {                                 /* v0.29 PMv2 wave */
+        int d = (int)LOWORD(w);
+        RECT* pr = (RECT*)l;
+        g_ringDpi = (d >= 96 && d <= 480) ? d : 96;
+        {   /* 96-logical 12px list font rebuilt at the new scale */
+            HFONT nf = CreateFontW(-Scp(g_ringDpi, 12), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                                   OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                                   CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+            if (nf) {
+                if (g_ringFont) DeleteObject(g_ringFont);
+                g_ringFont = nf;
+                if (g_ringList) SendMessageW(g_ringList, WM_SETFONT, (WPARAM)nf, TRUE);
+            }
+        }
+        if (pr) SetWindowPos(h, HWND_TOPMOST, pr->left, pr->top,
+                             pr->right - pr->left, pr->bottom - pr->top, SWP_NOACTIVATE);
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    }
     case WM_MEASUREITEM: {
         MEASUREITEMSTRUCT* mi = (MEASUREITEMSTRUCT*)l;
-        mi->itemHeight = 24;
+        mi->itemHeight = Scp(g_ringDpi, 24);
         return TRUE;
     }
     case WM_DRAWITEM: {
@@ -660,7 +691,7 @@ static LRESULT CALLBACK RingProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         DeleteObject(bg);
         txt[0] = 0;
         SendMessageW(di->hwndItem, LB_GETTEXT, di->itemID, (LPARAM)txt);
-        r.left += 8;
+        r.left += Scp(g_ringDpi, 8);
         DrawTextW(di->hDC, txt, -1, &r, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_LEFT);
         return TRUE;
     }
@@ -697,9 +728,11 @@ static void openRing(void) {
     if (!g_msgWnd) return;
     closeRing();
     SystemParametersInfoW(SPI_GETWORKAREA, 0, &wa, 0);
+    g_ringDpi = DpiOf(g_mainWnd);              /* v0.29: start on the console's dpi */
+    wdt = Scp(g_ringDpi, 560);
     rows = g_count ? g_count : 1;
     if (rows > 12) rows = 12;
-    hgt = rows * 24 + 8;
+    hgt = Scp(g_ringDpi, rows * 24 + 8);
     if (g_headless) {                       /* picker lives off-screen, silently */
         wa.left = -32000; wa.top = -32000;
         wa.right = -32000 + wdt; wa.bottom = -32000 + hgt;
@@ -719,7 +752,7 @@ static void openRing(void) {
                                  2, 2, wdt - 4, hgt - 4, g_ringWnd, NULL,
                                  GetModuleHandleW(NULL), NULL);
     if (!g_ringList) { DestroyWindow(g_ringWnd); g_ringWnd = NULL; return; }
-    g_ringFont = CreateFontW(-12, 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+    g_ringFont = CreateFontW(-Scp(g_ringDpi, 12), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
                              OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                              CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     if (g_ringFont) SendMessageW(g_ringList, WM_SETFONT, (WPARAM)g_ringFont, TRUE);

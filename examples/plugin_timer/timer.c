@@ -74,6 +74,26 @@ static Timer   g_t[MAX_TIMERS];
 static int     g_max = MAX_TIMERS;
 static int     g_sound = 1;
 static int     g_mini  = 1;
+/* v0.29 DPI wave: the mini window keeps its own dpi (WM_DPICHANGED wParam),
+ * its 190x46 + 12px font are 96-logical and scaled through Scp(). */
+static int     g_miniDpi = 96;
+static HFONT   g_miniFont = NULL;
+typedef UINT (WINAPI *MiniGDFW)(HWND);
+static int DpiOf(HWND h) {
+    HMODULE u = GetModuleHandleW(L"user32.dll");
+    MiniGDFW f = u ? (MiniGDFW)(void*)GetProcAddress(u, "GetDpiForWindow") : NULL;
+    int d = f && h ? (int)f(h) : 96;
+    return (d >= 96 && d <= 480) ? d : 96;
+}
+static int Scp(int dpi, int v) { return MulDiv(v, dpi >= 96 ? dpi : 96, 96); }
+static void miniApplyFont(void) {
+    HFONT nf = CreateFontW(-Scp(g_miniDpi, 12), 0, 0, 0, FW_NORMAL, 0, 0, 0, DEFAULT_CHARSET,
+                           OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                           VARIABLE_PITCH | FF_DONTCARE, L"Segoe UI");
+    if (!nf) return;
+    if (g_miniFont) DeleteObject(g_miniFont);
+    g_miniFont = nf;
+}
 
 static int     g_swRunning = 0;
 static ULONGLONG g_swStartMs = 0;
@@ -208,11 +228,25 @@ static LRESULT CALLBACK MiniProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         GetWindowTextW(h, txt, 63);
         SetTextColor(dc, RGB(240, 240, 240));
         SetBkMode(dc, TRANSPARENT);
-        HFONT f = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HFONT f = g_miniFont ? g_miniFont : (HFONT)GetStockObject(DEFAULT_GUI_FONT);
         HFONT old = (HFONT)SelectObject(dc, f);
         DrawTextW(dc, txt, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         SelectObject(dc, old);
         EndPaint(h, &ps);
+        return 0;
+    }
+    if (m == WM_DPICHANGED) {                    /* v0.29 PMv2 wave */
+        int d = (int)LOWORD(w);
+        RECT* pr = (RECT*)l;
+        g_miniDpi = (d >= 96 && d <= 480) ? d : 96;
+        miniApplyFont();
+        if (pr) SetWindowPos(h, HWND_TOPMOST, pr->left, pr->top,
+                             pr->right - pr->left, pr->bottom - pr->top, SWP_NOACTIVATE);
+        InvalidateRect(h, NULL, TRUE);
+        return 0;
+    }
+    if (m == WM_DESTROY) {
+        if (g_miniFont) { DeleteObject(g_miniFont); g_miniFont = NULL; }
         return 0;
     }
     if (m == WM_NCLBUTTONDOWN) return 0;       /* no title bar, don't drag     */
@@ -233,10 +267,13 @@ static void miniShow(ULONGLONG secs) {
         wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
         wc.lpszClassName = L"TypeBoxTimerMini";
         if (RegisterClassExW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
-            int w = 190, ht = 46;
+            int w, ht;
+            g_miniDpi = DpiOf(g_mainWnd);        /* v0.29: start on the console's dpi */
+            w = Scp(g_miniDpi, 190); ht = Scp(g_miniDpi, 46);
+            miniApplyFont();
             g_miniWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 L"TypeBoxTimerMini", txt, WS_POPUP | WS_VISIBLE,
-                GetSystemMetrics(SM_CXSCREEN) - w - 24, 44, w, ht,
+                GetSystemMetrics(SM_CXSCREEN) - w - Scp(g_miniDpi, 24), Scp(g_miniDpi, 44), w, ht,
                 NULL, NULL, GetModuleHandleW(NULL), NULL);
         }
     } else {

@@ -196,6 +196,14 @@ startup logs `local config: on (TypeBox.local.ini)`. Note: plugins read
 | `DragMove` | `1` = press-and-drag the 20 px status strip to move the console; the spot is remembered for the session, the INI position is restored on every restart | `1` |
 | `Priority` | process class: `idle` · `normal` · `high` · `realtime` | `normal` |
 
+**Every pixel value in the INI is 96-DPI LOGICAL (since 0.29.0).** TypeBox runs
+Per-Monitor V2 aware (Win10 1703+; Win8.1 → Per-Monitor; Win7/8 → system aware), and each
+window scales the numbers it reads: `[Show] Width/Height`, `[Positions]` presets,
+`[Font] Size`, the 20 px status strip, the 640×460 settings dialog, drop-down rows and
+plugin windows all go through `MulDiv(v, windowDpi, 96)` at show time. So `Width=720`
+means "720 logical px" — on a 150% display the console is physically 1080 px wide and
+text stays sharp. You never have to multiply anything by your scale factor.
+
 ### `[Type]` (EasyType completion)
 | Key | Meaning | Default |
 |---|---|---|
