@@ -1,5 +1,8 @@
 # TypeBox — 50 feature candidates (roadmap backlog)
 
+> **The ordered master plan to v1.0 / v1.5 lives in [ROADMAP-V1.md](ROADMAP-V1.md)**
+> (research 2026-11-18). This file is the item catalog; that one is the release ladder.
+
 Companion to [PLAN.md](PLAN.md). Status: 📋 planned · 🔨 in progress · ✅ done.
 Effort: S ≈ <1 day, M ≈ 1–2 days, L ≈ a week (single-file C++/Win32 reality check included).
 Priority: P1 next releases, P2 v1.x, P3 backlog/wildcard.
