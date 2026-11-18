@@ -4792,9 +4792,12 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     }
 
     // --- Plugins
+    // v0.29.1: rows became dpi-driven 20 logical px (the height v0.25 always
+    // INTENDED - comctl silently measured the font instead), so 14 rows need
+    // 320px to stay fully visible; the hint label moved below the list.
     g_plLb = MkOn(g_setPage[PG_PLUGINS], L"LISTBOX", L"",
                   WS_BORDER | WS_VSCROLL | LBS_NOTIFY |
-                  LBS_OWNERDRAWFIXED | LBS_HASSTRINGS, 8, 8, 180, 250);
+                  LBS_OWNERDRAWFIXED | LBS_HASSTRINGS, 8, 8, 180, 320);
     SetWindowSubclass(g_plLb, PlChkProc, 8, 0);     // click = enable/disable
     int px = 200;
     g_plLoadChk = MkCheck(g_setPage[PG_PLUGINS], L(STR_PL_LOAD), px, 12, 180);
@@ -4805,7 +4808,7 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_UNLOAD),  px + 90, 240, 80, IDB_PL_UNLOAD);
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_ABOUT),   px, 270, 80, IDB_PL_ABOUT);
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_OPTIONS), px + 90, 270, 80, IDB_PL_OPTIONS);
-    MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 268, 190);
+    MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 332, 190);
 
     // --- Environment (own PATH folders + %variables%, like the OS dialog)
     MkLabel(g_setPage[PG_ENV], L(STR_EN_PATHHINT), 16, 10, 430);

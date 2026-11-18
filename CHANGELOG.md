@@ -3,6 +3,18 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.29.1] - 2026-11-18
+
+### Patch: the checklist grew into its shoes
+
+- The DPI wave made plugin-checklist rows the height v0.25 always **intended** (20 logical
+  px - comctl had been silently measuring the font instead), which pushed the last two of
+  14 rows below the list's old 250 px viewport. The list now has 320 logical px (scales with
+  the dialog, so all rows stay visible at every dpi), the hint label moved below it.
+- The test harness scrolls the target row into view before clicking it (`LB_SETTOPINDEX`) -
+  the way a human would - so toggle gates hit the tail rows too. `test-v0250` 23/23,
+  `test-v0290` 28/28, release bytes re-gated by `gate-v0290`.
+
 ## [0.29.0] - 2026-11-18
 
 ![dpi](docs/screenshots/console-dpi.png)

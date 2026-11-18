@@ -60,9 +60,9 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.29.0)
+## Working today (v0.29.1)
 
-Everything below ships in **[v0.29.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release. The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
+Everything below ships in **[v0.29.1](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release. The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md).
 
 **Sharp on any monitor (v0.29)**
 
