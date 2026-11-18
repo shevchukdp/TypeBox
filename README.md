@@ -66,10 +66,12 @@ Everything below ships in **[v0.30.0](https://github.com/shevchukdp/TypeBox/rele
 
 **Four new plugins (v0.30)**
 
-- **`nettools`** — `ip` (public IP, cached), `weather <city>` (one-line wttr.in, remembers the
+- **`nettools`** — `ip` (public IP, cached), `w <city>` (one short wttr.in line, remembers the
   last city), `dns <host>` (answers offline for localhost/hosts-file names), `netinfo`
   (adapters with IPv4/mask/gateway), `ping <host> [n]` (real ICMP round-trips) — the same
-  offline-first rule: the network is touched only on a line you typed
+  offline-first rule: the network is touched only on a line you typed. The full `weather`
+  command stays with the v0.28 `weather` plugin (rich answer with feels/wind/today/tomorrow)
+  — v0.30.1 split the words so the two plugins never shadow each other
 - **`off`** — `off [now|<min>|cancel]`, `restart [min]`, `off sleep|hibernate|hybrid|logoff`;
   `[Off] Confirm/WarnSec` guard a stray Enter, and in headless mode every power action is a
   dry-run answer (`off: [headless] would run shutdown /s /t 1800`) — test suites can never

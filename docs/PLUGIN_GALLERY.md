@@ -819,7 +819,10 @@ timer sysmon util note yt weather` plus the **v0.30.0 plugin wave**:
   (HTTPS) copied from `yt.c`, `iphlpapi` for adapters + ICMP helpers,
   `ws2_32` for `GetAddrInfoW` - and the offline-first rule holds: zero network
   at `Load()`, requests only on typed lines. Watch the IcmpSendEcho reply
-  layout (old iphlpapi order, Address first - see the v0.30.0 changelog entry).
+  layout (old iphlpapi order, Address first - see the v0.30.0 changelog entry)
+   and the **command-word rule** (v0.30.1): a word already owned by another
+   shipped plugin is silently taken by whichever DLL sorts first - nettools
+   keeps `w`, the rich `weather` word stays with weather.dll.
 - **#16 off** - shipped in v0.30.0 as
   [`examples/plugin_off/off.c`](../examples/plugin_off/off.c). Power plugin
   pattern: the headless dry-run gate runs **before** any action (`TYPEBOX_HEADLESS=1`

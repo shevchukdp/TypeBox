@@ -491,18 +491,22 @@ PLUGIN_API TInfo __cdecl GetInfo(void) {
     i.size = sizeof(TInfo);
     i.name = "NetTools";
     i.version = "1.0";
-    i.description = "ip / weather <city> / dns <host> / netinfo / ping <host> [n] - network only on typed lines";
+    i.description = "ip / w <city> (one short line) / dns <host> / netinfo / ping <host> [n] - network only on typed lines";
     i.author = "D. Shevchuk";
     i.copyright = "GPL-3.0";
     i.homepage = "https://github.com/shevchukdp/TypeBox";
     return i;
 }
 
-PLUGIN_API int __cdecl GetCount(void) { return 6; }
+PLUGIN_API int __cdecl GetCount(void) { return 5; }
 
 PLUGIN_API const char* __cdecl GetString(int n) {
-    static const char* k[6] = { "ip", "dns", "netinfo", "ping", "weather", "w" };
-    return (n >= 0 && n < 6) ? k[n] : NULL;
+    /* v0.30.1 command split: the full word `weather` belongs to weather.dll
+     * (its rich answer); nettools owns the short `w <city>` line. Two plugins
+     * exporting the same first word = the alphabetically-first one silently
+     * shadows the other (Discovery is alphabetical, first run!=0 wins). */
+    static const char* k[5] = { "ip", "dns", "netinfo", "ping", "w" };
+    return (n >= 0 && n < 5) ? k[n] : NULL;
 }
 
 static char g_etRows[8][256];
@@ -524,18 +528,13 @@ PLUGIN_API int __cdecl GetCountET(const char* input) {
     else if (startsWith(input, "dns ", 4) && len > 4) etAdd("dns localhost");
     else if (len <= 4 && startsWith(input, "ping", len)) etAdd("ping 8.8.8.8");
     else if (startsWith(input, "ping ", 5) && len > 5) etAdd("ping 8.8.8.8");
-    else if (len <= 7 && startsWith(input, "weather", len)) {
-        etAdd("weather Kyiv");
-    } else if (startsWith(input, "weather ", 8)) {
+    else if (len <= 1 && startsWith(input, "w", len)) {
         if (g_lastCity[0]) {
             char city[192];
             WideCharToMultiByte(CP_ACP, 0, g_lastCity, -1, city, sizeof(city), NULL, NULL);
-            { char row[256]; wsprintfA(row, "weather %s", city); etAdd(row); }
+            { char row[256]; wsprintfA(row, "w %s", city); etAdd(row); }
         }
-        etAdd("weather Kyiv");
-    } else if (len <= 1 && startsWith(input, "w", len)) {
-        etAdd("weather Kyiv");
-        etAdd("w <city>");
+        etAdd("w Kyiv");
     }
     return g_etCount;
 }
@@ -585,13 +584,10 @@ PLUGIN_API TExec __cdecl RunString(const char* str) {
         MultiByteToWideChar(CP_ACP, 0, a, -1, warg, 512);
         trimW(warg);
         text = runPing(warg, cnt);
-    } else if ((arg = argAfter(str, "weather")) != NULL) {
-        wchar_t* wa;
-        MultiByteToWideChar(CP_ACP, 0, arg, -1, warg, 512);
-        trimW(warg);
-        skipSpacesW(warg, &wa);
-        text = runWeather(wa);
     } else if ((arg = argAfter(str, "w")) != NULL && arg[0]) {
+        /* v0.30.1: `weather <city>` is NOT routed here anymore - weather.dll
+         * answers it in full (feels/km/h/today/tomorrow). nettools keeps the
+         * short one-liner under `w` only. */
         wchar_t* wa;
         MultiByteToWideChar(CP_ACP, 0, arg, -1, warg, 512);
         trimW(warg);

@@ -3,6 +3,25 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.30.1] - 2026-11-18
+
+### Patch: the weather word split (release-bytes gate caught it)
+
+The v0.30.0 release-bytes gate ran `weather Tokyo` against the full 18-plugin zip and got
+nettools' one-liner instead of the v0.28 weather plugin's rich answer: plugin discovery is
+alphabetical and the first `RunString` that claims the line wins - `nettools.dll` sorts
+before `weather.dll`, so exporting the same first word silently shadowed the older plugin.
+Per-wave suites had never seen it because each copied only its own plugin subset.
+
+- `nettools` now owns only the short `w <city>` line; the full `weather` word is left to the
+  `weather` plugin (feels/wind/today/tomorrow). `GetCount` 6 -> 5, ET rows follow.
+- New permanent gate assertion (`n_no_shadow` in `test-v0300`): with all 18 plugins loaded,
+  `weather Kyiv` must reach weather.dll (km/h + today/tomorrow present) and `w Kyiv` must
+  answer the nettools one-liner - command-word collisions across the whole roster are now
+  a suite contract, not a lucky discovery.
+- Lesson recorded in the dev playbook: any new plugin word must be checked against the
+  ENTIRE shipped roster, not just its own tests.
+
 ## [0.30.0] - 2026-11-18
 
 ### The plugin wave: four new plugins, checklist grows to 18
