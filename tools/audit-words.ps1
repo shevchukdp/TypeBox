@@ -22,7 +22,7 @@ if (-not (Test-Path $exDir)) { "FAIL: no examples dir under $RepoRoot"; exit 2 }
 # Host-claimed words (main.cpp). kInternalCmds are all slash-form -> no clash
 # possible with plugin words; these bare words ARE host words (v0.23 pos/stayawake,
 # v0.33 search/snippet):
-$hostWords = @('pos', 'stayawake', 'search', 'snippet')
+$hostWords = @('pos', 'stayawake', 'search', 'snippet', 'in', 'at')
 
 $words = @{}        # word -> list of owners
 $fails = @()

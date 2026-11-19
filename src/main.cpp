@@ -120,6 +120,9 @@ struct Settings {
                                // keyboard layout (QWERTY <-> ЙЦУКЕН) in ET + aliases
     bool ghost = true;         // [Type] Ghost (v0.33): dim inline completion, End/Right accepts
     bool argMemory = true;     // [Type] ArgMemory (v0.33): %1..%9 remember the last word per alias
+    // [Sounds] Quiet (v0.34, ROADMAP #32): do-not-disturb window "22:00-07:30"
+    // (start>end wraps midnight; empty/off = disabled). DND also lives in /dnd.
+    int  quietStart = -1, quietEnd = -1;
     // [DropDown] suggestion list (TypeAndRun DropDown parity)
     bool dropDown = true;
     int  ddLines = 8;          // visible rows before scrolling ends
@@ -838,6 +841,17 @@ static void LoadSettings() {
              i == 6 ? L"folder" : i == 7 ? L"plugin" : L"shell") + L".wav";
         g_set.sound[i] = ReadIniStr(L"Sounds", kSoundKeys[i], def.c_str());
     }
+    // v0.34 (ROADMAP #32): [Sounds] Quiet=22:00-07:30 - the nightly do-not-disturb.
+    {
+        std::wstring q = ReadIniStr(L"Sounds", L"Quiet", L"");
+        g_set.quietStart = g_set.quietEnd = -1;
+        int h1, m1, h2, m2;
+        if (swscanf_s(q.c_str(), L"%d:%d-%d:%d", &h1, &m1, &h2, &m2) == 4 &&
+            h1 >= 0 && h1 < 24 && m1 >= 0 && m1 < 60 && h2 >= 0 && h2 < 24 && m2 >= 0 && m2 < 60) {
+            g_set.quietStart = h1 * 60 + m1;
+            g_set.quietEnd   = h2 * 60 + m2;
+        }
+    }
     // [PluginState]: per-plugin "Name_Load" / "Name_SaveHistory" flags (0/1)
     {
         std::vector<wchar_t> buf(64 * 1024);
@@ -1255,11 +1269,38 @@ static int FrecencyBoost(const std::wstring& row) {
 
 // ---------------------------------------------------------------- sounds
 
+// v0.34 (ROADMAP #32, RI3 #220): Do Not Disturb. /dnd [min] arms it, the
+// [Sounds] Quiet window arms it nightly. While active: no sounds, no tray
+// balloons - the log still tells the truth (and headless suites probe it).
+static bool      g_dndOn = false;
+static long long g_dndUntil = 0;                  // 0 = indefinite
+
+static bool QuietNow() {
+    time_t now = time(nullptr);
+    if (g_dndOn) {
+        if (g_dndUntil == 0 || (long long)now < g_dndUntil) return true;
+        g_dndOn = false;                          // expired: lazily flipped off here
+    }
+    if (g_set.quietStart >= 0) {
+        struct tm tb; localtime_s(&tb, &now);
+        int m = tb.tm_hour * 60 + tb.tm_min;
+        if (g_set.quietStart <= g_set.quietEnd
+                ? (m >= g_set.quietStart && m < g_set.quietEnd)
+                : (m >= g_set.quietStart || m < g_set.quietEnd))   // wraps midnight
+            return true;
+    }
+    return false;
+}
+
 // The 9 per-execution-type sounds of TypeAndRun, in [Sounds] key order.
 
 // Play the per-execution-type sound (TypeAndRun parity). Paths are absolute or
 // relative to the portable TypeBox folder (bundled Sounds\).
 static void PlayTypeSound(int idx) {
+    if (QuietNow()) {                             // v0.34: /dnd + [Sounds] Quiet
+        if (g_headless) LogInfo(L"sounds: suppressed (quiet)");
+        return;
+    }
     if (g_headless) return;                       // silence: no beeps at the user
     if (!g_set.enableSounds || idx < 0 || idx > 8) return;
     std::wstring s = g_set.sound[idx];
@@ -1283,7 +1324,7 @@ static void AddTrayIcon(HWND hWnd, bool balloon) {
     g_nid.hIcon            = LoadIconW(nullptr, IDI_APPLICATION);
     std::wstring tip = L"TypeBox " + WVersion() + L" — " + HotkeyText(g_hotkey);
     lstrcpynW(g_nid.szTip, tip.c_str(), ARRAYSIZE(g_nid.szTip));
-    if (balloon && g_set.balloonTips && !g_headless) {   // headless: no balloons
+    if (balloon && g_set.balloonTips && !g_headless && !QuietNow()) {   // headless/quiet: no balloons
         g_nid.uFlags |= NIF_INFO;
         g_nid.dwInfoFlags = NIIF_INFO;
         lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
@@ -1518,6 +1559,129 @@ static void ShowBox(HWND mainWnd);
 static void HideBox(HWND mainWnd);
 static int  RunLine(const std::wstring& line, HWND mainWnd);
 static int  RunUtilityCommands(const std::wstring& line, HWND mainWnd);   // v0.23
+
+// v0.34: the in/at block runs this early, StartsWithNoCase lives far below.
+static bool StartsWithNoCase(const std::wstring& s, const std::wstring& prefix);
+
+// ------------------------------------------------------------ v0.34 scheduled
+// ROADMAP #15: `in 10m <cmd>` / `at 18:30 <cmd>` arm one-shot commands that
+// live in Timers.dat (id<TAB>kind<TAB>dueEpoch<TAB>createdEpoch<TAB>cmdUtf8,
+// same TAB+UTF-8 dialect as Usage.dat) and fire from a 1 s WM_TIMER. The
+// dry-run contract reaches the time machine: under headless a due command is
+// NEVER executed - the log answers `would run`. Timers whose moment passed
+// while TypeBox slept are "missed": logged, dropped, never blind-run at boot.
+
+struct TimerRec {
+    int         id = 0;
+    int         kind = 0;              // 0 = in (offset), 1 = at (wall clock)
+    long long   due = 0;
+    long long   created = 0;
+    std::wstring cmd;
+};
+static std::vector<TimerRec> g_timers;
+static int g_timerSeq = 0;             // highest id ever seen - numbers are never reused
+
+static std::wstring TimersFile() { return ExeDir() + L"Timers.dat"; }
+
+static void SaveTimers() {
+    std::ofstream f(TimersFile().c_str(), std::ios::binary | std::ios::trunc);
+    if (!f) return;
+    for (const auto& t : g_timers)
+        f << t.id << '\t' << t.kind << '\t' << t.due << '\t' << t.created
+          << '\t' << ToUtf8(t.cmd) << '\n';
+}
+
+static void LoadTimers() {             // boot only
+    g_timers.clear();
+    std::ifstream f(TimersFile().c_str(), std::ios::binary);
+    if (!f) return;
+    long long now = (long long)time(nullptr);
+    bool dropped = false;
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        size_t t1 = line.find('\t');       if (t1 == std::string::npos) continue;
+        size_t t2 = line.find('\t', t1 + 1); if (t2 == std::string::npos) continue;
+        size_t t3 = line.find('\t', t2 + 1); if (t3 == std::string::npos) continue;
+        TimerRec r;
+        r.id   = atoi(line.substr(0, t1).c_str());
+        r.kind = atoi(line.substr(t1 + 1, t2 - t1 - 1).c_str());
+        r.due  = atoll(line.substr(t2 + 1, t3 - t2 - 1).c_str());
+        size_t t4 = line.find('\t', t3 + 1);
+        r.created = atoll(line.substr(t3 + 1, (t4 == std::string::npos ? line.size() : t4 - t3 - 1)).c_str());
+        r.cmd = FromUtf8(t4 == std::string::npos ? std::string() : line.substr(t4 + 1));
+        if (r.id <= 0 || r.cmd.empty()) { dropped = true; continue; }
+        if (r.id > g_timerSeq) g_timerSeq = r.id;
+        if (r.due <= now) {
+            LogInfo(L"scheduled: missed #" + std::to_wstring(r.id) +
+                    L" (TypeBox was closed) - not run: " + r.cmd);
+            dropped = true;                       // scrub: never re-notify the same miss
+            continue;
+        }
+        g_timers.push_back(r);
+    }
+    if (dropped) SaveTimers();
+    if (!g_timers.empty())
+        LogInfo(L"scheduled: " + std::to_wstring((int)g_timers.size()) + L" timer(s) loaded");
+}
+
+// The only balloon voice for scheduled events: tray for the human, log for
+// headless and quiet hours (the log line is the headless probe, too).
+static void TrayNotify(HWND mainWnd, const std::wstring& text) {
+    (void)mainWnd;
+    LogInfo(L"scheduled: " + text);
+    if (g_headless || QuietNow() || !g_nid.hWnd) return;
+    g_nid.uFlags = NIF_INFO;
+    g_nid.dwInfoFlags = NIIF_INFO;
+    lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
+    lstrcpynW(g_nid.szInfo, text.c_str(), ARRAYSIZE(g_nid.szInfo));
+    Shell_NotifyIconW(NIM_MODIFY, &g_nid);
+}
+
+static void TimersScan(HWND mainWnd) {
+    if (g_timers.empty()) return;
+    long long now = (long long)time(nullptr);
+    bool changed = false;
+    for (size_t i = 0; i < g_timers.size();) {
+        if (g_timers[i].due > now) { ++i; continue; }
+        TimerRec fire = g_timers[i];
+        g_timers.erase(g_timers.begin() + i);
+        changed = true;
+        std::wstring tag = L"#" + std::to_wstring(fire.id) + L": " + fire.cmd;
+        if (LooksDangerous(fire.cmd)) {   // no unsupervised wipers at 03:00 - even in a dry run
+            TrayNotify(mainWnd, L"skipped " + tag + L" (dangerous - run it yourself)");
+            continue;
+        }
+        if (g_headless) {                 // dry-run contract - nothing executes here
+            LogInfo(L"scheduled: [headless] would run " + tag);
+            continue;
+        }
+        TrayNotify(mainWnd, L"fired " + tag);
+        RunLine(fire.cmd, mainWnd);       // the very line Enter would have run
+    }
+    if (changed) SaveTimers();
+}
+
+// 90s / 10m / 2h / 1d; a bare number means minutes. Capped at 30 days.
+static bool ParseDur(const std::wstring& s, long long& secs) {
+    if (s.empty()) return false;
+    wchar_t* end = nullptr;
+    long long v = wcstoll(s.c_str(), &end, 10);
+    if (!end || v <= 0) return false;
+    if (*end == 0)        { secs = v * 60; }
+    else if (end[1] == 0) {
+        switch (*end) {
+            case L's': secs = v;        break;
+            case L'm': secs = v * 60;   break;
+            case L'h': secs = v * 3600; break;
+            case L'd': secs = v * 86400;break;
+            default: return false;
+        }
+    } else return false;
+    return secs > 0 && secs <= 30LL * 86400;
+}
+
+
 static void WS_(const wchar_t* sec, const wchar_t* key, const std::wstring& v); // v0.33 fwd
 static void ReloadHotkey(HWND mainWnd);
 static void LoadThemes();       // v0.15 (/reread uses these before their definitions)
@@ -1986,8 +2150,16 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Write-less (v0.33): snippet add <name> <text with %s> | snippet list | snippet del <name>\n"
             L"search add <name> <url-with-%s> | search list | search del <name> | search test <name> <query>\n"
             L"Ghost text: when one row continues the line, End (or Right) accepts the dimmed tail\n"
+            L"Scheduled (v0.34): in 10m <cmd> | at 18:30 <cmd> | /timers | /cancel <n>|all | /dnd [min]\n"
             L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
+        if (g_headless) {   // v0.34: the console ALSO carries the help (copyable, testable);
+            std::wstring one = msg;              // the suppressed-dialog log line stays as the
+            for (auto& ch : one) if (ch == L'\n') ch = L' ';   // old gates' probe
+            SetWindowTextW(g_edit, one.c_str());
+            SendMessageW(g_edit, EM_SETSEL, 0, -1);
+            g_internalAnswer = true;
+        }
         TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/about") {
         std::wstring msg =
@@ -2193,7 +2365,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             (unsigned)(upsec / 86400), (unsigned)((upsec / 3600) % 24),
             (unsigned)((upsec / 60) % 60), bat);
         LogInfo(L"/sys: " + std::wstring(txt));
-        if (g_nid.hWnd && !g_headless) {
+        if (g_nid.hWnd && !g_headless && !QuietNow()) {   // v0.34: quiet hours keep the tray silent
             g_nid.uFlags = NIF_INFO;
             g_nid.dwInfoFlags = NIIF_INFO;
             lstrcpynW(g_nid.szInfoTitle, L"TypeBox — system", ARRAYSIZE(g_nid.szInfoTitle));
@@ -2247,6 +2419,82 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             }
         }
         LogInfo(L"/day: " + ans);
+        SetWindowTextW(g_edit, ans.c_str());
+        SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        g_internalAnswer = true;
+    } else if (c == L"/timers") {
+        // v0.34 (ROADMAP #15): who is armed, and when.
+        std::wstring ans;
+        if (g_timers.empty()) ans = L(STR_TIM_EMPTY);
+        else {
+            long long now = (long long)time(nullptr);
+            ans = L"timers: " + std::to_wstring((int)g_timers.size()) + L" | ";
+            int shown = 0;
+            for (auto& t : g_timers) {
+                if (shown >= 6) { ans += L", ..."; break; }
+                if (shown) ans += L"  |  ";
+                long long left = t.due - now; if (left < 0) left = 0;
+                time_t d = (time_t)t.due; struct tm db; localtime_s(&db, &d);
+                wchar_t when[24]; wsprintfW(when, L"%02d:%02d", db.tm_hour, db.tm_min);
+                ans += L"#" + std::to_wstring(t.id) + L" in " + std::to_wstring(left / 60) +
+                       L"m (" + when + L") " + t.cmd;
+                ++shown;
+            }
+        }
+        LogInfo(L"/timers: " + ans);
+        SetWindowTextW(g_edit, ans.c_str());
+        SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        g_internalAnswer = true;
+    } else if (c == L"/cancel") {
+        size_t sp = line.find_first_of(L" \t");
+        std::wstring a = sp == std::wstring::npos ? L"" : Trim(line.substr(sp + 1));
+        std::wstring ans;
+        if (a.empty()) ans = L(STR_TIM_USAGE);
+        else if (!_wcsicmp(a.c_str(), L"all")) {
+            int n = (int)g_timers.size();
+            g_timers.clear();
+            SaveTimers();
+            wchar_t b[64]; wsprintfW(b, L(STR_TIM_CLEARED), n); ans = b;
+        } else {
+            int id = _wtoi(a.c_str());
+            bool gone = false;
+            for (size_t i = 0; i < g_timers.size(); ++i)
+                if (g_timers[i].id == id) { g_timers.erase(g_timers.begin() + i); gone = true; break; }
+            if (gone) {
+                SaveTimers();
+                wchar_t b[64]; wsprintfW(b, L(STR_TIM_CANCEL), id); ans = b;
+            } else {
+                wchar_t b[64]; wsprintfW(b, L(STR_TIM_NOSUCH), id); ans = b;
+            }
+        }
+        LogInfo(L"/cancel " + a + L": " + ans);
+        SetWindowTextW(g_edit, ans.c_str());
+        SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        g_internalAnswer = true;
+    } else if (c == L"/dnd") {
+        // v0.34 (ROADMAP #32, RI3 #220): shush the sounds and balloons.
+        size_t sp = line.find_first_of(L" \t");
+        std::wstring a = sp == std::wstring::npos ? L"" : Trim(line.substr(sp + 1));
+        std::wstring ans;
+        if (_wcsicmp(a.c_str(), L"off") == 0) {
+            g_dndOn = false; g_dndUntil = 0;
+            ans = L(STR_DND_OFF);
+        } else if (a.empty()) {
+            if (g_dndOn) {                        // status while armed
+                if (g_dndUntil == 0) ans = L(STR_DND_ON);
+                else {
+                    long long left = g_dndUntil - (long long)time(nullptr);
+                    if (left <= 0) { g_dndOn = false; ans = L(STR_DND_OFF); }
+                    else { wchar_t b[64]; wsprintfW(b, L(STR_DND_FOR), (int)((left + 59) / 60)); ans = b; }
+                }
+            } else { g_dndOn = true; g_dndUntil = 0; ans = L(STR_DND_ON); }
+        } else {
+            int mins = _wtoi(a.c_str());
+            if (mins < 1 || mins > 1440) ans = L(STR_DND_BAD);
+            else { g_dndOn = true; g_dndUntil = (long long)time(nullptr) + mins * 60LL;
+                   wchar_t b[64]; wsprintfW(b, L(STR_DND_FOR), mins); ans = b; }
+        }
+        LogInfo(L"/dnd: " + ans);
         SetWindowTextW(g_edit, ans.c_str());
         SendMessageW(g_edit, EM_SETSEL, 0, -1);
         g_internalAnswer = true;
@@ -2667,10 +2915,11 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
 // It re-classifies on every keystroke (EN_CHANGE) and is painted in the
 // status strip next to three physical lamp dots.
 static const wchar_t* const kInternalCmds[] = {
-    L"/about", L"/checkconfig", L"/config", L"/day", L"/exit", L"/export", L"/help",
+    L"/about", L"/cancel", L"/checkconfig", L"/config", L"/day", L"/dnd", L"/exit",
+    L"/export", L"/help",
     L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
     L"/log", L"/openconfig", L"/path", L"/reread", L"/settings", L"/show",
-    L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" };
+    L"/sys", L"/tabs", L"/timers", L"/unload", L"/undo", L"/update" };
 
 struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
 static Anchor g_anchor;
@@ -3073,7 +3322,8 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
         };
         auto collides = [&](const std::wstring& nm, std::wstring& why) -> bool {
             if (_wcsicmp(nm.c_str(), L"pos") == 0 || _wcsicmp(nm.c_str(), L"stayawake") == 0 ||
-                _wcsicmp(nm.c_str(), L"search") == 0 || _wcsicmp(nm.c_str(), L"snippet") == 0) {
+                _wcsicmp(nm.c_str(), L"search") == 0 || _wcsicmp(nm.c_str(), L"snippet") == 0 ||
+                _wcsicmp(nm.c_str(), L"in") == 0 || _wcsicmp(nm.c_str(), L"at") == 0) {
                 why = L"a reserved word"; return true;
             }
             if (FindAlias(nm)) { why = L"an alias"; return true; }
@@ -3233,6 +3483,55 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
             return EXC_PLUGIN;
         }
     }
+
+    // ---- v0.34 (ROADMAP #15, RI3 #202-adjacent): the time machine.
+    // `in 10m <cmd>` / `at 18:30 <cmd>` arm one shots; /timers lists, /cancel clears.
+    if (w == L"in" || w == L"at") {
+        std::vector<std::wstring> a = SplitWords(line);
+        if (a.size() < 3) { ShowAnswer(mainWnd, L(STR_SCH_USAGE)); return EXC_PLUGIN; }
+        long long due = 0;
+        std::wstring how;
+        time_t now = time(nullptr);
+        if (w == L"in") {
+            long long secs = 0;
+            if (!ParseDur(a[1], secs)) { ShowAnswer(mainWnd, L(STR_SCH_BADDUR)); return EXC_PLUGIN; }
+            due = (long long)now + secs;
+            how = L"in " + Lower(a[1]);
+        } else {
+            int h = -1, m = -1;
+            if (swscanf_s(a[1].c_str(), L"%d:%d", &h, &m) != 2 ||
+                h < 0 || h > 23 || m < 0 || m > 59) {
+                ShowAnswer(mainWnd, L(STR_SCH_BADAT)); return EXC_PLUGIN;
+            }
+            struct tm tb; localtime_s(&tb, &now);
+            long long todayMid = (long long)now - (tb.tm_hour * 3600 + tb.tm_min * 60 + tb.tm_sec);
+            due = todayMid + h * 3600 + m * 60;
+            if (due <= now) due += 86400;         // past today -> tomorrow, the alarm-clock way
+            how = L"at " + a[1];
+        }
+        std::wstring cmd;
+        for (size_t i = 2; i < a.size(); ++i) { if (i > 2) cmd += L" "; cmd += a[i]; }
+        if (cmd[0] == L'/' || StartsWithNoCase(cmd, L"in ") || StartsWithNoCase(cmd, L"at ")) {
+            ShowAnswer(mainWnd, L(STR_SCH_NOCMD)); // no timer recursion, no internal commands
+            return EXC_PLUGIN;
+        }
+        TimerRec t;
+        t.id = ++g_timerSeq;
+        t.kind = (w == L"in") ? 0 : 1;
+        t.due = due;
+        t.created = (long long)now;
+        t.cmd = cmd;
+        g_timers.push_back(t);
+        SaveTimers();
+        time_t d = (time_t)due; struct tm db; localtime_s(&db, &d);
+        wchar_t when[32]; wsprintfW(when, L"%02d:%02d:%02d", db.tm_hour, db.tm_min, db.tm_sec);
+        wchar_t msg[320];
+        wsprintfW(msg, L(STR_SCH_ARMED), t.id, how.c_str(), when, cmd.c_str());
+        LogInfo(L"scheduled: armed #" + std::to_wstring(t.id) + L" due " + when + L": " + cmd);
+        ShowAnswer(mainWnd, msg);
+        return EXC_PLUGIN;
+    }
+
     return EXC_NONE;
 }
 
@@ -6201,9 +6500,12 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         switch (wp) {
         case VK_RETURN: {
             // Shift+Enter kills the process started by the last alias (TypeAndRun parity).
-            // Physical shift lives in GetKeyState, not in WM_KEYDOWN lParam bits.
-            bool shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0 ||
-                         (GET_KEYSTATE_WPARAM(lp) & MK_SHIFT) != 0;
+            // Physical shift lives in GetKeyState, not in WM_KEYDOWN lParam bits -
+            // BUT under headless GetKeyState reflects the human's live keyboard, which
+            // would swallow the harness's plain Enters; there only lParam (tbtest
+            // killlast) may claim Shift.
+            bool shift = (GET_KEYSTATE_WPARAM(lp) & MK_SHIFT) != 0 ||
+                         (!g_headless && (GetKeyState(VK_SHIFT) & 0x8000) != 0);
             if (shift && g_aliasProc) {
                 DWORD w = WaitForSingleObject(g_aliasProc, 0);
                 if (w == WAIT_TIMEOUT) {
@@ -6541,6 +6843,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             g_snipText.clear();
         }
+        else if (wp == 79) TimersScan(hWnd);       // v0.34: scheduled fire scan
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -6646,7 +6949,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case kUpdateMsg: {   // v0.20: opt-in startup check result (thread -> UI)
         std::wstring* tag = (std::wstring*)lp;
         if (tag) {
-            if (g_set.balloonTips && g_nid.hWnd && g_set.trayIcon && !g_headless) {
+            if (g_set.balloonTips && g_nid.hWnd && g_set.trayIcon && !g_headless && !QuietNow()) {
                 g_nid.uFlags = NIF_INFO;
                 g_nid.dwInfoFlags = NIIF_INFO;
                 lstrcpynW(g_nid.szInfoTitle, L"TypeBox", ARRAYSIZE(g_nid.szInfoTitle));
@@ -6913,6 +7216,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     LoadScripts();      // v0.16: Scripts\ folder auto-registration
     LoadHistory();
     LoadUsage();        // v0.17: Usage.dat powers the drop-down's frecency ranking
+    LoadTimers();       // v0.34: Timers.dat - due-while-closed ones are "missed", not run
     DiscoverPlugins();
 
     // [Show] Priority — process class of TypeBox itself
@@ -6978,6 +7282,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     AddTrayIcon(mainWnd, true);
     SetTrayVisual();                             // cozy badge replaces the default icon
     SetTimer(mainWnd, 2, 15000, nullptr);   // status bar clock refresh
+    SetTimer(mainWnd, 79, 1000, nullptr);   // v0.34: scheduled scan (returns instantly when empty)
     if (g_set.showOnStart) ShowBox(mainWnd);
 
     // v0.20: opt-in silent release check (default off - offline-first).

@@ -3,6 +3,37 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.34.0] - 2026-11-20
+
+### Time machine
+
+![scheduled commands arming and listing, the DND switches keeping the night quiet](docs/screenshots/time-machine.png)
+
+- **Scheduled commands** (ROADMAP-V1 #15) - type `in 10m <cmd>` or `at 18:30 <cmd>` and TypeBox
+  runs that very line for you when the moment comes: durations take `90s / 10m / 2h / 1d` (a bare
+  number means minutes, 30 days max), a past `at` means tomorrow - the alarm-clock way. Timers
+  live in `Timers.dat` next to the exe (same TAB+UTF-8 dialect as `Usage.dat`), survive restarts,
+  and their numbers are never reused. A timer whose moment passed while TypeBox slept is
+  **missed**, not run: the log says so and the row is scrubbed - nothing ever blind-fires at boot.
+- The dry-run contract reaches the time machine: under headless a due command is never executed,
+  the log answers `would run`. Dangerous commands are skipped at fire time - even in a dry run
+  (`skipped #N … (dangerous - run it yourself)`): no unsupervised wipers at 03:00.
+- **`/timers`** lists who is armed and when (six rows plus an ellipsis keeps it one line),
+  **`/cancel <n>` / `/cancel all`** disarm. Internal commands and other timers cannot be
+  scheduled (no `in 10m /exit`, no timer recursion), and `in`/`at` are now reserved words.
+- **Do Not Disturb** (ROADMAP #32, RI3 #220) - `/dnd [min]` shushes the execution sounds and every
+  tray balloon (startup, `/sys`, update notice) - indefinite, or for N minutes; `/dnd off` ends it.
+  `[Sounds] Quiet=22:00-07:30` arms the same silence nightly (a window that wraps midnight is
+  fine). The log still tells the truth: suppressed sounds answer `sounds: suppressed (quiet)`.
+- Two honesty fixes found by the suite: `/help` in headless mode now ALSO prints to the console
+  (the GUI keeps its dialog, the old gates' suppression log is untouched), and the Shift+Enter
+  alias-kill no longer listens to the human's physical Shift key under headless - only a real
+  Shift-flagged Enter claims it.
+- `test-v0340`: 50 assertions - arming & persistence & missed scrub, every duration form,
+  tomorrow roll, `/timers` cap, cancel semantics, dry-run `would run`, danger skip, id sequence,
+  DND on/status/window/off plus the live Quiet-window probe (midnight wrap included), reserved
+  words, and the `/help` console line.
+
 ## [0.33.0] - 2026-11-19
 
 ### Write less

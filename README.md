@@ -50,6 +50,10 @@
 |---|
 | ![writeless](docs/screenshots/write-less.png) |
 
+| `in 10m tea`, `at 18:30 backup`, `/timers`, and `/dnd` keeping the night quiet — the v0.34 «time machine» wave |
+|---|
+| ![timemachine](docs/screenshots/time-machine.png) |
+
 ## Why TypeBox
 
 | | **TypeBox** | TypeAndRun | PowerToys Run | Flow Launcher |
@@ -64,9 +68,23 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.33.0)
+## Working today (v0.34.0)
 
-Everything below ships in **[v0.33.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law, v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.34.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law, v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Time machine (v0.34)**
+
+- **Scheduled commands** — `in 10m <cmd>` and `at 18:30 <cmd>` run the very line you would have
+  typed: `90s / 10m / 2h / 1d` (a bare number means minutes, 30 days max), a past `at` means
+  tomorrow, the alarm-clock way; timers survive restarts (`Timers.dat` next to the exe), but a
+  moment that passed while TypeBox slept is *missed*, not run — nothing blind-fires at boot
+- **`/timers` / `/cancel <n>` / `/cancel all`** — who is armed, and a way to disarm; internal
+  commands and other timers refuse to be scheduled (no `in 10m /exit`, no timer recursion)
+- **Tray balloon when it fires** — the human gets a notification, the log keeps the receipt;
+  dangerous commands are skipped at fire time (`skipped #N … (dangerous)`), even in a dry run
+- **Do Not Disturb** — `/dnd [min]` shushes the execution sounds and every tray balloon
+  (indefinite or for N minutes, `/dnd off` ends it), and `[Sounds] Quiet=22:00-07:30` arms the
+  same silence nightly — a window that wraps midnight included
 
 **Write less (v0.33)**
 

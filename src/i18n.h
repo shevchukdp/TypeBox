@@ -91,6 +91,9 @@ enum StrId {
     // (side table columns 26-32, EN+RU compiled; other packs fall back to English).
     STR_PG_SNIPPETS, STR_PG_SEARCH, STR_SN_TEXT, STR_SN_HINT, STR_SE_HINT,
     STR_TY_GHOST, STR_TY_ARGMEM,
+    STR_SCH_USAGE, STR_SCH_BADDUR, STR_SCH_BADAT, STR_SCH_NOCMD, STR_SCH_ARMED,
+    STR_TIM_EMPTY, STR_TIM_USAGE, STR_TIM_CANCEL, STR_TIM_CLEARED, STR_TIM_NOSUCH,
+    STR_DND_ON, STR_DND_FOR, STR_DND_OFF, STR_DND_BAD,
     STR_LAST
 };
 
@@ -1099,7 +1102,7 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 // v0.23 pos + stayawake answers.
 // Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][33] = {
+static const wchar_t* const kExItems[LANG_COUNT][47] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1123,7 +1126,21 @@ static const wchar_t* const kExItems[LANG_COUNT][33] = {
               L"Type the name and the text lands in the active window (%s = your words). Rows live in [Snippets]; 'snippet add|list|del' works from the console too.",
               L"A name + URL with %s is a search engine: 'g query', 'g:query' or '!g query' with Bang=1. Rows live in [WebSearch]; 'search add|list|del|test' works from the console too.",
               L"Ghost text (End)",
-              L"Remember args" },
+              L"Remember args",
+              L"scheduled: usage - in 10m <cmd> | at 18:30 <cmd> (90s/10m/2h/1d; a bare number = minutes)",
+              L"scheduled: duration must be like 90s, 10m, 2h, 1d (up to 30 days)",
+              L"scheduled: time must be HH:MM (24h)",
+              L"scheduled: cannot schedule an internal command or another timer",
+              L"scheduled: armed #%d %s (fires %s) - %s",
+              L"timers: empty",
+              L"usage: /cancel <number> | /cancel all",
+              L"timers: cancelled #%d",
+              L"timers: %d cleared",
+              L"timers: no timer #%d",
+              L"dnd: on (indefinite)",
+              L"dnd: on for %d min",
+              L"dnd: off",
+              L"dnd: minutes must be 1..1440" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1147,7 +1164,21 @@ static const wchar_t* const kExItems[LANG_COUNT][33] = {
               L"Наберите имя — текст попадёт в активное окно (%s = ваши слова). Строки живут в [Snippets]; 'snippet add|list|del' работает и из консоли.",
               L"Имя + URL с %s — это поисковая система: 'g query', 'g:query' или '!g query' при Bang=1. Строки живут в [WebSearch]; 'search add|list|del|test' работает и из консоли.",
               L"Дополнение (End)",
-              L"Запоминать аргументы" },
+              L"Запоминать аргументы",
+              L"по расписанию: как — in 10m <команда> | at 18:30 <команда> (90s/10m/2h/1d; голое число = минуты)",
+              L"по расписанию: длительность должна быть как 90s, 10m, 2h, 1d (до 30 дней)",
+              L"по расписанию: время должно быть ЧЧ:ММ (24ч)",
+              L"по расписанию: внутреннюю команду или другой таймер запланировать нельзя",
+              L"по расписанию: #%d %s (в %s) - %s",
+              L"таймеры: пусто",
+              L"использование: /cancel <номер> | /cancel all",
+              L"таймеры: отменён #%d",
+              L"таймеры: очищено %d",
+              L"таймеры: нет таймера #%d",
+              L"тишина: включена (бессрочно)",
+              L"тишина: включена на %d мин",
+              L"тишина: выключена",
+              L"тишина: минуты должны быть 1..1440" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1319,7 +1350,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_TY_ARGMEM) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_DND_BAD) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail

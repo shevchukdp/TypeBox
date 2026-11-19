@@ -163,6 +163,38 @@ Two host-side utility words (they run before aliases, obey `[Exec] Internal=0`):
 Both answer in the console (`pos: right -> 960,0 960x1032`, `stayawake: on for 30 min`) and
 log to `/log`; `pos` and `stayawake` are EasyType candidates like every other command.
 
+### `in` + `at` — scheduled commands (TypeBox 0.34.0)
+
+The time machine (ROADMAP #15). Two reserved words arm one-shot timers that run the very line
+you would have typed, from a 1 s timer tick:
+
+```
+in 10m cmd /c copy log.zip \\nas\backups      ; 90s / 10m / 2h / 1d — a bare number means minutes
+in 30 tea.bat                                  ; (30 minutes; the cap is 30 days)
+at 18:30 backup.bat                            ; wall clock, 24h; a past time means TOMORROW
+```
+
+- Timers persist in `Timers.dat` next to the exe (TAB + UTF-8, same dialect as `Usage.dat`)
+  and their numbers are never reused. A timer whose moment passed while TypeBox was closed is
+  **missed, not run**: at boot it is logged (`scheduled: missed #77 …`) and scrubbed — the
+  machine never wakes up to a blast of old commands.
+- When a timer fires the human gets a tray balloon (`scheduled: fired #12: …`) and the log
+  keeps the receipt; under `TYPEBOX_HEADLESS=1` nothing executes — the log answers
+  `would run`. A dangerous line (the `/path` wiper tripwire) is skipped at fire time —
+  even in a dry run: `skipped #N … (dangerous - run it yourself)`.
+- `/timers` lists who is armed (`#12 in 7m (23:41) cmd …`, six rows plus an ellipsis),
+  `/cancel <number>` disarms one, `/cancel all` clears the deck. Internal commands refuse to
+  be scheduled (`in 10m /exit` — no), and so do other timers (no `at 07:00 in 5m calc`).
+- `in` and `at` are reserved words: `snippet add` / `search add` refuse those names.
+
+### Do Not Disturb — `/dnd` and `[Sounds] Quiet` (TypeBox 0.34.0)
+
+`/dnd [min]` shushes the execution sounds and every tray balloon (startup, `/sys`, update
+notice): bare = indefinite, `1..1440` minutes self-expires, `/dnd` again prints the status,
+`/dnd off` ends it. `[Sounds] Quiet=22:00-07:30` arms the same silence nightly — a window
+that wraps midnight is fine. The log still tells the truth: shushed sound paths answer
+`sounds: suppressed (quiet)`.
+
 ### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
 
 Drop an INI named `TypeBox.local.ini` next to `TypeBox.ini` and it wins on every
@@ -377,7 +409,9 @@ rewritten on every OK/Apply (like `[Aliases]`), so keep manual notes elsewhere.
 `ExecuteInternalSound`, `ExecuteAliasSound`, `ExecuteSysAliasSound`, `ExecuteURLSound`,
 `ExecuteEmailSound`, `ExecuteFileSound`, `ExecuteFolderSound`, `ExecutePluginSound`,
 `ExecuteShellSound`. Relative paths resolve against the portable `Sounds\` folder;
-`none` disables one sound.
+`none` disables one sound. `Quiet=22:00-07:30` (TypeBox 0.34.0) is the nightly do-not-disturb
+window — sounds and tray balloons stay silent inside it (a window that wraps midnight is
+fine); see **Do Not Disturb** above and the `/dnd` command for manual silence.
 
 ### `[Path]` + `[Variables]` — own environment (TypeBox 0.8.0)
 Like the Windows *Environment Variables* dialog, but fully portable (lives in
