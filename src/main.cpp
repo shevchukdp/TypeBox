@@ -118,6 +118,8 @@ struct Settings {
     bool fuzzy = true;         // [Type] Fuzzy: subsequence scoring (0 = TypeAndRun prefix mode)
     bool layoutFallback = true;// [Type] LayoutFallback (v0.32): also match the other
                                // keyboard layout (QWERTY <-> ЙЦУКЕН) in ET + aliases
+    bool ghost = true;         // [Type] Ghost (v0.33): dim inline completion, End/Right accepts
+    bool argMemory = true;     // [Type] ArgMemory (v0.33): %1..%9 remember the last word per alias
     // [DropDown] suggestion list (TypeAndRun DropDown parity)
     bool dropDown = true;
     int  ddLines = 8;          // visible rows before scrolling ends
@@ -143,7 +145,8 @@ struct Settings {
 // Execution result types (map to [History]/[Sounds] keys, like TypeAndRun).
 enum ExecType {
     EXC_NONE = 0, EXC_INTERNAL, EXC_ALIAS, EXC_SYSALIAS, EXC_URL,
-    EXC_EMAIL, EXC_FILE, EXC_FOLDER, EXC_PLUGIN, EXC_SHELL
+    EXC_EMAIL, EXC_FILE, EXC_FOLDER, EXC_PLUGIN, EXC_SHELL,
+    EXC_SNIPPET      // v0.33: [Snippets] text expansion (host-only, ABI values 0..9 unchanged)
 };
 
 static Hotkey                    g_hotkey;
@@ -276,6 +279,12 @@ static bool ReadIniBool(const wchar_t* sec, const wchar_t* key, bool def) {
 static std::wstring Trim(const std::wstring& s);
 struct WebLink { std::wstring name, tmpl; };
 static std::vector<WebLink> g_webLinks;
+
+// v0.33 (ROADMAP-50 #17/#59): a snippet is a piece of text you type by name -
+// [Snippets] name=text, the %s engine expands it, the result lands in the
+// window that was behind the console (clipboard + one synthetic Ctrl+V).
+struct Snippet { std::wstring name, text; };
+static std::vector<Snippet> g_snippets;
 
 static std::wstring WebEncode(const std::wstring& q) {
     std::wstring o;
@@ -535,7 +544,11 @@ static std::wstring ExpandEnv(const std::wstring& s) {
 }
 
 // Replace %s and %1..%n with words of the typed remainder (TypeAndRun semantics).
-static std::wstring Substitute(const std::wstring& action, const std::wstring& input) {
+// v0.33: with a non-empty memKey ("ff" for alias ff) an empty %n falls back to the
+// word remembered for that slot the last time the command ran (ROADMAP-V1, RI3 #203).
+static const std::wstring* ArgMemory(const std::wstring& keyBase, int n);
+static std::wstring Substitute(const std::wstring& action, const std::wstring& input,
+                               const std::wstring& memKey = L"") {
     std::vector<std::wstring> words = SplitWords(input);
     std::wstring out = action;
     size_t pos;
@@ -544,6 +557,8 @@ static std::wstring Substitute(const std::wstring& action, const std::wstring& i
     for (int n = 1; n <= 9; ++n) {
         std::wstring tok = L"%" + std::to_wstring(n);
         std::wstring val = (size_t)n <= words.size() ? words[n - 1] : L"";
+        if (val.empty() && !memKey.empty())             // v0.33: remembered word
+            if (const std::wstring* m = ArgMemory(memKey, n)) val = *m;
         while ((pos = out.find(tok)) != std::wstring::npos)
             out.replace(pos, tok.size(), val);
     }
@@ -791,6 +806,8 @@ static void LoadSettings() {
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
     g_set.fuzzy      = ReadIniInt(L"Type", L"Fuzzy", 1) != 0;
     g_set.layoutFallback = ReadIniInt(L"Type", L"LayoutFallback", 1) != 0;
+    g_set.ghost          = ReadIniInt(L"Type", L"Ghost", 1) != 0;
+    g_set.argMemory      = ReadIniInt(L"Type", L"ArgMemory", 1) != 0;
     g_set.dropDown   = ReadIniInt(L"DropDown", L"Enable", 1) != 0;
     g_set.ddLines    = ReadIniInt(L"DropDown", L"Lines", 8);
     if (g_set.ddLines < 1) g_set.ddLines = 1;
@@ -896,6 +913,37 @@ static void LoadAliases() {
 static const Alias* FindAlias(const std::wstring& word) {
     for (const auto& a : g_aliases)
         if (_wcsicmp(a.name.c_str(), word.c_str()) == 0) return &a;
+    return nullptr;
+}
+
+// v0.33 (ROADMAP-50 #17/#59): [Snippets] rows of TypeBox.ini. Text stays raw -
+// the %s/%n engine expands it at typing time, like alias actions do.
+static void LoadSnippets() {
+    g_snippets.clear();
+    std::vector<wchar_t> buf(64 * 1024);
+    DWORD n = GetPrivateProfileSectionW(L"Snippets", buf.data(),
+                                        (DWORD)buf.size(), g_iniPath.c_str());
+    for (wchar_t* p = buf.data(); p < buf.data() + n; ) {
+        std::wstring line(p);
+        p += line.size() + 1;
+        if (line.empty() || line[0] == L';' || line[0] == L'[') continue;
+        size_t eq = line.find(L'=');
+        if (eq == std::wstring::npos) continue;
+        Snippet s;
+        s.name = Trim(line.substr(0, eq));
+        s.text = line.substr(eq + 1);              // inner spaces are the text itself
+        while (!s.text.empty() && (s.text.back() == L' ' || s.text.back() == L'\t'))
+            s.text.pop_back();
+        if (s.name.empty() || s.text.empty()) continue;
+        bool dup = false;
+        for (auto& e : g_snippets)
+            if (_wcsicmp(e.name.c_str(), s.name.c_str()) == 0) { dup = true; break; }
+        if (!dup) g_snippets.push_back(s);
+    }
+}
+static const Snippet* FindSnippet(const std::wstring& word) {
+    for (const auto& s : g_snippets)
+        if (_wcsicmp(s.name.c_str(), word.c_str()) == 0) return &s;
     return nullptr;
 }
 
@@ -1100,7 +1148,8 @@ static void SaveHistory() {
 // Usage.dat lines: word<TAB>count<TAB>unix-seconds (word = lower-cased command
 // name, never a path or /command). The drop-down ranks fuzzy ties by this:
 // the tools you actually use float to the top, quality still dominates.
-struct UsageRec { int count = 0; long long last = 0; int day = 0; int today = 0; };
+struct UsageRec { int count = 0; long long last = 0; int day = 0; int today = 0;
+                  std::wstring arg; };  // v0.33: remembered word for "name#slot" keys
 static std::map<std::wstring, UsageRec> g_usage;   // key: lower command word
 
 static std::wstring UsageFile() { return ExeDir() + L"Usage.dat"; }
@@ -1123,7 +1172,11 @@ static void LoadUsage() {
         if (t3 != std::string::npos) {                    // v0.27: /day fields
             size_t t4 = line.find('\t', t3 + 1);
             r.day = atoi(line.substr(t3 + 1, (t4 == std::string::npos ? line.size() : t4) - t3 - 1).c_str());
-            if (t4 != std::string::npos) r.today = atoi(line.substr(t4 + 1).c_str());
+            if (t4 != std::string::npos) {
+                size_t t5 = line.find('\t', t4 + 1);      // v0.33 field 6: remembered word
+                r.today = atoi(line.substr(t4 + 1, (t5 == std::string::npos ? line.size() : t5) - t4 - 1).c_str());
+                if (t5 != std::string::npos) r.arg = FromUtf8(line.substr(t5 + 1));
+            }
         }
         if (r.count >= 1) g_usage[FromUtf8(line.substr(0, t1))] = r;
     }
@@ -1133,7 +1186,8 @@ static void SaveUsage() {
     if (!f) return;
     for (auto& kv : g_usage)
         f << ToUtf8(kv.first) << '\t' << kv.second.count << '\t' << kv.second.last
-          << '\t' << kv.second.day << '\t' << kv.second.today << '\n';
+          << '\t' << kv.second.day << '\t' << kv.second.today
+          << '\t' << ToUtf8(kv.second.arg) << '\n';        // v0.33 field 6: remembered word
 }
 static int LocalYmd() {                        // v0.27: today's YYYYMMDD for /day
     SYSTEMTIME st; GetLocalTime(&st);
@@ -1155,6 +1209,36 @@ static void RecordUsage(const std::wstring& line) {
     if (r.day != ymd) { r.day = ymd; r.today = 1; }
     else              { r.today += 1; }
     SaveUsage();                              // tiny file; deterministic for tests
+}
+
+// v0.33 (ROADMAP-V1 "write less", RI3 #203): per-slot argument memory. Running
+// `ff a b` stores the words under Usage.dat keys "ff#1"/"ff#2" (field 6), so the
+// next `ff a` reuses the word remembered for %2. Keys always carry a '#', so they
+// never join the ranking or /day vocabularies (today stays 0, no candidate has a '#').
+static void RecordArgMemory(const std::wstring& keyBase, const std::wstring& rest) {
+    if (!g_set.argMemory || keyBase.empty()) return;
+    std::vector<std::wstring> words = SplitWords(rest);
+    std::wstring base = Lower(keyBase);
+    bool touched = false;
+    for (int n = 1; n <= 9 && n <= (int)words.size(); ++n) {
+        std::wstring w = Trim(words[n - 1]);
+        if (w.empty() || w.size() > 512) continue;
+        bool bad = false;
+        for (wchar_t ch : w) if (ch < 0x20 || ch == 0x7F) { bad = true; break; }
+        if (bad) continue;
+        UsageRec& r = g_usage[base + L"#" + std::to_wstring(n)];
+        r.arg  = w;
+        r.last = (long long)time(nullptr);
+        if (r.count < 1) r.count = 1;         // LoadUsage keeps count>=1 rows only
+        touched = true;
+    }
+    if (touched) SaveUsage();
+}
+static const std::wstring* ArgMemory(const std::wstring& keyBase, int n) {
+    if (!g_set.argMemory || keyBase.empty()) return nullptr;
+    auto it = g_usage.find(Lower(keyBase) + L"#" + std::to_wstring(n));
+    if (it == g_usage.end() || it->second.arg.empty()) return nullptr;
+    return &it->second.arg;
 }
 // 0..17 — smaller than any real fuzzy delta, still decides ties.
 static int FrecencyBoost(const std::wstring& row) {
@@ -1434,6 +1518,7 @@ static void ShowBox(HWND mainWnd);
 static void HideBox(HWND mainWnd);
 static int  RunLine(const std::wstring& line, HWND mainWnd);
 static int  RunUtilityCommands(const std::wstring& line, HWND mainWnd);   // v0.23
+static void WS_(const wchar_t* sec, const wchar_t* key, const std::wstring& v); // v0.33 fwd
 static void ReloadHotkey(HWND mainWnd);
 static void LoadThemes();       // v0.15 (/reread uses these before their definitions)
 static void ApplyThemeVisual();
@@ -1441,7 +1526,8 @@ static void ResetET();
 static void OpenSettings(HWND mainWnd, int page);
 enum { PG_APPEAR, PG_WINDOW, PG_FONT, PG_HOTKEY, PG_EXEC, PG_TYPE,
        PG_HISTORY, PG_LOG, PG_ALIASES, PG_SOUNDS, PG_PLUGINS, PG_ENV,
-       PG_THEME, PG_LANG, PG_COUNT };
+       PG_THEME, PG_LANG,
+       PG_SNIPPETS, PG_SEARCH, PG_COUNT };        // v0.33: two new pages at the tail
 
 // ---------------------------------------------------------------- update (v0.20)
 //
@@ -1897,6 +1983,9 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"/day prints today's executions  /tabs url1 url2 ... opens them all in the browser\n"
             L"/update checks GitHub Releases for a newer version (user-initiated only)\n"
             L"Utilities (v0.23): pos right | pos <[Positions] name> | stayawake [min] | stayawake off\n"
+            L"Write-less (v0.33): snippet add <name> <text with %s> | snippet list | snippet del <name>\n"
+            L"search add <name> <url-with-%s> | search list | search del <name> | search test <name> <query>\n"
+            L"Ghost text: when one row continues the line, End (or Right) accepts the dimmed tail\n"
             L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
         TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
@@ -2016,6 +2105,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         LoadSettings();
         LoadAliases();
         LoadWebSearch();
+        LoadSnippets();               // v0.33: [Snippets] picked up live too
         LoadScripts();              // v0.16: Scripts\ picked up live too
         ReloadHotkey(mainWnd);
         LoadThemes();               // v0.15: themes\*.theme.ini picked up too
@@ -2064,6 +2154,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
                 LoadSettings();
                 LoadAliases();
                 LoadWebSearch();
+                LoadSnippets();       // v0.33
                 LoadScripts();
                 ReloadHotkey(mainWnd);
                 TbMessageBox(mainWnd,
@@ -2221,6 +2312,7 @@ static bool HistoryAllows(ExecType t) {
     case EXC_FOLDER:   return g_set.savePath;
     case EXC_PLUGIN:   return g_set.savePlugins &&
                                 PluginStateOn(g_lastPluginName + L"_SaveHistory", true);
+    case EXC_SNIPPET:  return g_set.saveAlias;          // v0.33: user-defined text, like aliases
     default:           return g_set.saveUnknown;
     }
 }
@@ -2242,6 +2334,61 @@ static bool SuSplit(const std::wstring& line, std::wstring& rest) {
     if (w != L"su" && w != L"sudo" && w != L"/su" && w != L"/sudo") return false;
     rest = Trim(t.substr(i));
     return true;
+}
+
+// ---- v0.33 snippets (ROADMAP-50 #17/#59): expand a [Snippets] row and deliver
+// the text to the window that was behind the console: clipboard + one synthetic
+// Ctrl+V, 150ms after the box hides (enough for the shell to restore focus).
+// Headless never touches the clipboard or injects keys - it logs the intent.
+static std::wstring  g_snipText;                  // pending paste (clipboard holds it)
+static const UINT_PTR kSnipPasteTimer = 77;
+
+static bool SetClipboardText(HWND owner, const std::wstring& text) {
+    if (!OpenClipboard(owner)) return false;
+    bool ok = false;
+    if (EmptyClipboard()) {
+        size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+        HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+        if (h) {
+            void* p = GlobalLock(h);
+            if (p) {
+                memcpy(p, text.c_str(), bytes);
+                GlobalUnlock(h);
+                ok = SetClipboardData(CF_UNICODETEXT, h) != nullptr;
+                if (!ok) GlobalFree(h);
+            } else {
+                GlobalFree(h);
+            }
+        }
+    }
+    CloseClipboard();
+    return ok;
+}
+
+static int RunSnippet(const Snippet* sn, const std::wstring& rest, HWND mainWnd) {
+    std::wstring out = ExpandEnv(Substitute(sn->text, rest, sn->name));
+    if (out.empty()) {
+        LogInfo(L"snippet: " + sn->name + L" expanded to nothing");
+        return EXC_SNIPPET;
+    }
+    RecordArgMemory(sn->name, rest);        // v0.33: snippets remember words too
+    if (g_headless) {
+        std::wstring prev = out.size() > 60 ? out.substr(0, 60) + L"..." : out;
+        LogInfo(L"snippet: would paste " + std::to_wstring((int)out.size()) +
+                L" chars: " + prev);
+        PlayTypeSound(8);
+        return EXC_SNIPPET;
+    }
+    bool clip = SetClipboardText(mainWnd, out);
+    LogInfo(L"snippet: " + sn->name + L" -> " + std::to_wstring((int)out.size()) +
+            L" chars (" + (clip ? L"clipboard ok" : L"clipboard FAILED") + L")");
+    HideBox(mainWnd);                       // focus goes back to the user's app
+    if (clip) {
+        g_snipText = out;
+        SetTimer(mainWnd, kSnipPasteTimer, 150, nullptr);
+    }
+    PlayTypeSound(8);
+    return EXC_SNIPPET;
 }
 
 static int RunLine(const std::wstring& line, HWND mainWnd) {
@@ -2267,7 +2414,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
     // layout fallback may resolve a wrong-layout alias name (exact hit only).
     if (g_set.execAliases) {
         if (const Alias* a = FindAliasLayout(word)) {
-            std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
+            std::wstring cmd = ExpandEnv(Substitute(a->action, rest, a->name));
             // v0.17: an alias that expands to a wiper is still a wiper.
             if (g_set.confirmDanger && LooksDangerous(cmd) &&
                 !ConfirmDangerLine(cmd, mainWnd)) return EXC_NONE;
@@ -2292,6 +2439,7 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                              ? L" (layout: " + word + L")" : L"") +
                         L" (handle " +
                         (sei.hProcess ? std::wstring(L"ok") : std::wstring(L"none")) + L")");
+                RecordArgMemory(a->name, rest);   // v0.33: words used become next defaults
             } else {
                 LogError(L"alias failed: " + a->name + L" -> " + cmd +
                          L" (GetLastError=" + std::to_wstring(GetLastError()) + L")");
@@ -2333,21 +2481,42 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         if (pt != EXC_NONE) return pt;
     }
 
-    // 2b) web-search quicklinks: "g some query" -> default browser ([WebSearch])
-    if (!g_webLinks.empty() && !rest.empty()) {
+    // 2b) web-search quicklinks / v0.33 Search Engines Lite (ROADMAP-V1 §4a):
+    // "g some query", browser-style "g:some query", and with [WebSearch] Bang=1
+    // the DDG form "!g some query" - any [WebSearch] name=https://…%s row is a
+    // zero-DLL search plugin, invoked three ways.
+    if (!g_webLinks.empty() && (!rest.empty() || word.find(L':') != std::wstring::npos)) {
+        std::wstring wname = word;
+        std::wstring q = rest;
+        size_t colon = word.find(L':');
+        if (colon != std::wstring::npos && colon > 0 && colon + 1 < word.size()) {
+            wname = word.substr(0, colon);
+            q = word.substr(colon + 1);
+            if (!rest.empty()) q += L" " + rest;
+        }
+        if (!wname.empty() && wname[0] == L'!' &&
+            ReadIniInt(L"WebSearch", L"Bang", 0) != 0)
+            wname = wname.substr(1);
         for (auto& wl : g_webLinks) {
-            if (_wcsicmp(word.c_str(), wl.name.c_str()) != 0) continue;
+            if (_wcsicmp(wname.c_str(), wl.name.c_str()) != 0) continue;
             std::wstring url = wl.tmpl;
             size_t pos = url.find(L"%s");
-            std::wstring q = WebEncode(rest);
-            if (pos != std::wstring::npos) url.replace(pos, 2, q); else url += q;
-            LogInfo(L"websearch: " + word + L" -> " + url);
+            std::wstring enc = WebEncode(q);
+            if (pos != std::wstring::npos) url.replace(pos, 2, enc); else url += enc;
+            LogInfo(L"websearch: " + wname + L" -> " + url);
             if (!g_set.execWww) { LogInfo(L"websearch: blocked by [Exec] WWW=0"); return EXC_NONE; }
             ShellExecuteW(mainWnd, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             PlayTypeSound(3);
             return EXC_URL;
         }
     }
+
+    // 2c) v0.33 snippets (ROADMAP-50 #17/#59): a [Snippets] name typed with or
+    // without words expands through the %s engine and lands in the window that
+    // was behind the console. Checked AFTER plugins and quicklinks on purpose:
+    // text expansion must never shadow a command that could actually run.
+    if (const Snippet* sn = FindSnippet(word))
+        return RunSnippet(sn, rest, mainWnd);
 
     // 3) URL
     std::wstring expanded = ExpandEnv(line);
@@ -2890,6 +3059,179 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
         LogInfo(L"stayawake: on for " + rest + L" min");
         ShowAnswer(mainWnd, msg);
         return EXC_PLUGIN;
+    }
+    // v0.33 (ROADMAP-V1 §4a): Search Engines Lite - every [WebSearch] row is a
+    // first-class zero-DLL plugin, and `search` manages the rows so the user
+    // never has to open the INI. Pure config writes: nothing here touches the
+    // network, so headless runs it all (test assembles URLs, Enter would open one).
+    {
+        auto validName = [](const std::wstring& n) {
+            if (n.empty() || n.size() > 32) return false;
+            for (wchar_t c : n)
+                if (!(iswalnum(c) || c == L'_' || c == L'-')) return false;
+            return true;
+        };
+        auto collides = [&](const std::wstring& nm, std::wstring& why) -> bool {
+            if (_wcsicmp(nm.c_str(), L"pos") == 0 || _wcsicmp(nm.c_str(), L"stayawake") == 0 ||
+                _wcsicmp(nm.c_str(), L"search") == 0 || _wcsicmp(nm.c_str(), L"snippet") == 0) {
+                why = L"a reserved word"; return true;
+            }
+            if (FindAlias(nm)) { why = L"an alias"; return true; }
+            for (auto& p : g_plugins)
+                if (p.GetCount && p.GetString && PluginLoadAllowed(p))
+                    for (int i = 0; i < p.GetCount(); ++i)
+                        if (_wcsicmp(FromAnsi(p.GetString(i)).c_str(), nm.c_str()) == 0) {
+                            why = L"a plugin command"; return true;
+                        }
+            return false;
+        };
+
+        if (w == L"search") {
+            std::vector<std::wstring> a = SplitWords(rest);
+            std::wstring sub = a.empty() ? L"" : Lower(a[0]);
+            if (sub.empty() || sub == L"list") {
+                std::wstring ans = L"search: " + std::to_wstring((int)g_webLinks.size()) +
+                                   L" engines | ";
+                for (size_t i = 0; i < g_webLinks.size(); ++i) {
+                    if (i) ans += L"  |  ";
+                    ans += g_webLinks[i].name + L"=" + g_webLinks[i].tmpl;
+                }
+                LogInfo(L"search: list (" + std::to_wstring((int)g_webLinks.size()) + L")");
+                ShowAnswer(mainWnd, ans);
+                return EXC_PLUGIN;
+            }
+            if (sub == L"add" && a.size() >= 3) {
+                std::wstring nm = a[1], url = a[2];
+                if (!validName(nm)) {
+                    ShowAnswer(mainWnd, L"search add: name must be 1-32 chars [A-Za-z0-9_-]");
+                    return EXC_PLUGIN;
+                }
+                std::wstring why;
+                if (collides(nm, why)) {
+                    ShowAnswer(mainWnd, L"search add: '" + nm + L"' collides with " + why);
+                    LogInfo(L"search: add rejected, collision (" + why + L"): " + nm);
+                    return EXC_PLUGIN;
+                }
+                if (_wcsnicmp(url.c_str(), L"http://", 7) != 0 &&
+                    _wcsnicmp(url.c_str(), L"https://", 8) != 0) {
+                    ShowAnswer(mainWnd, L"search add: url must start with http(s)://");
+                    return EXC_PLUGIN;
+                }
+                if (!StrStrIW(url.c_str(), L"%s")) url += L"%s";    // %s present-or-appended
+                bool existed = false;
+                for (auto& e : g_webLinks)
+                    if (_wcsicmp(e.name.c_str(), nm.c_str()) == 0) { existed = true; break; }
+                WS_(L"WebSearch", nm.c_str(), url);
+                LoadWebSearch();
+                LogInfo(L"search: " + nm + L" " + (existed ? L"updated -> " : L"added -> ") + url);
+                ShowAnswer(mainWnd, std::wstring(L"search: ") +
+                            (existed ? L"updated " : L"added ") + nm + L" -> " + url);
+                return EXC_PLUGIN;
+            }
+            if (sub == L"del" && a.size() >= 2) {
+                std::wstring nm = a[1];
+                bool found = false;
+                for (auto& e : g_webLinks)
+                    if (_wcsicmp(e.name.c_str(), nm.c_str()) == 0) { found = true; break; }
+                if (!found) {
+                    ShowAnswer(mainWnd, L"search: no engine '" + nm + L"'");
+                    return EXC_PLUGIN;
+                }
+                WritePrivateProfileStringW(L"WebSearch", nm.c_str(), nullptr, g_iniPath.c_str());
+                LoadWebSearch();
+                LogInfo(L"search: deleted " + nm);
+                ShowAnswer(mainWnd, L"search: deleted " + nm);
+                return EXC_PLUGIN;
+            }
+            if (sub == L"test" && a.size() >= 3) {
+                std::wstring nm = a[1];
+                size_t p = rest.find(a[1]);
+                std::wstring q = Trim(rest.substr(p + a[1].size()));
+                for (auto& e : g_webLinks) {
+                    if (_wcsicmp(e.name.c_str(), nm.c_str()) != 0) continue;
+                    std::wstring url = e.tmpl;
+                    size_t pos = url.find(L"%s");
+                    std::wstring enc = WebEncode(q);
+                    if (pos != std::wstring::npos) url.replace(pos, 2, enc); else url += enc;
+                    LogInfo(L"search: test " + nm + L" -> " + url + L" (Enter opens it)");
+                    ShowAnswer(mainWnd, url);   // bare URL: Enter runs the normal URL step
+                    return EXC_PLUGIN;
+                }
+                ShowAnswer(mainWnd, L"search: no engine '" + nm + L"'");
+                return EXC_PLUGIN;
+            }
+            ShowAnswer(mainWnd,
+                L"search list | search add <name> <url-with-%s> | "
+                L"search del <name> | search test <name> <query>");
+            return EXC_PLUGIN;
+        }
+
+        // v0.33 (ROADMAP-50 #17/#59): Snippets CLI - the same self-service rule for
+        // [Snippets]; expansion runs through the shared %s engine.
+        if (w == L"snippet") {
+            std::vector<std::wstring> a = SplitWords(rest);
+            std::wstring sub = a.empty() ? L"" : Lower(a[0]);
+            if (sub.empty() || sub == L"list") {
+                std::wstring ans = L"snippet: " + std::to_wstring((int)g_snippets.size()) +
+                                   L" snippets | ";
+                for (size_t i = 0; i < g_snippets.size(); ++i) {
+                    if (i) ans += L"  |  ";
+                    std::wstring prev = g_snippets[i].text;
+                    if (prev.size() > 24) prev = prev.substr(0, 24) + L"...";
+                    ans += g_snippets[i].name + L"=" + prev;
+                }
+                LogInfo(L"snippet: list (" + std::to_wstring((int)g_snippets.size()) + L")");
+                ShowAnswer(mainWnd, ans);
+                return EXC_PLUGIN;
+            }
+            if (sub == L"add" && a.size() >= 3) {
+                std::wstring nm = a[1];
+                size_t p = rest.find(a[1]);
+                std::wstring text = Trim(rest.substr(p + a[1].size()));
+                if (!validName(nm)) {
+                    ShowAnswer(mainWnd, L"snippet add: name must be 1-32 chars [A-Za-z0-9_-]");
+                    return EXC_PLUGIN;
+                }
+                if (text.empty()) {
+                    ShowAnswer(mainWnd, L"snippet add: text is empty");
+                    return EXC_PLUGIN;
+                }
+                std::wstring why;
+                if (collides(nm, why)) {
+                    ShowAnswer(mainWnd, L"snippet add: '" + nm + L"' collides with " + why);
+                    LogInfo(L"snippet: add rejected, collision (" + why + L"): " + nm);
+                    return EXC_PLUGIN;
+                }
+                bool existed = false;
+                for (auto& e : g_snippets)
+                    if (_wcsicmp(e.name.c_str(), nm.c_str()) == 0) { existed = true; break; }
+                WS_(L"Snippets", nm.c_str(), text);
+                LoadSnippets();
+                LogInfo(L"snippet: " + nm + L" " + (existed ? L"updated" : L"added") +
+                        L" (" + std::to_wstring((int)text.size()) + L" chars)");
+                ShowAnswer(mainWnd, std::wstring(L"snippet: ") +
+                            (existed ? L"updated " : L"added ") + nm);
+                return EXC_PLUGIN;
+            }
+            if (sub == L"del" && a.size() >= 2) {
+                std::wstring nm = a[1];
+                bool found = false;
+                for (auto& e : g_snippets)
+                    if (_wcsicmp(e.name.c_str(), nm.c_str()) == 0) { found = true; break; }
+                if (!found) {
+                    ShowAnswer(mainWnd, L"snippet: no snippet '" + nm + L"'");
+                    return EXC_PLUGIN;
+                }
+                WritePrivateProfileStringW(L"Snippets", nm.c_str(), nullptr, g_iniPath.c_str());
+                LoadSnippets();
+                LogInfo(L"snippet: deleted " + nm);
+                ShowAnswer(mainWnd, L"snippet: deleted " + nm);
+                return EXC_PLUGIN;
+            }
+            ShowAnswer(mainWnd,
+                L"snippet list | snippet add <name> <text with %s> | snippet del <name>");
+            return EXC_PLUGIN;
+        }
     }
     return EXC_NONE;
 }
@@ -3503,6 +3845,38 @@ static int    g_ddTop = 0;          // first visible row when the list overflows
 static bool   g_ddSelKb = false;    // Enter runs only rows picked by keyboard
 static size_t g_ddB = 0, g_ddE = 0;                  // word slot inside the edit
 
+// v0.33 (ROADMAP-50 #11): ghost text. When exactly ONE candidate extends what
+// the user typed (unique match - the ambiguity rule from the original plan),
+// its tail is painted dimmed after the caret so it reads without opening the
+// list; End or Right accepts it, any further typing just narrows it down.
+// The ghost is paint-only: it never enters the edit text until accepted.
+static std::wstring g_ghostFull;         // the unique full candidate for the text
+static bool         g_ghostVis = false;  // what the last paint showed (invalidation)
+static void DdSyncTitle();               // fwd: defined with the title probe below
+
+static bool GhostVisibleNow() {
+    if (g_ghostFull.empty() || g_hsrch || !g_edit) return false;
+    if (!g_headless && GetFocus() != g_edit) return false;  // headless has no focus at all
+    int len = GetWindowTextLengthW(g_edit);
+    if (len == 0) return false;
+    DWORD sel = (DWORD)SendMessageW(g_edit, EM_GETSEL, 0, 0);
+    if ((int)LOWORD(sel) != (int)HIWORD(sel) || (int)HIWORD(sel) != len) return false;
+    std::wstring text(len, L'\0');
+    GetWindowTextW(g_edit, &text[0], len + 1);
+    if (g_ghostFull.size() <= (size_t)len) return false;
+    return StartsWithNoCase(g_ghostFull, text);
+}
+static void GhostRefresh() {             // caret / selection / focus moved
+    bool v = g_set.ghost && GhostVisibleNow();
+    if (v != g_ghostVis) {
+        g_ghostVis = v;
+        if (g_edit) InvalidateRect(g_edit, nullptr, TRUE);
+        // the dd title carries the |g= probe - keep it honest when the caret
+        // moves WITHOUT a text change (harness EM_SETSEL included)
+        if (g_ddWnd && IsWindowVisible(g_ddWnd)) DdSyncTitle();
+    }
+}
+
 static bool DdVisible() { return g_ddWnd && IsWindowVisible(g_ddWnd); }
 
 static void DdSyncTitle() {   // cheap state probe for the test harness
@@ -3519,7 +3893,11 @@ static void DdSyncTitle() {   // cheap state probe for the test harness
         std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel) +
         L"|" + std::to_wstring(g_ddTop) + L"|" + top +
         (g_hsrch ? L"|bck" : L"") +                        // v0.27: |bck = history search
-        (g_headless ? L"|s=" + std::to_wstring(g_etScanCount) : L"")).c_str());
+        (g_headless ? L"|s=" + std::to_wstring(g_etScanCount) : L"") +
+        (g_headless && g_set.ghost && GhostVisibleNow()    // v0.33: |g=N = ghost tail len
+            ? L"|g=" + std::to_wstring(g_ghostFull.size() -
+                                       (size_t)GetWindowTextLengthW(g_edit))
+            : L"")).c_str());
 }
 
 static int DdVisibleRows() {
@@ -3550,6 +3928,12 @@ static void DdClose() {
     g_ddCacheText.clear();                    // v0.32: force a fresh scan next time
     g_ddCacheB = g_ddCacheE = 0;
     g_ddCacheHsrch = false;
+    if (!g_ghostFull.empty() || g_ghostVis) { // v0.33: no ghost without its rows
+        g_ghostFull.clear();
+        bool was = g_ghostVis;
+        g_ghostVis = false;
+        if (was && g_edit) InvalidateRect(g_edit, nullptr, TRUE);
+    }
 }
 
 static void DdEnsureFont() {
@@ -3790,6 +4174,8 @@ static void DdUpdate(HWND mainWnd) {
             for (auto& s : g_sysAliases) add(s.name);
         if (firstWord)
             for (auto& wl : g_webLinks) add(wl.name);   // quicklinks like "g"
+        if (firstWord)
+            for (auto& sn : g_snippets) add(sn.name);   // v0.33 snippet names too
         if (firstWord && g_set.execPlugins)
             for (auto& p : g_plugins)
                 if (p.GetCount && p.GetString && PluginLoadAllowed(p))
@@ -3827,6 +4213,7 @@ static void DdUpdate(HWND mainWnd) {
         if (g_set.etSysAlias)
             for (auto& s : g_sysAliases) trySug(s.name);
         for (auto& wl : g_webLinks) trySug(wl.name);
+        for (auto& sn : g_snippets) trySug(sn.name);    // v0.33
         if (g_set.execPlugins)
             for (auto& p : g_plugins)
                 if (p.GetCount && p.GetString && PluginLoadAllowed(p))
@@ -3891,8 +4278,31 @@ static void DdUpdate(HWND mainWnd) {
     g_ddCacheB = b; g_ddCacheE = e;            // keystroke reuses this list
     g_ddCacheHsrch = g_hsrch;
 
-    DdEnsureFont();
-    int rows = (int)g_ddItems.size();
+    // v0.33 (ROADMAP-50 #11): ghost = the ONE row that literally continues the
+    // whole typed text. "~" layout rows (different-layout text) and "≈" spell
+    // rows (a guess, not a completion) never ghost; neither does an ambiguous
+    // prefix - if two rows continue the line, End must not gamble.
+    g_ghostFull.clear();
+    if (g_set.ghost && !text.empty()) {
+        const std::wstring* uniq = nullptr;
+        bool dup = false;
+        for (size_t i = 0; i < g_ddItems.size() && !dup; ++i) {
+            if (i < g_ddLayout.size() && g_ddLayout[i]) continue;
+            if (i >= g_ddSub.size() || g_ddItems[i] != g_ddSub[i]) continue;
+            const std::wstring& c = g_ddSub[i];
+            if (c.size() > text.size() && StartsWithNoCase(c, text)) {
+                if (uniq) dup = true; else uniq = &c;
+            }
+        }
+        if (!dup && uniq) g_ghostFull = *uniq;
+    }
+    bool ghostNow = g_set.ghost && GhostVisibleNow();
+    if (ghostNow != g_ghostVis || ghostNow) {   // repaint whenever it is on screen
+        g_ghostVis = ghostNow;
+        if (g_edit) InvalidateRect(g_edit, nullptr, TRUE);
+    }
+
+    DdEnsureFont();    int rows = (int)g_ddItems.size();
     if (rows > g_set.ddLines) rows = g_set.ddLines;
     int h = rows * g_ddRowH + Sc(g_ddDpi, 4);       // v0.29: dd total scales with rows
     RECT wr; GetWindowRect(mainWnd, &wr);
@@ -3975,7 +4385,8 @@ static void ShowConsoleMenu(HWND hWnd, POINT pt) {
 static const int kPageStr[PG_COUNT] = {
     STR_PG_APPEARANCE, STR_PG_CONSOLE, STR_PG_FONT, STR_PG_HOTKEY, STR_PG_EXEC,
     STR_PG_EASYTYPE, STR_PG_HISTORY, STR_PG_LOG, STR_PG_ALIASES, STR_PG_SOUNDS,
-    STR_PG_PLUGINS, STR_PG_ENV, STR_PG_THEME, STR_PG_LANG };
+    STR_PG_PLUGINS, STR_PG_ENV, STR_PG_THEME, STR_PG_LANG,
+    STR_PG_SNIPPETS, STR_PG_SEARCH };             // v0.33 "write less" pages
 
 static HWND  g_setWnd = nullptr;
 static HWND  g_setList = nullptr;
@@ -3989,6 +4400,13 @@ static Settings  g_draft;
 static Hotkey    g_draftHk;
 static std::vector<Alias> g_draftAliases;
 static int       g_aliasSel = -1;
+// v0.33 "write less": Snippets + Search engines pages (same draft-row pattern)
+static std::vector<Snippet> g_draftSnippets;
+static std::vector<WebLink> g_draftEngines;
+static HWND g_snLb = nullptr, g_snName = nullptr, g_snTextInput = nullptr;
+static int  g_snSel = -1;
+static HWND g_seLb = nullptr, g_seName = nullptr, g_seUrl = nullptr;
+static int  g_seSel = -1;
 
 // controls that need direct access
 static HWND g_hkEdit = nullptr, g_hkLabel = nullptr, g_hkVk = nullptr;
@@ -4207,7 +4625,9 @@ enum { IDB_OK = 101, IDB_APPLY, IDB_CANCEL,
        IDB_FONT_CHOOSE, IDB_HI_CLEAR,
        IDB_PL_RESCAN, IDB_PL_UNLOAD, IDB_PL_ABOUT, IDB_PL_OPTIONS,
        IDB_EN_ADDVAR, IDB_EN_UPDATEVAR, IDB_EN_DELETEVAR,
-       IDB_TH_SAVEAS, IDB_TH_DEL, IDT_TH_COMBO, IDT_TH_NAME };
+       IDB_TH_SAVEAS, IDB_TH_DEL, IDT_TH_COMBO, IDT_TH_NAME,
+       IDB_SN_ADD, IDB_SN_UPDATE, IDB_SN_DELETE,           // v0.33 snippets page
+       IDB_SE_ADD, IDB_SE_UPDATE, IDB_SE_DELETE };         // v0.33 search engines page
 
 static std::wstring GetText(HWND h) {
     int n = GetWindowTextLengthW(h);
@@ -4472,6 +4892,101 @@ static void AliasesAdd() {
     SendMessageW(g_alLb, LB_SETCURSEL, g_aliasSel, 0);
 }
 
+// ---------------------------------------------------- v0.33 snippets page
+static void SnippetsFillList() {
+    if (!g_snLb) return;
+    SendMessageW(g_snLb, LB_RESETCONTENT, 0, 0);
+    for (auto& s : g_draftSnippets)
+        SendMessageW(g_snLb, LB_ADDSTRING, 0, (LPARAM)s.name.c_str());
+    if (g_snSel >= 0 && g_snSel < (int)g_draftSnippets.size())
+        SendMessageW(g_snLb, LB_SETCURSEL, g_snSel, 0);
+}
+static void SnippetsEditRow(int idx) {
+    g_snSel = idx;
+    if (idx < 0 || idx >= (int)g_draftSnippets.size()) return;
+    SetWindowTextW(g_snName,     g_draftSnippets[idx].name.c_str());
+    SetWindowTextW(g_snTextInput, g_draftSnippets[idx].text.c_str());
+}
+static bool SnippetsReadInto(Snippet& s) {
+    s.name = Trim(GetText(g_snName));
+    s.text = Trim(GetText(g_snTextInput));
+    if (s.name.empty() || s.text.empty()) return false;
+    if (s.name.size() > 32) return false;
+    for (wchar_t c : s.name)
+        if (!(iswalnum(c) || c == L'_' || c == L'-')) return false;
+    return true;
+}
+static void SnippetsUpdate() {
+    if (g_snSel < 0 || g_snSel >= (int)g_draftSnippets.size()) return;
+    Snippet s;
+    if (!SnippetsReadInto(s)) return;
+    g_draftSnippets[g_snSel] = s;
+    SnippetsFillList();
+}
+static void SnippetsAdd() {
+    Snippet s;
+    if (!SnippetsReadInto(s)) return;
+    for (auto& e : g_draftSnippets)
+        if (_wcsicmp(e.name.c_str(), s.name.c_str()) == 0) {   // replace in place
+            e.text = s.text;
+            g_snSel = (int)(&e - &g_draftSnippets[0]);
+            SnippetsFillList();
+            return;
+        }
+    g_draftSnippets.push_back(s);
+    g_snSel = (int)g_draftSnippets.size() - 1;
+    SnippetsFillList();
+}
+
+// ------------------------------------------------ v0.33 search engines page
+static void EnginesFillList() {
+    if (!g_seLb) return;
+    SendMessageW(g_seLb, LB_RESETCONTENT, 0, 0);
+    for (auto& e : g_draftEngines)
+        SendMessageW(g_seLb, LB_ADDSTRING, 0, (LPARAM)e.name.c_str());
+    if (g_seSel >= 0 && g_seSel < (int)g_draftEngines.size())
+        SendMessageW(g_seLb, LB_SETCURSEL, g_seSel, 0);
+}
+static void EnginesEditRow(int idx) {
+    g_seSel = idx;
+    if (idx < 0 || idx >= (int)g_draftEngines.size()) return;
+    SetWindowTextW(g_seName, g_draftEngines[idx].name.c_str());
+    SetWindowTextW(g_seUrl,  g_draftEngines[idx].tmpl.c_str());
+}
+static bool EnginesReadInto(WebLink& e) {
+    e.name = Trim(GetText(g_seName));
+    e.tmpl = Trim(GetText(g_seUrl));
+    if (e.name.empty() || e.tmpl.empty()) return false;
+    if (e.name.size() > 32) return false;
+    for (wchar_t c : e.name)
+        if (!(iswalnum(c) || c == L'_' || c == L'-')) return false;
+    if (_wcsnicmp(e.tmpl.c_str(), L"http://", 7) != 0 &&
+        _wcsnicmp(e.tmpl.c_str(), L"https://", 8) != 0) return false;
+    if (!StrStrIW(e.tmpl.c_str(), L"%s")) e.tmpl += L"%s";   // same rule as `search add`
+    return true;
+}
+static void EnginesUpdate() {
+    if (g_seSel < 0 || g_seSel >= (int)g_draftEngines.size()) return;
+    WebLink e;
+    if (!EnginesReadInto(e)) return;
+    g_draftEngines[g_seSel] = e;
+    EnginesFillList();
+}
+static void EnginesAdd() {
+    WebLink e;
+    if (!EnginesReadInto(e)) return;
+    for (auto& x : g_draftEngines)
+        if (_wcsicmp(x.name.c_str(), e.name.c_str()) == 0) {
+            x.tmpl = e.tmpl;
+            g_seSel = (int)(&x - &g_draftEngines[0]);
+            EnginesFillList();
+            return;
+        }
+    g_draftEngines.push_back(e);
+    g_seSel = (int)g_draftEngines.size() - 1;
+    EnginesFillList();
+}
+
 // ---------------------------------------------------------------- build dialog
 static void UiLoad() {
     for (auto& f : g_loaders) f();
@@ -4718,6 +5233,26 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     }
                     return 0;
                 }
+                if (bid == IDB_SN_ADD)     { SnippetsAdd();    return 0; }
+                if (bid == IDB_SN_UPDATE)  { SnippetsUpdate(); return 0; }
+                if (bid == IDB_SN_DELETE) {
+                    if (g_snSel >= 0 && g_snSel < (int)g_draftSnippets.size()) {
+                        g_draftSnippets.erase(g_draftSnippets.begin() + g_snSel);
+                        g_snSel = -1;
+                        SnippetsFillList();
+                    }
+                    return 0;
+                }
+                if (bid == IDB_SE_ADD)     { EnginesAdd();    return 0; }
+                if (bid == IDB_SE_UPDATE)  { EnginesUpdate(); return 0; }
+                if (bid == IDB_SE_DELETE) {
+                    if (g_seSel >= 0 && g_seSel < (int)g_draftEngines.size()) {
+                        g_draftEngines.erase(g_draftEngines.begin() + g_seSel);
+                        g_seSel = -1;
+                        EnginesFillList();
+                    }
+                    return 0;
+                }
                 if (bid == IDB_FONT_CHOOSE) {
                     CHOOSEFONTW cf = { sizeof(cf) };
                     LOGFONTW lf = {};
@@ -4803,6 +5338,16 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
             if (s >= 0) AliasesEditRow(s);
             return 0;
         }
+        if (code == LBN_SELCHANGE && src == g_snLb) {   // v0.33 snippets page
+            int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
+            if (s >= 0) SnippetsEditRow(s);
+            return 0;
+        }
+        if (code == LBN_SELCHANGE && src == g_seLb) {   // v0.33 search engines page
+            int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
+            if (s >= 0) EnginesEditRow(s);
+            return 0;
+        }
         if (code == LBN_SELCHANGE && src == g_plLb) {
             PluginsReadRow();
             int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
@@ -4853,8 +5398,11 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
 
     LoadThemes();   // v0.15: the studio combo must see fresh themes\*.theme.ini
     g_draft = g_set; g_draftHk = g_hotkey; g_draftAliases = g_aliases;
+    g_draftSnippets = g_snippets;                 // v0.33: page drafts ride the same
+    g_draftEngines  = g_webLinks;                 //        open->Apply->reload cycle
     g_draftTheme = ThemeAt(ThemeFromName(g_set.theme));
     g_aliasSel = 0;
+    g_snSel = 0; g_seSel = 0;
 
     NONCLIENTMETRICSW ncm = { sizeof(ncm) };
     SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0);
@@ -5013,6 +5561,16 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_TYPE], L(STR_FT_FUZZY),   16, y, &Settings::fuzzy);      y += 26;
     CkB(g_setPage[PG_TYPE], L(STR_TY_FRECENCY), 16, y, &Settings::frecency);  y += 26;
     CkB(g_setPage[PG_TYPE], L(STR_FT_LAYOUT),  16, y, &Settings::layoutFallback);
+    // v0.33 "write less": the two completion brainy switches. Narrow on purpose
+    // (170 logical px): the last rows of this page sit beside the OK/Apply column.
+    y += 26;
+    { HWND c = MkCheck(g_setPage[PG_TYPE], L(STR_TY_GHOST), 16, y, 170);
+      Bind([c]{ SendMessageW(c, BM_SETCHECK, g_draft.ghost ? BST_CHECKED : BST_UNCHECKED, 0); },
+           [c]{ g_draft.ghost = SendMessageW(c, BM_GETCHECK, 0, 0) == BST_CHECKED; }); }
+    y += 26;
+    { HWND c = MkCheck(g_setPage[PG_TYPE], L(STR_TY_ARGMEM), 16, y, 170);
+      Bind([c]{ SendMessageW(c, BM_SETCHECK, g_draft.argMemory ? BST_CHECKED : BST_UNCHECKED, 0); },
+           [c]{ g_draft.argMemory = SendMessageW(c, BM_GETCHECK, 0, 0) == BST_CHECKED; }); }
 
     // --- History
     y = 12;
@@ -5218,6 +5776,45 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
             SS_LEFT, 16, 76, 430, 90);
     MkLabel(g_setPage[PG_LANG], L(STR_LA_HINT), 16, 172, 430);
 
+    // --- v0.33 Snippets (ROADMAP-50 #17/#59): the [Snippets] rows as a table,
+    // same draft/edit pattern the Aliases page uses.
+    g_snLb = MkOn(g_setPage[PG_SNIPPETS], L"LISTBOX", L"",
+                  WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 150, 330);
+    {
+        int sx = 170;
+        MkLabel(g_setPage[PG_SNIPPETS], L(STR_AL_NAME), sx, 10, 60);
+        g_snName = MkEdit(g_setPage[PG_SNIPPETS], L"", sx + 55, 8, 230);
+        MkLabel(g_setPage[PG_SNIPPETS], L(STR_SN_TEXT), sx, 40, 60);
+        g_snTextInput = MkEdit(g_setPage[PG_SNIPPETS], L"", sx + 55, 38, 230);
+        MkButton(g_setPage[PG_SNIPPETS], L(STR_AL_ADD),    sx, 70, 72, IDB_SN_ADD);
+        MkButton(g_setPage[PG_SNIPPETS], L(STR_AL_UPDATE), sx + 80, 70, 72, IDB_SN_UPDATE);
+        MkButton(g_setPage[PG_SNIPPETS], L(STR_AL_DELETE), sx + 160, 70, 72, IDB_SN_DELETE);
+        // hint: three rows tall - SS_LEFT wraps inside the rect, one row clipped the sentence
+        MkOn(g_setPage[PG_SNIPPETS], L"STATIC", L(STR_SN_HINT), SS_LEFT, sx, 104, 292, 56);
+    }
+    SnippetsFillList();
+    if (!g_draftSnippets.empty()) SnippetsEditRow(0);
+
+    // --- v0.33 Search engines (ROADMAP-V1 §4a): name + URL with %s = a plugin.
+    // Deletion of the built-in g/yt/gh rows is deliberately a no-op after Apply
+    // (LoadWebSearch always re-adds them): they are the feature's defaults, not
+    // user data. [WebSearch] Enable=0 turns the whole family off.
+    g_seLb = MkOn(g_setPage[PG_SEARCH], L"LISTBOX", L"",
+                  WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 8, 8, 150, 330);
+    {
+        int ex = 170;
+        MkLabel(g_setPage[PG_SEARCH], L(STR_AL_NAME), ex, 10, 60);
+        g_seName = MkEdit(g_setPage[PG_SEARCH], L"", ex + 55, 8, 230);
+        MkLabel(g_setPage[PG_SEARCH], L"URL", ex, 40, 60);
+        g_seUrl = MkEdit(g_setPage[PG_SEARCH], L"", ex + 55, 38, 230);
+        MkButton(g_setPage[PG_SEARCH], L(STR_AL_ADD),    ex, 70, 72, IDB_SE_ADD);
+        MkButton(g_setPage[PG_SEARCH], L(STR_AL_UPDATE), ex + 80, 70, 72, IDB_SE_UPDATE);
+        MkButton(g_setPage[PG_SEARCH], L(STR_AL_DELETE), ex + 160, 70, 72, IDB_SE_DELETE);
+        MkOn(g_setPage[PG_SEARCH], L"STATIC", L(STR_SE_HINT), SS_LEFT, ex, 104, 292, 56);
+    }
+    EnginesFillList();
+    if (!g_draftEngines.empty()) EnginesEditRow(0);
+
     MkButton(g_setWnd, L(STR_OK),     380, 380, 75, IDB_OK);
     MkButton(g_setWnd, L(STR_APPLY),  461, 380, 75, IDB_APPLY);
     MkButton(g_setWnd, L(STR_CANCEL), 542, 380, 75, IDB_CANCEL);
@@ -5322,6 +5919,8 @@ static void WriteDraftIni() {
     WInt(L"Type", L"EasyType",     s.easyType);
     WInt(L"Type", L"Fuzzy",        s.fuzzy ? 1 : 0);
     WInt(L"Type", L"LayoutFallback", s.layoutFallback ? 1 : 0);
+    WInt(L"Type", L"Ghost",          s.ghost ? 1 : 0);        // v0.33
+    WInt(L"Type", L"ArgMemory",      s.argMemory ? 1 : 0);    // v0.33
     WInt(L"DropDown", L"Enable",              s.dropDown ? 1 : 0);
     WInt(L"DropDown", L"Lines",               s.ddLines);
     WInt(L"DropDown", L"ShowHistoryOnEmpty",  s.ddOnEmpty ? 1 : 0);
@@ -5385,6 +5984,23 @@ static void WriteDraftIni() {
         WS_(L"Aliases", a.name.c_str(), value);
     }
 
+    // v0.33 [Snippets]: rewrite in full (the section belongs to snippets alone).
+    WritePrivateProfileStringW(L"Snippets", nullptr, nullptr, g_iniPath.c_str());
+    for (auto& s : g_draftSnippets)
+        WS_(L"Snippets", s.name.c_str(), s.text);
+
+    // v0.33 [WebSearch]: touch only the name rows. Enable/Bang and friends are
+    // keys of the feature, not of a single engine - they must survive Apply.
+    for (auto& e : g_webLinks) {
+        bool keep = false;
+        for (auto& d : g_draftEngines)
+            if (_wcsicmp(d.name.c_str(), e.name.c_str()) == 0) { keep = true; break; }
+        if (!keep)
+            WritePrivateProfileStringW(L"WebSearch", e.name.c_str(), nullptr, g_iniPath.c_str());
+    }
+    for (auto& d : g_draftEngines)
+        WS_(L"WebSearch", d.name.c_str(), d.tmpl);
+
     // remember dialog position (TypeAndRun [Coordinates] parity)
     if (g_setWnd) {
         RECT r; GetWindowRect(g_setWnd, &r);
@@ -5398,6 +6014,7 @@ static void LiveApply(HWND mainWnd) {
     ReloadHotkey(mainWnd);                 // LoadSettings + RegisterHotKey
     LoadAliases();                         // LoadSettings covers sys-aliases/ignores
     LoadWebSearch();
+    LoadSnippets();                        // v0.33: snippets follow Apply too
     LoadScripts();                         // v0.16 Scripts\ follows Apply too
     // language: re-resolve pack + RTL before fonts (CJK/RTL suggestion)
     {
@@ -5490,6 +6107,28 @@ static bool SettingsSelfTest(HWND mainWnd) {
     return ok && g_setWnd == nullptr;
 }
 
+// v0.33: End/Right accepts the ghost - the edit gets the full candidate and the
+// caret parks at its end, exactly like Tab on the top row, but without opening
+// anything. The dd closes; the next keystroke reopens it for the new text.
+static void GhostAccept(HWND edit) {
+    int len = GetWindowTextLengthW(edit);
+    std::wstring text(len, L'\0');
+    if (len) GetWindowTextW(edit, &text[0], len + 1);
+    if (g_ghostFull.size() <= text.size() ||
+        !StartsWithNoCase(g_ghostFull, text)) {
+        g_ghostFull.clear();
+        return;
+    }
+    std::wstring full = g_ghostFull;
+    g_ghostFull.clear();
+    g_ghostVis = false;
+    SetWindowTextW(edit, full.c_str());
+    SendMessageW(edit, EM_SETSEL, (WPARAM)-1, 0);
+    DdClose();
+    InvalidateRect(edit, nullptr, TRUE);
+    LogInfo(L"ghost accepted: " + full);
+}
+
 static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
                                  UINT_PTR id, DWORD_PTR ref) {
     HWND mainWnd = (HWND)ref;
@@ -5497,7 +6136,9 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
     // hand-drawn cue banner: EM_SETCUEBANNER needs the v6 common-controls
     // manifest this .rc-less build carries no, and would not reach PrintWindow
     // screenshots either (UX review B1: the four keys must teach themselves)
-    if (msg == WM_PAINT || msg == WM_PRINTCLIENT) {
+    if (msg == WM_PAINT || msg == WM_PRINTCLIENT || msg == WM_PRINT) {
+        // v0.33: PrintWindow(flag 0) delivers WM_PRINT to the edit child - the
+        // ghost/banner overlay must hook every paint path the harness reaches.
         LRESULT r = DefSubclassProc(hWnd, msg, wp, lp);
         HDC dc = (msg == WM_PAINT) ? GetDC(hWnd) : (HDC)wp;
         if (dc && GetWindowTextLengthW(hWnd) == 0) {
@@ -5510,6 +6151,32 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
             RECT tr = { rc.left + 3, (rc.top + rc.bottom - (int)tm.tmHeight) / 2,
                         rc.right - 2, rc.bottom };
             DrawTextW(dc, L(STR_CUE), -1, &tr, DT_LEFT | DT_NOPREFIX | DT_SINGLELINE);
+            if (old) SelectObject(dc, old);
+        } else if (dc && g_set.ghost && GhostVisibleNow()) {
+            // v0.33 (ROADMAP-50 #11): ghost text - the dim tail of the unique
+            // completion, painted after the real text, never part of it.
+            int len = GetWindowTextLengthW(hWnd);
+            std::wstring text(len, L'\0');
+            GetWindowTextW(hWnd, &text[0], len + 1);
+            std::wstring suf = g_ghostFull.substr(text.size());
+            HFONT f = (HFONT)SendMessageW(hWnd, WM_GETFONT, 0, 0);
+            HFONT old = f ? (HFONT)SelectObject(dc, f) : nullptr;
+            TEXTMETRICW tm = {}; GetTextMetricsW(dc, &tm);
+            RECT rc; GetClientRect(hWnd, &rc);
+            // On-screen the caret position is truth (it survives horizontal
+            // scroll); an off-screen caret-less edit makes EM_POSFROMCHAR lie
+            // with (0,0) - detect that and measure the typed text instead.
+            LRESULT p = SendMessageW(hWnd, EM_POSFROMCHAR, (WPARAM)len, 0);
+            int gx = LOWORD(p);
+            if (gx <= 1 || gx >= 0x8000) {                  // (0,0) or 0xFFFF lies
+                SIZE sz = {};
+                GetTextExtentPoint32W(dc, text.c_str(), len, &sz);
+                gx = 2 + sz.cx;                               // 2px = EDIT margin
+            }
+            int gy = (rc.top + rc.bottom - (int)tm.tmHeight) / 2;
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, MixColor(g_effBg, g_effFg, 45));
+            TextOutW(dc, gx, gy, suf.c_str(), (int)suf.size());
             if (old) SelectObject(dc, old);
         }
         if (msg == WM_PAINT && dc) ReleaseDC(hWnd, dc);
@@ -5601,11 +6268,19 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
             }
             break;
         case VK_END:
+            // v0.33: End accepts a visible ghost (fresh typing only - once the
+            // keyboard has moved the selection, End keeps being "last row").
+            if (g_set.ghost && !g_ddSelKb && GhostVisibleNow()) { GhostAccept(hWnd); return 0; }
             if (DdVisible() && !g_ddItems.empty()) {
                 g_ddSel = (int)g_ddItems.size() - 1; g_ddSelKb = true; DdKeepVisible();
                 DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
                 return 0;
             }
+            break;
+        case VK_RIGHT:
+            // v0.33: at end of line Right would do nothing anyway - with a ghost
+            // on screen it accepts it (VS Code's completion idiom).
+            if (g_set.ghost && GhostVisibleNow()) { GhostAccept(hWnd); return 0; }
             break;
         case L'A': case L'a':
             if (ctrl) { SendMessageW(hWnd, EM_SETSEL, 0, -1); return 0; }   // Ctrl+A
@@ -5664,7 +6339,17 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
         }
         break;
     }
+    if (msg == WM_KEYUP && (wp == VK_LEFT || wp == VK_RIGHT || wp == VK_UP ||
+                            wp == VK_DOWN || wp == VK_HOME || wp == VK_END))
+        GhostRefresh();                       // v0.33: caret moved, ghost may need to hide
+    if (msg == WM_LBUTTONUP || msg == WM_LBUTTONDBLCLK)
+        GhostRefresh();                       // v0.33: clicks move caret + selection too
     if (msg == WM_KEYDOWN && wp != VK_TAB) ResetET(); // typing rebuilds candidates
+    if (msg == EM_SETSEL) {                // v0.33: caret/selection moved by anyone
+        LRESULT r = DefSubclassProc(hWnd, msg, wp, lp);
+        GhostRefresh();
+        return r;
+    }
     return DefSubclassProc(hWnd, msg, wp, lp);
 }
 
@@ -5840,6 +6525,22 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             rc.top = rc.bottom - SbH();
             if (g_visible) InvalidateRect(hWnd, &rc, TRUE);
         }
+        else if (wp == kSnipPasteTimer) {          // v0.33: snippet Ctrl+V delivery
+            KillTimer(hWnd, kSnipPasteTimer);
+            HWND fg = GetForegroundWindow();
+            if (fg && fg != hWnd && fg != g_setWnd && !g_snipText.empty()) {
+                INPUT in[4] = {};
+                in[0].type = INPUT_KEYBOARD; in[0].ki.wVk = VK_CONTROL;
+                in[1].type = INPUT_KEYBOARD; in[1].ki.wVk = 'V';
+                in[2].type = INPUT_KEYBOARD; in[2].ki.wVk = 'V'; in[2].ki.dwFlags = KEYEVENTF_KEYUP;
+                in[3].type = INPUT_KEYBOARD; in[3].ki.wVk = VK_CONTROL; in[3].ki.dwFlags = KEYEVENTF_KEYUP;
+                UINT n = SendInput(4, in, sizeof(INPUT));
+                LogInfo(L"snippet: paste sent (" + std::to_wstring(n) + L" events)");
+            } else {
+                LogInfo(L"snippet: paste skipped (no target window)");
+            }
+            g_snipText.clear();
+        }
         return 0;
     case WM_PAINT: {
         PAINTSTRUCT ps;
@@ -5962,6 +6663,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_COMMAND:
+        if ((HIWORD(wp) == EN_SETFOCUS || HIWORD(wp) == EN_KILLFOCUS) &&
+            g_edit && (HWND)lp == g_edit) {
+            GhostRefresh();                    // v0.33: the ghost follows the focus
+        }
         if (HIWORD(wp) == EN_CHANGE && g_edit && (HWND)lp == g_edit) {
             // live traffic-light preview of what Enter will execute
             Anchor na = ClassifyAnchor(GetEditText(g_edit));
@@ -6204,6 +6909,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetProcessDefaultLayout(LangRtl() ? LAYOUT_RTL : 0);   // Arabic mirror (LTR = 0)
     LoadAliases();
     LoadWebSearch();
+    LoadSnippets();     // v0.33: [Snippets] folder-style auto-registration
     LoadScripts();      // v0.16: Scripts\ folder auto-registration
     LoadHistory();
     LoadUsage();        // v0.17: Usage.dat powers the drop-down's frecency ranking

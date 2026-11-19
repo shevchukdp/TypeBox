@@ -46,6 +46,10 @@
 |---|---|---|
 | ![theme](docs/screenshots/settings-theme.png) | ![lang](docs/screenshots/settings-language.png) | ![langru](docs/screenshots/settings-language-ru.png) |
 
+| Ghost text, accepted lines, snippets and search engines — the v0.33 «write less» wave |
+|---|
+| ![writeless](docs/screenshots/write-less.png) |
+
 ## Why TypeBox
 
 | | **TypeBox** | TypeAndRun | PowerToys Run | Flow Launcher |
@@ -60,9 +64,25 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.32.0)
+## Working today (v0.33.0)
 
-Everything below ships in **[v0.32.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.30 opened the plugin wave, v0.30.1 split the `weather`/`w` command words after our release-bytes gate caught nettools shadowing weather.dll, v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law, v0.32 taught the launcher **native typing** — `дфя` finds `laz`). The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.33.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law, v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Write less (v0.33)**
+
+- **Ghost text** — type a unique prefix and the rest of the winning suggestion appears after the
+  caret in dim paint: `End` (or `Right`) accepts it, typing on just narrows it. Strictly the
+  *unique* match: two candidates sharing the prefix and the ghost stays out of the way — accepting
+  is never a gamble; layout `~` and spell `≈` rows never ghost (`[Type] Ghost=1`)
+- **Remembered arguments** — `ff a b` once, and tomorrow `ff x` still fills `%2` with `b`
+  (per-alias, per-slot, in `Usage.dat` next to your usage stats; `[Type] ArgMemory=1`)
+- **Snippets** — `[Snippets] sig=Best regards, %s` + typing `sig John Doe` lands the expanded
+  text in the window behind the console (clipboard + one Ctrl+V; headless only logs `would
+  paste`); `snippet add|list|del` from the line, a Settings page, ET rows and spell rows included
+- **Your own search engines** — `[WebSearch] name = https://…%s` is a plugin without a DLL:
+  `g query`, `g:query`, and with `Bang=1` the `!g query` form; `search add|list|del|test`
+  manage them without opening the INI (`test` assembles the URL — only Enter opens it), plus
+  their own Settings page. Offline-first intact: this wave never touches the network
 
 **Native typing (v0.32)**
 

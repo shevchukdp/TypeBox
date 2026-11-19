@@ -3,6 +3,46 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.33.0] - 2026-11-19
+
+### Write less
+
+![ghost text completing the unique match, remembered arguments, snippets and search engines in Settings](docs/screenshots/write-less.png)
+
+- **Ghost text** (ROADMAP-50 #11) - when exactly ONE suggestion literally continues what you
+  typed, its tail appears dimmed after the caret, paint-only: it is never part of the line until
+  you accept it. **End** (or **Right** at the end of the line) accepts; any further keystroke
+  just narrows the guess down. The uniqueness rule is the contract - two rows sharing the prefix
+  and the ghost stays silent, so accepting is never a gamble. Layout (`~`) rows and spell (`≈`)
+  rows never ghost: they are corrections, not continuations. `[Type] Ghost=1` default; the
+  drop-down title exposes the tail length to suites (`|g=N`, headless-only).
+- **Per-slot argument memory** (RI3 #203, the TypeAndRun `%n` feeling) - run `ff a b` once and
+  the words stick: the next `ff x` expands `%2` from memory, `ff` alone expands both. The words
+  live next to your usage stats (`Usage.dat` keys `name#1..9`, field 6 - `/day` and ranking
+  never see them), every alias and snippet gets its own slots, `[Type] ArgMemory=1` default.
+- **Snippets** (ROADMAP-50 #17 + #59) - `[Snippets] sig=Best regards, %s` in the INI and typing
+  `sig John Doe` puts the expanded text into the window that was behind the console (clipboard +
+  one synthetic Ctrl+V; in headless test mode nothing is pasted - the log says `would paste
+  N chars`). Snippets run through the same `%s/%1..%9` engine as aliases (and remember their
+  words too), name their own ET rows and spell rows, and are managed from the console:
+  `snippet add <name> <text with %s> | list | del` - collision-checked against aliases, plugin
+  words and the reserved words. New Settings page, same edit-table feel as Aliases.
+- **Search Engines Lite** (ROADMAP-V1 section 4a) - a `[WebSearch] name = https://…%s` row is a
+  zero-DLL search plugin you invoke three ways: `g query`, browser-style `g:query`, and -
+  with `[WebSearch] Bang=1` - the DDG form `!g query`. New console words `search add|list|del`
+  and `search test <name> <query>` (test assembles the URL into the line; Enter is the only
+  thing that opens it), `%s` present-or-appended, name `[A-Za-z0-9_-]{1,32}`, refuse-to-shadow
+  rules identical to snippets. `search import <opensearch.xml>` is deliberately NOT here yet -
+  that one needs the network, and it will ship when it can ship honest. New Settings page too.
+- Settings grew two pages (Snippets, Search engines) and two EasyType switches (Ghost text,
+  Remember arguments); the offline-first rule is untouched - nothing in this wave sends a
+  packet, and the host still opens URLs only on a line you pressed Enter on.
+- `test-v0330`: 40 assertions - ghost shown/End/Right/ambiguity/exact-match/bck-mode/switch-off,
+  argument capture+recall+`Usage.dat` shape+`ArgMemory=0`, snippet expansion + would-paste +
+  CLI CRUD + alias-priority + collision + ET completion, search CRUD + `%s`-append + all three
+  invoke forms + `Bang=0` refusal + `search test` + charset + collision, both settings pages
+  through the harness probes, roster 19 and v0.33 version pin.
+
 ## [0.32.0] - 2026-11-19
 
 ### Native typing

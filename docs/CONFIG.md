@@ -222,6 +222,8 @@ like `cmd`/`powershell`) is flagged `DEAD: name -> target` with a one-line fix -
 | `Fuzzy` | `1` subsequence scoring — `cl` finds `calc` (Tab + drop-down, hits accented); `0` = TypeAndRun prefix mode (TypeBox 0.11.0) | `1` |
 | `LayoutFallback` | `1` (TypeBox 0.32.0) — the word is also matched in the **other keyboard layout**: with ЙЦУКЕН on, the physical `l a z` keys print `дфя` and the alias `laz` is still found, Tab-completed and executed (both directions, physical-key map, `~`-marked rows, real hits win ties; Enter accepts only an exact other-layout hit); `0` disables | `1` |
 | `FrecencyRanking` | `1` (TypeBox 0.17.0) — drop-down ties are won by the commands you use most: `Usage.dat` next to the exe keeps `word · count · last-used` per command; delete the file to reset the ranking | `1` |
+| `Ghost` | `1` (TypeBox 0.33.0) — **ghost text**: when exactly one row continues the whole typed line, its tail paints dimmed after the caret; **End** (or **Right** at line end) accepts it, more typing narrows it. Uniqueness is the contract — an ambiguous prefix shows nothing; `~` layout and `≈` spell rows never ghost. `0` disables | `1` |
+| `ArgMemory` | `1` (TypeBox 0.33.0) — **remembered arguments**: the words of an alias/snippet run stick per slot (`Usage.dat` keys `name#1..9`, field 6), so `ff x` fills `%2` from the last time; `0` disables capture and recall | `1` |
 
 ### `[DropDown]` — suggestions list (TypeBox 0.10.0, TypeAndRun DropDown parity)
 A themed list snaps under the console (flips above at the screen edge): candidates for the word
@@ -243,21 +245,49 @@ instantly. Hovering with the mouse highlights a row but **Enter** still runs the
 only a keyboard selection or click runs. Two v0.32 marks: a row ending in **`~`** matched only
 through the *other keyboard layout* (see `LayoutFallback`), and rows starting with **`≈`** are
 "did you mean" suggestions (≤2 edits) that appear when nothing else matched — picking one
-writes the real word.
+writes the real word. From v0.33 the unique continuation also paints dimmed after the caret
+(**ghost text**, `[Type] Ghost`) — **End**/**Right** accepts it without touching the list.
 
-### `[WebSearch]` — quicklinks (TypeBox 0.12.0)
+### `[Snippets]` — text expansion (TypeBox 0.33.0)
+A row is `name = text`; typing `name [words]` (no other command claimed the word) expands the
+text through the same engine as alias actions — `%s` = the typed remainder, `%1…%9` = the words,
+empty `%n` falls back to the remembered one (see `[Type] ArgMemory`) — and pastes it into the
+window that was behind the console (clipboard + one synthetic Ctrl+V). Headless test mode never
+touches the clipboard or injects keys: the log answers `snippet: would paste N chars`.
+Rows also complete in ET and can be managed from the line: `snippet add <name> <text with %s>`,
+`snippet list`, `snippet del <name>` (names `[A-Za-z0-9_-]{1,32}`, collisions with aliases,
+plugin words and reserved words are refused). Settings → **Snippets** edits the same rows.
+
+| Key | Meaning | Default |
+|---|---|---|
+| `name` | `name=text with %s and %1..%9` | (none) |
+
+Example: `sig=Best regards, %s` makes `sig John Doe` type itself into your mail draft.
+
+### `[WebSearch]` — quicklinks & search engines (TypeBox 0.12.0, Lite since 0.33.0)
 Raycast-style: a keyword + query opens the default browser. Built-in keywords **g** (Google),
 **yt** (YouTube), **gh** (GitHub) ship in the exe; rows here add or override by name. `%s` is
 replaced by the URL-encoded rest of the line (no `%s` ⇒ the query is appended). A quicklink run is
 logged (`websearch: g -> …`), recorded as EXC_URL, and previews amber in the anchor;
 `[Exec] WWW=0` blocks it.
 
+**Search Engines Lite (v0.33)** — every row is a first-class engine with three invoke forms:
+`g query` · browser-style `g:query` · and with `Bang=1` the DDG form `!g query`. Manage them
+without touching the INI: `search add <name> <url-with-%s>` · `search list` · `search del <name>`
+· `search test <name> <query>` (assembles the URL into the line — only Enter opens it, and under
+headless `[Exec] WWW=0` it stays a preview). Names are `[A-Za-z0-9_-]{1,32}` and refuse to
+collide with aliases, plugin words or the reserved words; `%s` is present-or-appended. The
+Settings → **Search engines** page edits the same rows (the g/yt/gh defaults always come back —
+`Enable=0` turns the family off). `search import <opensearch.xml>` is planned, not shipped.
+
 | Key | Meaning | Default |
 |---|---|---|
 | `Enable` | register quicklinks at all | `1` |
+| `Bang` | `1` (v0.33) — also accept the `!name query` form | `0` |
 | `g`,`yt`,`gh`,… | `name=https://…%s` | (3 built-ins) |
 
-Example: `so=https://stackoverflow.com/search?q=%s` makes `so hello world` open a search.
+Example: `so=https://stackoverflow.com/search?q=%s` makes `so hello world` (or `so:hello world`,
+or `!so hello world` with `Bang=1`) open a search.
 
 ### `[Color]` (scheme 0 — console)
 COLORREF integers (`0x00BBGGRR` as decimal); `-1` = system default:

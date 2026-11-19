@@ -1,7 +1,7 @@
 # TypeBox — the road to v1.0 and v1.5
 
-Research + master plan, 2026-11-18. Baseline: **v0.30.1 live** (18 plugins),
-**v0.31.0 in flight** (`wol` + `relaunch` rename + word-collision audit).
+Research + master plan, 2026-11-18. Baseline: **v0.32.0 live** (19 plugins, native typing),
+**v0.33.0 in flight** (ghost text, argument memory, snippets, Search Engines Lite).
 Companion docs: [ROADMAP-50.md](ROADMAP-50.md) (item backlog #1–300),
 [PLAN.md](PLAN.md) (original phases), [RESEARCH-PLUGINS-2026-11-18.md](RESEARCH-PLUGINS-2026-11-18.md),
 [PLUGIN_GALLERY.md](PLUGIN_GALLERY.md), [FEATURES.md](FEATURES.md) (TypeAndRun parity).
@@ -101,11 +101,11 @@ Effort S ≈ ≤2 d, M ≤ 1 w (our real cadence: S-hours to days).
 |---|---|---|
 | **v0.31.0** | power-on + word-law | `wol` #19 (magic packet, headless dry-run, presets), taskman `restart`→`relaunch` (off keeps `restart`), `audit-words` global uniqueness as hard build gate — **✅ shipped 2026-11-18** (26/26 suite, 75/75 release-bytes gate) |
 | **v0.32.0** | **native typing** *(marquee for our audience)* | layout-fallback fuzzy (QWERTY-typed-Cyrillic / vice-versa in ET rows & aliases, `[Type] LayoutFallback=1`, `~` hint), spell-suggest "did you mean" ≤2 edits (ROADMAP #13), `/checkconfig` v2 dead-alias badges + one-line fix (ROADMAP #46), ET keystroke debounce (perf §4b) — **✅ shipped 2026-11-19** (25/25 suite, release-bytes gate green) |
+| **v0.33.0** | **write less** | ① ghost-text inline completion (unique match, End/Right accepts, ROADMAP #11); ② per-`%n` argument memory (`Usage.dat` `name#slot`, RI3 #203); ③ **Snippets** `[Snippets]` + `%s` engine + Settings page + `snippet add/list/del` (ROADMAP #17/#59); ④ **Search Engines Lite** §4a (`[WebSearch]` self-service, `name:q`/`!name q` forms, `search add/list/del/test`) — **✅ shipped 2026-11-19** (40/40 suite, release-bytes gate green) |
 
 ### Planned waves (order = dependency order; swap freely, keep the ladder invariants)
 | Ver | Codename | Items (RI refs) | Sizes |
 |---|---|---|---|
-| **v0.33.0** | write less | ① ghost-text inline completion (unique match, End accepts, ROADMAP #11); ② per-`%n` argument memory (`Usage.dat` `alias#slot`, RI3 #203); ③ **Snippets** `[Snippets] name=text` + `%s` expand + Settings page (ROADMAP #17/#59); ④ **Search Engines Lite** — browser-style keyword search, §4a | M · S · M · M |
 | **v0.34.0** | time machine | ① **timed commands** `in 10m <cmd>` / `at 18:30 <cmd>`, `/timers`, `/cancel N`, persistent `Timers.dat`, tray balloon (ROADMAP #15, RI3 #202-adjacent); ② DND `/dnd [60]` + `[Sounds] Quiet=22:00-07:30` (ROADMAP #32, RI3 #220) | L · S |
 | **v0.35.0** | dashboards | ① `/stats` — 14-day sparkline in the line, top-10, plugin-hit table (RI3 #208); ② history CSV export/import + redaction pass (RI3 #207); ③ star rows `Ctrl+S` + `favs ` filter + dropdown **section headers** (RI3 #223/#225) | S · S · M |
 | **v0.36.0** | **plugin DX** *(v1.0 blocker)* | ① `include/typebox_plugin.h` SDK + PLUGIN_API.md worked examples (ROADMAP #41); ② **plugin manifest** `*.tbplugin.json` — declared words/author/hostmin, loader rejects word collisions **at load** (audit-words rules move into the host) — this is ABI-v1-compatible because the manifest is a sidecar; ③ **hot-reload** button (FreeLibrary/LoadLibrary, ROADMAP #42); ④ `/plugdebug` view — who answered which line, ms, counters, load errors (RI3 #270); ⑤ SEH guard: a faulting plugin self-disables, host lives; ⑥ `Data\<dll>\` writable convention (RI3 #275) | M |
@@ -121,6 +121,11 @@ the FULL 19+ plugin roster (the v0.30.0 lesson) · no wave introduces a core-exe
 §4b perf budgets do not regress (measured, not claimed).
 
 ### 4a. Search Engines Lite (v0.33) — "add a site as a search engine", browser-style
+
+> **Shipped 2026-11-19 in v0.33.0** — zero-DLL engines, `search add|list|del|test`, the three
+> invoke forms, the Settings page and the audit-words extension all landed. **Not shipped:**
+> `search import` (opensearch.xml / SearchScopes) — it needs the network, and a dead command
+> is worse than an absent one; it rides to a later wave with a live fetch path.
 
 The old Firefox/Chrome feeling: *name + URL template with the query string = a search engine
 you can invoke by keyword*. TypeBox already ships `[WebSearch] g=…%s` quicklinks (v0.12) —
