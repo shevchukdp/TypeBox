@@ -12,4 +12,5 @@ mingw/
 .cache/
 build-test/
 build-test*/
+build-smoke*/
 TypeBox.log*

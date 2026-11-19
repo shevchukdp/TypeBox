@@ -204,12 +204,23 @@ plugin windows all go through `MulDiv(v, windowDpi, 96)` at show time. So `Width
 means "720 logical px" — on a 150% display the console is physically 1080 px wide and
 text stays sharp. You never have to multiply anything by your scale factor.
 
+### `/checkconfig` — config audit (TypeBox 0.32.0)
+
+`/checkconfig` reports what actually loaded - into the console (one line, selectable/copyable)
+*and* the classic dialog: ini file, alias and sysalias counts, ignores, history, hotkey
+registration. The v2 audit adds real findings: an alias whose target is found nowhere (as a
+file, with `.exe`, in PATH over `.exe/.bat/.cmd/.com`, as a URL, or via a trusted shell host
+like `cmd`/`powershell`) is flagged `DEAD: name -> target` with a one-line fix - `(maybe
+'closest-word')` from the pool of alias names and plugin words - and every finding is logged
+(`checkconfig: dead alias "name"`). Duplicate alias names are counted in the header.
+
 ### `[Type]` (EasyType completion)
 | Key | Meaning | Default |
 |---|---|---|
 | `EasyType` | `0` off · `1` easy · `2` linux-style (Tab completes, repeat Tab cycles) | `2` |
 | `UseInternalET` / `UseAliasET` / `UseHistoryET` / `UseSysAliasET` | completion sources | `1` |
 | `Fuzzy` | `1` subsequence scoring — `cl` finds `calc` (Tab + drop-down, hits accented); `0` = TypeAndRun prefix mode (TypeBox 0.11.0) | `1` |
+| `LayoutFallback` | `1` (TypeBox 0.32.0) — the word is also matched in the **other keyboard layout**: with ЙЦУКЕН on, the physical `l a z` keys print `дфя` and the alias `laz` is still found, Tab-completed and executed (both directions, physical-key map, `~`-marked rows, real hits win ties; Enter accepts only an exact other-layout hit); `0` disables | `1` |
 | `FrecencyRanking` | `1` (TypeBox 0.17.0) — drop-down ties are won by the commands you use most: `Usage.dat` next to the exe keeps `word · count · last-used` per command; delete the file to reset the ranking | `1` |
 
 ### `[DropDown]` — suggestions list (TypeBox 0.10.0, TypeAndRun DropDown parity)
@@ -229,7 +240,10 @@ Settings → **EasyType** page: *Show suggestions drop-down*, *Visible rows*, *H
 line is empty* (log at start: `dropdown: on (8 rows)`). When the candidate list is longer than
 `Lines`, **↑/↓** and the **mouse wheel** scroll it; rows carry `1…9` and **Alt+1…9** runs one
 instantly. Hovering with the mouse highlights a row but **Enter** still runs the typed line —
-only a keyboard selection or click runs.
+only a keyboard selection or click runs. Two v0.32 marks: a row ending in **`~`** matched only
+through the *other keyboard layout* (see `LayoutFallback`), and rows starting with **`≈`** are
+"did you mean" suggestions (≤2 edits) that appear when nothing else matched — picking one
+writes the real word.
 
 ### `[WebSearch]` — quicklinks (TypeBox 0.12.0)
 Raycast-style: a keyword + query opens the default browser. Built-in keywords **g** (Google),

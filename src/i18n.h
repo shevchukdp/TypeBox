@@ -84,6 +84,9 @@ enum StrId {
     // v0.27: power-user console wave - /day summary + /tabs opener answers
     // (same side table, columns 22-24, EN+RU compiled; others fall back).
     STR_DAY_NONE, STR_TABS_NONE, STR_TABS_OPENED,
+    // v0.32 native typing: [Type] LayoutFallback checkbox (side table column 25,
+    // EN+RU compiled; other packs fall back to English).
+    STR_FT_LAYOUT,
     STR_LAST
 };
 
@@ -135,7 +138,7 @@ static const char* const kKeyNames[STR_LAST] = {
     "up_restart_ask", "up_dl_fail", "up_err_api", "up_manual",
     "po_usage", "po_nopreset",
     "aw_on", "aw_on_min", "aw_off", "aw_badmin",
-    "day_none", "tabs_none", "tabs_opened"
+    "day_none", "tabs_none", "tabs_opened", "ft_layout"
 };
 
 struct LangInfo { const wchar_t* code; const wchar_t* native; WORD langid; bool rtl; };
@@ -1090,7 +1093,7 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 // v0.23 pos + stayawake answers.
 // Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][25] = {
+static const wchar_t* const kExItems[LANG_COUNT][26] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1109,7 +1112,7 @@ static const wchar_t* const kExItems[LANG_COUNT][25] = {
             L"stayawake: off", L"stayawake: minutes must be 1..1440",
              L"day: nothing run yet today",
              L"tabs: give me at least one URL - /tabs url1 url2 ...",
-             L"tabs: opened %d URL(s)" },
+             L"tabs: opened %d URL(s)", L"Keyboard layout fallback (QWERTY <-> Cyrillic)" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1128,7 +1131,7 @@ static const wchar_t* const kExItems[LANG_COUNT][25] = {
             L"stayawake: выключено", L"stayawake: минуты должны быть 1..1440",
              L"day: сегодня ещё ничего не запускалось",
              L"tabs: дайте хотя бы один URL — /tabs url1 url2 ...",
-             L"tabs: открыто %d URL" },
+             L"tabs: открыто %d URL", L"Определение раскладки (QWERTY <-> ЙЦУКЕН)" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1300,7 +1303,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_TABS_OPENED) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_FT_LAYOUT) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail

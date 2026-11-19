@@ -99,12 +99,12 @@ Effort S ≈ ≤2 d, M ≤ 1 w (our real cadence: S-hours to days).
 ### In flight
 | Ver | Codename | Items |
 |---|---|---|
-| **v0.31.0** | power-on + word-law | `wol` #19 (magic packet, headless dry-run, presets), taskman `restart`→`relaunch` (off keeps `restart`), `audit-words` global uniqueness as hard build gate |
+| **v0.31.0** | power-on + word-law | `wol` #19 (magic packet, headless dry-run, presets), taskman `restart`→`relaunch` (off keeps `restart`), `audit-words` global uniqueness as hard build gate — **✅ shipped 2026-11-18** (26/26 suite, 75/75 release-bytes gate) |
+| **v0.32.0** | **native typing** *(marquee for our audience)* | layout-fallback fuzzy (QWERTY-typed-Cyrillic / vice-versa in ET rows & aliases, `[Type] LayoutFallback=1`, `~` hint), spell-suggest "did you mean" ≤2 edits (ROADMAP #13), `/checkconfig` v2 dead-alias badges + one-line fix (ROADMAP #46), ET keystroke debounce (perf §4b) — **✅ shipped 2026-11-19** (25/25 suite, release-bytes gate green) |
 
 ### Planned waves (order = dependency order; swap freely, keep the ladder invariants)
 | Ver | Codename | Items (RI refs) | Sizes |
 |---|---|---|---|
-| **v0.32.0** | **native typing** *(marquee for our audience)* | ① **layout-fallback fuzzy** — QWERTY-typed-Cyrillic / vice-versa matches ET rows & aliases (`дфя` → `настройки`), `[Type] LayoutFallback=1`, painted as a hint; ② spell-suggest "did you mean" ≤2 edits vs aliases/apps/plugin words (ROADMAP #13); ③ `/checkconfig` v2 — dead-alias badges + one-line fixes (ROADMAP #46) | M · S · S |
 | **v0.33.0** | write less | ① ghost-text inline completion (unique match, End accepts, ROADMAP #11); ② per-`%n` argument memory (`Usage.dat` `alias#slot`, RI3 #203); ③ **Snippets** `[Snippets] name=text` + `%s` expand + Settings page (ROADMAP #17/#59); ④ **Search Engines Lite** — browser-style keyword search, §4a | M · S · M · M |
 | **v0.34.0** | time machine | ① **timed commands** `in 10m <cmd>` / `at 18:30 <cmd>`, `/timers`, `/cancel N`, persistent `Timers.dat`, tray balloon (ROADMAP #15, RI3 #202-adjacent); ② DND `/dnd [60]` + `[Sounds] Quiet=22:00-07:30` (ROADMAP #32, RI3 #220) | L · S |
 | **v0.35.0** | dashboards | ① `/stats` — 14-day sparkline in the line, top-10, plugin-hit table (RI3 #208); ② history CSV export/import + redaction pass (RI3 #207); ③ star rows `Ctrl+S` + `favs ` filter + dropdown **section headers** (RI3 #223/#225) | S · S · M |
@@ -165,7 +165,9 @@ idle CPU % (measured 5 s), ET latency p50/p95, per-plugin load ms, dropdown repa
 *Track items (who lands what):*
 - **v0.32** (lands with the ET work anyway): keystroke debounce — ET rescans only on
   caret/line-diff, not on every paint; stop re-converting unchanged wide→UTF-8 lines
-  per keystroke (single cached conversion per state change).
+  per keystroke (single cached conversion per state change). **✅ landed in v0.32.0**
+  (drop-down diff-cache on text/span/mode + one `ToAnsi` per rebuild; scan counter
+  exposed as `|s=N` in the drop-down title for suite asserts, headless only).
 - **v0.36** (lands with /plugdebug): per-plugin **ms counters** in ET and RunString —
   slow plugins flagged red; **ET result cache** per session, invalidate on `/reread`
   (ROADMAP #45); plugin ABI rule documented: `Load()` sub-20 ms, no network, no disk scans

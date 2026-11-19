@@ -60,9 +60,26 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.31.0)
+## Working today (v0.32.0)
 
-Everything below ships in **[v0.31.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.30 opened the plugin wave, v0.30.1 split the `weather`/`w` command words after our release-bytes gate caught nettools shadowing weather.dll, v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law). The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.32.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.30 opened the plugin wave, v0.30.1 split the `weather`/`w` command words after our release-bytes gate caught nettools shadowing weather.dll, v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law, v0.32 taught the launcher **native typing** — `дфя` finds `laz`). The project evolves in focused waves (v0.26 the web wave, v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Native typing (v0.32)**
+
+- **Layout fallback** — the wrong keyboard layout no longer stops you: with ЙЦУКЕН on, the physical
+  `l a z` keys print `дфя` — and the drop-down still offers the alias `laz`, Tab still completes it,
+  Enter still runs it (both directions, exact match on Enter, real hits always win ties). Layout-only
+  rows are painted with a `~` so the help never masquerades as a guess; `[Type] LayoutFallback=1`,
+  prefix mode included; the log marks it: `alias started: ghb (layout: при)`
+- **Spell-suggest** — when nothing matches, the drop-down offers up to three `≈ candidate` rows within
+  two edits of the typed word (aliases, plugin words, quicklinks, commands); picking one writes the
+  real word and Enter runs it
+- **`/checkconfig` v2** — a real config audit into the console (copyable) and the dialog: dead aliases
+  (target not found on disk, in PATH, as URL or via a trusted shell host) get `DEAD: name -> target`
+  plus a one-line `maybe '…'` fix; duplicate alias names counted, every finding logged
+- **Keystroke perf track** (first ROADMAP-V1 §4b item) — the suggestion list rescans only when the
+  caret word actually changes; an identical keystroke reuses the cached list instead of re-asking
+  all 19 plugins for ET rows
 
 **Wake-on-LAN + the word law (v0.31)**
 

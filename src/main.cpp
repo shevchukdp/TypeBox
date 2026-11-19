@@ -116,6 +116,8 @@ struct Settings {
     int  easyType = 2;         // 0=off, 1=easy, 2=linux-style (Tab completes first word)
     bool etInternal = true, etAlias = true, etHistory = true, etSysAlias = true;
     bool fuzzy = true;         // [Type] Fuzzy: subsequence scoring (0 = TypeAndRun prefix mode)
+    bool layoutFallback = true;// [Type] LayoutFallback (v0.32): also match the other
+                               // keyboard layout (QWERTY <-> ЙЦУКЕН) in ET + aliases
     // [DropDown] suggestion list (TypeAndRun DropDown parity)
     bool dropDown = true;
     int  ddLines = 8;          // visible rows before scrolling ends
@@ -214,6 +216,16 @@ static std::wstring              g_lastRun; // for Undo
 static std::vector<std::wstring> g_etList;
 static size_t                    g_etPos    = 0;
 static std::wstring              g_etPrefix;
+// v0.32 native typing + perf track (ROADMAP-V1 §4b): per-row layout-hit flag
+// and pick text live here; the cache lets an unchanged keystroke skip the
+// whole re-scan (plugin GetCountET calls are the expensive part); the scan
+// counter rides the drop-down title in headless mode for suite asserts.
+static std::vector<unsigned char> g_ddLayout;
+static std::vector<std::wstring>  g_ddSub;
+static std::wstring               g_ddCacheText;
+static size_t                     g_ddCacheB = 0, g_ddCacheE = 0;
+static bool                       g_ddCacheHsrch = false;
+static int                        g_etScanCount = 0;
 static HBRUSH                    g_bgBrush  = nullptr;
 
 // ---------------------------------------------------------------- utilities
@@ -778,6 +790,7 @@ static void LoadSettings() {
 
     g_set.easyType   = ReadIniInt(L"Type", L"EasyType", 2);
     g_set.fuzzy      = ReadIniInt(L"Type", L"Fuzzy", 1) != 0;
+    g_set.layoutFallback = ReadIniInt(L"Type", L"LayoutFallback", 1) != 0;
     g_set.dropDown   = ReadIniInt(L"DropDown", L"Enable", 1) != 0;
     g_set.ddLines    = ReadIniInt(L"DropDown", L"Lines", 8);
     if (g_set.ddLines < 1) g_set.ddLines = 1;
@@ -884,6 +897,83 @@ static const Alias* FindAlias(const std::wstring& word) {
     for (const auto& a : g_aliases)
         if (_wcsicmp(a.name.c_str(), word.c_str()) == 0) return &a;
     return nullptr;
+}
+
+// ------------------------------------------------------------ layout fallback
+// v0.32 "native typing" (ROADMAP-V1 #4): a Russian user mid-layout thinks in
+// both alphabets - typing `laz` with ЙЦУКЕН on prints `дфя`, and the launch
+// should find `laz` anyway. Physical-key map of the two layouts (unshifted
+// keys; 33 columns). Returns which conversion makes sense for a word:
+//   0 = as typed (mixed scripts / no letters: never guess)
+//   1 = pure Cyrillic  -> also match its QWERTY form
+//   2 = pure latin     -> also match its ЙЦУКЕН form
+static const wchar_t* const kLayoutLat = L"qwertyuiop[]asdfghjkl;'zxcvbnm,./";
+static const wchar_t* const kLayoutCyr = L"йцукенгшщзхъфывапролджэячсмитьбю.";
+
+static int LayoutDir(const std::wstring& w) {
+    bool cyr = false, lat = false;
+    for (wchar_t c : w) {
+        if (c >= 0x400 && c <= 0x4FF) cyr = true;
+        else if ((c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z')) lat = true;
+        else if (c == L' ' || c == L'\t') return 0;      // multi-word: no guess
+    }
+    if (cyr && !lat) return 1;
+    if (lat && !cyr) return 2;
+    return 0;
+}
+
+// dir 1 = Cyrillic->Latin, dir 2 = Latin->Cyrillic; unmapped chars pass
+// through (digits are shared by both layouts).
+static std::wstring LayoutConvert(const std::wstring& w, int dir) {
+    std::wstring out = w;
+    for (auto& ch : out) {
+        wchar_t lc = towlower(ch);
+        const wchar_t* from = dir == 1 ? kLayoutCyr : kLayoutLat;
+        const wchar_t* to   = dir == 1 ? kLayoutLat : kLayoutCyr;
+        const wchar_t* f = wcschr(from, lc);
+        if (f && *f) ch = to[(size_t)(f - from)];
+    }
+    return out;
+}
+
+// alias lookup with the layout fallback (exact match in the other layout -
+// names are unique, so the hit is unambiguous); used by the Enter chain and
+// by the traffic-light anchor so both agree about what will run.
+static const Alias* FindAliasLayout(const std::wstring& word) {
+    const Alias* a = FindAlias(word);
+    if (!a && g_set.layoutFallback && !word.empty() && word[0] != L'~') {
+        int dir = LayoutDir(word);
+        if (dir) a = FindAlias(LayoutConvert(word, dir));
+    }
+    return a;
+}
+
+// bounded Levenshtein (v0.32 spell-suggest + /checkconfig v2 "maybe you
+// meant"). Returns maxDist+1 as soon as the distance cannot get any better,
+// so callers just compare with their current best.
+static int EditDistCapped(const std::wstring& a, const std::wstring& b, int maxDist) {
+    size_t n = a.size(), m = b.size();
+    if (n == 0) return (int)m;
+    if (m == 0) return (int)n;
+    if ((int)(n > m ? n - m : m - n) > maxDist) return maxDist + 1;   // length gate
+    std::vector<int> prev(m + 1), cur(m + 1);
+    for (size_t j = 0; j <= m; ++j) prev[j] = (int)j;
+    for (size_t i = 1; i <= n; ++i) {
+        cur[0] = (int)i;
+        int rowMin = cur[0];
+        wchar_t ca = towlower(a[i - 1]);
+        for (size_t j = 1; j <= m; ++j) {
+            int cost = ca == towlower(b[j - 1]) ? 0 : 1;
+            int d = prev[j - 1] + cost;
+            if (prev[j] + 1 < d) d = prev[j] + 1;
+            if (cur[j - 1] + 1 < d) d = cur[j - 1] + 1;
+            cur[j] = d;
+            if (d < rowMin) rowMin = d;
+        }
+        if (rowMin > maxDist) return maxDist + 1;
+        prev.swap(cur);
+    }
+    return prev[m];
 }
 
 // ------------------------------------------------- system aliases ([SysAliases])
@@ -1819,16 +1909,80 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"\nLicense / Лицензия: GPL-3.0";
         TbMessageBox(mainWnd, msg.c_str(), L"About TypeBox", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/checkconfig") {
+        // v0.32 "checkconfig v2": the v1 counters plus a real audit - dead
+        // aliases (target program cannot be found), duplicate alias names,
+        // and a one-line "maybe you meant" fix per dead row. Answer lands in
+        // the console (console-first, copyable) AND in the classic dialog.
         bool iniOk = PathFileExistsW(g_iniPath.c_str());
-        wchar_t msg[512];
-        wsprintfW(msg,
-            L"TypeBox.ini: %s\nAliases loaded: %d  SysAliases: %d\nIgnores (Ignores.ini): %d\n"
-            L"History items: %d\nHotkey registered: %s",
-            iniOk ? L"found" : L"MISSING (using defaults)",
-            (int)g_aliases.size(), (int)g_sysAliases.size(), (int)g_ignores.size(),
-            (int)g_history.size(),
+        int dead = 0, dup = 0;
+        std::wstring fixes;                       // "  |  DEAD: name -> target"
+        // a target resolves when: exists as-is / +.exe, or a PATH hit with a
+        // runnable extension, or it is a URL, or a shell host we trust.
+        auto targetFound = [&](const std::wstring& action) -> bool {
+            std::wstring t = Trim(action);
+            if (t.empty()) return false;
+            if (LooksLikeUrl(ExpandEnv(t))) return true;
+            std::wstring prog;
+            if (t[0] == L'"') { size_t q = t.find(L'"', 1); prog = q == std::wstring::npos ? t : t.substr(1, q - 1); }
+            else prog = FirstWord(t);
+            if (prog.empty()) return false;
+            static const wchar_t* const kHosts[] = { L"cmd", L"cmd.exe", L"powershell", L"powershell.exe",
+                L"pwsh", L"pwsh.exe", L"wscript", L"wscript.exe", L"cscript", L"cscript.exe",
+                L"rundll32", L"rundll32.exe", L"msiexec", L"msiexec.exe", L"explorer", L"explorer.exe",
+                L"control", L"control.exe", L"taskkill", L"taskkill.exe" };
+            for (auto h : kHosts) if (_wcsicmp(prog.c_str(), h) == 0) return true;
+            std::wstring pe = ExpandEnv(prog);
+            if (PathFileExistsW(pe.c_str())) return true;
+            if (PathFileExistsW((pe + L".exe").c_str())) return true;
+            if (pe.find(L'\\') != std::wstring::npos || pe.find(L'/') != std::wstring::npos) return false;
+            static const wchar_t* const kExts[] = { L".exe", L".bat", L".cmd", L".com" };
+            for (auto& d : g_pathDirs)
+                for (auto e : kExts)
+                    if (GetFileAttributesW((d + L'\\' + pe + e).c_str()) != INVALID_FILE_ATTRIBUTES)
+                        return true;
+            return false;
+        };
+        // fix pool: other alias names, alias targets, plugin command words
+        std::vector<std::wstring> pool;
+        for (auto& a : g_aliases) pool.push_back(a.name);
+        for (auto& p : g_plugins)
+            if (p.GetCount && p.GetString)
+                for (int i = 0; i < p.GetCount(); ++i) pool.push_back(FromAnsi(p.GetString(i)));
+        for (size_t i = 0; i < g_aliases.size(); ++i) {
+            const Alias& a = g_aliases[i];
+            for (size_t j = i + 1; j < g_aliases.size(); ++j)
+                if (_wcsicmp(a.name.c_str(), g_aliases[j].name.c_str()) == 0) ++dup;
+            bool ok = targetFound(a.action);
+            if (ok) continue;
+            ++dead;
+            std::wstring line = L"DEAD: " + a.name + L" -> " + (Trim(a.action).empty() ? std::wstring(L"(empty)") : FirstWord(Trim(a.action)));
+            int bestD = 3; std::wstring best;
+            for (auto& cand : pool) {
+                if (_wcsicmp(cand.c_str(), a.name.c_str()) == 0) continue;
+                int d = EditDistCapped(cand, a.name, bestD);
+                if (d >= 1 && d < bestD) { bestD = d; best = cand; }
+            }
+            if (!best.empty()) line += L" (maybe '" + best + L"')";
+            LogInfo(L"checkconfig: dead alias \"" + a.name + L"\"" +
+                    (best.empty() ? L"" : L" - maybe " + best));
+            if (fixes.size() < 600) fixes += (fixes.empty() ? L"" : L"  |  ") + line;
+        }
+        wchar_t head[256];
+        wsprintfW(head,
+            L"checkconfig: ini %s | aliases %d (%d dead, %d dup) | sys %d | ignores %d | history %d | hotkey %s",
+            iniOk ? L"found" : L"MISSING", (int)g_aliases.size(), dead, dup,
+            (int)g_sysAliases.size(), (int)g_ignores.size(), (int)g_history.size(),
             g_hotkey.key ? L"yes" : L"no");
-        TbMessageBox(mainWnd, msg, L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
+        std::wstring report = head;
+        if (!fixes.empty()) report += L"  |  " + fixes;
+        if (g_edit) {
+            SetWindowTextW(g_edit, report.c_str());
+            SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        }
+        std::wstring dlg = report;
+        for (auto& ch : dlg) if (ch == L'|') ch = L'\n';
+        g_internalAnswer = true;              // keep the report in the console
+        TbMessageBox(mainWnd, dlg.c_str(), L"TypeBox — check config", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/settings") {
         OpenSettings(mainWnd, PG_APPEAR);
     } else if (c == L"/config") {
@@ -2109,9 +2263,10 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
         if (u != EXC_NONE) return u;
     }
 
-    // 1) alias from [Aliases] (TypeBox.ini or legacy Config.ini)
+    // 1) alias from [Aliases] (TypeBox.ini or legacy Config.ini). v0.32: the
+    // layout fallback may resolve a wrong-layout alias name (exact hit only).
     if (g_set.execAliases) {
-        if (const Alias* a = FindAlias(word)) {
+        if (const Alias* a = FindAliasLayout(word)) {
             std::wstring cmd = ExpandEnv(Substitute(a->action, rest));
             // v0.17: an alias that expands to a wiper is still a wiper.
             if (g_set.confirmDanger && LooksDangerous(cmd) &&
@@ -2132,7 +2287,10 @@ static int RunLine(const std::wstring& line, HWND mainWnd) {
                 if (g_aliasProc) CloseHandle(g_aliasProc);
                 g_aliasProc = sei.hProcess;   // may be null for shell verb relaunches
                 g_aliasName = a->name;
-                LogInfo(L"alias started: " + a->name + L" (handle " +
+                LogInfo(L"alias started: " + a->name +
+                        (_wcsicmp(a->name.c_str(), word.c_str()) != 0
+                             ? L" (layout: " + word + L")" : L"") +
+                        L" (handle " +
                         (sei.hProcess ? std::wstring(L"ok") : std::wstring(L"none")) + L")");
             } else {
                 LogError(L"alias failed: " + a->name + L" -> " + cmd +
@@ -2374,7 +2532,7 @@ static Anchor ClassifyAnchor(const std::wstring& lineRaw) {
 
     std::wstring word = FirstWord(line);
     if (g_set.execAliases) {
-        if (word[0] != L'~' && FindAlias(word)) { a.lamp = 0; a.labelId = STR_SO_ALIAS; return a; }
+        if (word[0] != L'~' && FindAliasLayout(word)) { a.lamp = 0; a.labelId = STR_SO_ALIAS; return a; }
         if (word[0] == L'~' && FindSysAlias(word)) { a.lamp = 0; a.labelId = STR_SO_SYS; return a; }
     }
 
@@ -3197,6 +3355,28 @@ static int FuzzyScore(const std::wstring& text, const std::wstring& pat,
     return score;
 }
 
+// v0.32 native typing: score `text` against the typed word AND - when dir
+// says so - the same word in the other keyboard layout. A layout hit scores
+// one below its raw value, so a real match always wins the tie; marks come
+// from whichever form matched (they index into text either way).
+static int FuzzyScoreLayout(const std::wstring& text, const std::wstring& pat,
+                            int dir, std::vector<size_t>* out = nullptr,
+                            bool* viaLayout = nullptr) {
+    int s1 = FuzzyScore(text, pat, out);
+    if (!dir) return s1;
+    std::wstring alt = LayoutConvert(pat, dir);
+    std::vector<size_t> mk2;
+    int s2 = FuzzyScore(text, alt, &mk2);
+    if (s2 <= 0) return s1;
+    int s2b = s2 > 1 ? s2 - 1 : 1;
+    if (s2b > s1) {
+        if (out) *out = std::move(mk2);
+        if (viaLayout) *viaLayout = true;
+        return s2b;
+    }
+    return s1;
+}
+
 static void TabComplete(HWND edit) {
     if (g_set.easyType == 0) return;
     std::wstring text = GetEditText(edit);
@@ -3220,11 +3400,13 @@ static void TabComplete(HWND edit) {
         // (re)build the candidate list for this prefix
         ResetET();
         g_etPrefix = word;
+        const int dir = g_set.layoutFallback ? LayoutDir(word) : 0;   // v0.32
         auto add = [&](const std::wstring& cand) {
             if (cand.empty()) return;
             if (!word.empty()) {
-                if (g_set.fuzzy) { if (FuzzyScore(cand, word) <= 0) return; }
-                else if (!StartsWithNoCase(cand, word)) return;
+                if (g_set.fuzzy) { if (FuzzyScoreLayout(cand, word, dir) <= 0) return; }
+                else if (!StartsWithNoCase(cand, word) &&
+                         !(dir && StartsWithNoCase(cand, LayoutConvert(word, dir)))) return;
             }
             for (const auto& c : g_etList)
                 if (_wcsicmp(c.c_str(), cand.c_str()) == 0) return;
@@ -3257,20 +3439,35 @@ static void TabComplete(HWND edit) {
             // v0.26: gate on the LINE start, not the caret word - "yt /cl"
             // must still reach the plugin templates (only leading "/" lines
             // are internal commands).
-            for (auto& p : g_plugins)
-                if (p.GetCountET && p.GetStringET) {
-                    // v0.24: whole line, not just the caret word - plugins key
-                    // their subcommand templates on "cmd " (cliphist "clip ri").
-                    std::string a = ToAnsi(text);
-                    int cnt = p.GetCountET(a.c_str());
-                    for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
-                }
+            // v0.32 perf: the wide->ANSI line conversion happens ONCE per
+            // rebuild, not once per plugin.
+            {
+                std::string aLine = ToAnsi(text);
+                for (auto& p : g_plugins)
+                    if (p.GetCountET && p.GetStringET) {
+                        // v0.24: whole line, not just the caret word - plugins key
+                        // their subcommand templates on "cmd " (cliphist "clip ri").
+                        int cnt = p.GetCountET(aLine.c_str());
+                        for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
+                    }
+            }
         g_etPos = 0;
-        if (g_set.fuzzy && !word.empty())          // best fuzzy match completes first
-            std::stable_sort(g_etList.begin(), g_etList.end(),
-                [&](const std::wstring& a, const std::wstring& b) {
-                    return FuzzyScore(a, word) > FuzzyScore(b, word);
+        if (g_set.fuzzy && !word.empty()) {          // best fuzzy match completes first
+            // v0.32 perf: score each candidate ONCE (was twice per comparator
+            // call) - FuzzyScoreLayout is no longer re-run inside the sort.
+            std::vector<std::pair<int, size_t>> ord;
+            ord.reserve(g_etList.size());
+            for (size_t i = 0; i < g_etList.size(); ++i)
+                ord.push_back({ FuzzyScoreLayout(g_etList[i], word, dir), i });
+            std::stable_sort(ord.begin(), ord.end(),
+                [](const std::pair<int, size_t>& a, const std::pair<int, size_t>& b) {
+                    return a.first > b.first;
                 });
+            std::vector<std::wstring> sorted;
+            sorted.reserve(ord.size());
+            for (auto& kv : ord) sorted.push_back(g_etList[kv.second]);
+            g_etList.swap(sorted);
+        }
     }
 
     if (!g_etList.empty()) {
@@ -3313,13 +3510,16 @@ static void DdSyncTitle() {   // cheap state probe for the test harness
     std::wstring top;                          // v0.17: top row too (frecency asserts)
     if (!g_ddItems.empty()) {
         top = g_ddItems[0];
+        if (!g_ddLayout.empty() && g_ddLayout[0])   // v0.32: top row matched only
+            top = L"~" + top;                       // via the layout fallback
         for (auto& ch : top) if (ch == L'|' || ch == L'\r' || ch == L'\n') ch = L' ';
         if (top.size() > 40) top = top.substr(0, 40);
     }
     SetWindowTextW(g_ddWnd, (std::wstring(L"TypeBoxDropDown|") +
         std::to_wstring(g_ddItems.size()) + L"|" + std::to_wstring(g_ddSel) +
         L"|" + std::to_wstring(g_ddTop) + L"|" + top +
-        (g_hsrch ? L"|bck" : L"")).c_str());   // v0.27: |bck marks history-search mode
+        (g_hsrch ? L"|bck" : L"") +                        // v0.27: |bck = history search
+        (g_headless ? L"|s=" + std::to_wstring(g_etScanCount) : L"")).c_str());
 }
 
 static int DdVisibleRows() {
@@ -3345,6 +3545,11 @@ static void DdClose() {
     g_ddSelKb = false;
     g_ddItems.clear();
     g_ddMarks.clear();
+    g_ddLayout.clear();
+    g_ddSub.clear();
+    g_ddCacheText.clear();                    // v0.32: force a fresh scan next time
+    g_ddCacheB = g_ddCacheE = 0;
+    g_ddCacheHsrch = false;
 }
 
 static void DdEnsureFont() {
@@ -3406,6 +3611,10 @@ static void PaintDropDown(HDC dc) {
             SIZE s = { 0, 0 };
             GetTextExtentPoint32W(dc, it.c_str() + ci, 1, &s);
             px += s.cx;
+        }
+        if (di < (int)g_ddLayout.size() && g_ddLayout[di]) {   // v0.32: matched
+            SetTextColor(dc, MixColor(g_effBg, g_accent, 88)); // via the layout
+            TextOutW(dc, px + Sc(g_ddDpi, 4), py, L"~", 1);   // fallback - hint
         }
     }
     SelectObject(dc, oldF);
@@ -3473,7 +3682,9 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 // Replace the caret word with the selected candidate; run=true submits too.
 static void DdPick(bool run) {
     if (!g_edit || g_ddSel < 0 || g_ddSel >= (int)g_ddItems.size() || !g_ddOwner) return;
-    std::wstring item = g_ddItems[g_ddSel];
+    // v0.32: "≈ candidate" spell rows carry their real text in g_ddSub.
+    std::wstring item = (g_ddSel < (int)g_ddSub.size()) ? g_ddSub[g_ddSel]
+                                                        : g_ddItems[g_ddSel];
     int len = GetWindowTextLengthW(g_edit);
     std::wstring text(len, L'\0');
     if (len) GetWindowTextW(g_edit, &text[0], len + 1);
@@ -3503,23 +3714,43 @@ static void DdUpdate(HWND mainWnd) {
     while (e < text.size() && text[e] != L' ' && text[e] != L'\t') ++e;
     std::wstring word = text.substr(b, e - b);
 
+    // v0.32 perf (ROADMAP-V1 §4b): same text, same word span, same mode ->
+    // what is on screen is still right; skip the whole rescan (the plugin
+    // GetCountET() round-trips are the expensive part). DdClose invalidates.
+    if (g_ddWnd && !g_hsrch && !g_ddCacheHsrch && !g_ddItems.empty() &&
+        IsWindowVisible(g_ddWnd) && text == g_ddCacheText &&
+        b == g_ddCacheB && e == g_ddCacheE) return;
+
     std::vector<std::wstring> items;
     std::vector<std::vector<size_t>> marks;
     std::vector<int> score;
+    std::vector<unsigned char> lay;                       // v0.32: row matched via layout
+    std::vector<std::wstring> sub;                        // v0.32: text a pick writes back
+    const int dir = (g_set.layoutFallback && !g_hsrch) ? LayoutDir(word) : 0;
     auto add = [&](const std::wstring& raw) {
         std::wstring c = Trim(raw);                       // plugins may return "calc "
         if (c.empty() || (int)items.size() >= 100) return;
         std::vector<size_t> mk;
         int sc = 1;                                       // empty word: keep source order
+        bool viaLay = false;
         if (!word.empty()) {
-            if (g_set.fuzzy) { sc = FuzzyScore(c, word, &mk); if (sc <= 0) return; }
-            else if (!StartsWithNoCase(c, word)) return;
-            else for (size_t i = 0; i < word.size(); ++i) mk.push_back(i);
+            if (g_set.fuzzy) {
+                sc = FuzzyScoreLayout(c, word, dir, &mk, &viaLay);
+                if (sc <= 0) return;
+            } else {
+                bool hit = StartsWithNoCase(c, word);     // prefix mode (Fuzzy=0)
+                if (!hit && dir && StartsWithNoCase(c, LayoutConvert(word, dir))) {
+                    hit = true; viaLay = true;
+                }
+                if (!hit) return;
+                for (size_t i = 0; i < word.size(); ++i) mk.push_back(i);
+            }
             sc += FrecencyBoost(c);                       // v0.17: used-more wins ties
         }
         for (auto& x : items)
             if (_wcsicmp(x.c_str(), c.c_str()) == 0) return;
         items.push_back(c); marks.push_back(std::move(mk)); score.push_back(sc);
+        lay.push_back(viaLay ? 1 : 0); sub.push_back(c);
     };
     if (g_hsrch) {
         // v0.27 (RI3 #12): bck-i-search — rows = history containing the query,
@@ -3541,6 +3772,7 @@ static void DdUpdate(HWND mainWnd) {
             if (dup) continue;
             if ((int)items.size() >= 100) break;
             items.push_back(h); marks.push_back(std::move(mk)); score.push_back(1);
+            lay.push_back(0); sub.push_back(h);
         }
         if (items.empty()) { DdClose(); return; }
     } else if (word.empty()) {
@@ -3564,13 +3796,52 @@ static void DdUpdate(HWND mainWnd) {
                     for (int i = 0; i < p.GetCount(); ++i) add(FromAnsi(p.GetString(i)));
         if (g_set.etHistory && word[0] != L'/')
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
-        if (g_set.execPlugins && word[0] != L'/')
+        if (g_set.execPlugins && word[0] != L'/') {
+            std::string aLine = ToAnsi(text);   // v0.32 perf: convert the line ONCE
             for (auto& p : g_plugins)
                 if (p.GetCountET && p.GetStringET && PluginLoadAllowed(p)) {
-                    std::string a = ToAnsi(text);   // v0.24: whole line (see EtComplete)
-                    int cnt = p.GetCountET(a.c_str());
+                    int cnt = p.GetCountET(aLine.c_str());  // v0.24: whole line
                     for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
                 }
+        }
+    }
+    ++g_etScanCount;                        // v0.32 perf probe (|s=N in the title)
+
+    // v0.32 spell-suggest (ROADMAP #13): nothing survived the fuzzy pass ->
+    // offer up to 3 "≈ candidate" rows within 2 edits of the typed word.
+    // The ≈ is display-only: picking a row writes g_ddSub (the real word).
+    if (!word.empty() && !g_hsrch && items.empty() && b == 0) {
+        std::vector<std::pair<int, std::wstring>> sug;
+        auto trySug = [&](const std::wstring& cand) {
+            std::wstring c = Trim(cand);
+            if (c.empty() || _wcsicmp(c.c_str(), word.c_str()) == 0) return;
+            int d = EditDistCapped(c, word, 2);
+            if (d >= 1 && d <= 2) sug.push_back({ d, c });
+        };
+        if (g_set.etInternal) {
+            for (auto c : kInternalCmds) trySug(c);
+            trySug(L"pos"); trySug(L"stayawake");
+        }
+        if (g_set.etAlias)
+            for (auto& a : g_aliases) trySug(a.name);
+        if (g_set.etSysAlias)
+            for (auto& s : g_sysAliases) trySug(s.name);
+        for (auto& wl : g_webLinks) trySug(wl.name);
+        if (g_set.execPlugins)
+            for (auto& p : g_plugins)
+                if (p.GetCount && p.GetString && PluginLoadAllowed(p))
+                    for (int i = 0; i < p.GetCount(); ++i) trySug(FromAnsi(p.GetString(i)));
+        std::stable_sort(sug.begin(), sug.end(),
+            [](const std::pair<int, std::wstring>& a, const std::pair<int, std::wstring>& b2) {
+                return a.first < b2.first;
+            });
+        for (size_t i = 0; i < sug.size() && i < 3; ++i) {
+            items.push_back(L"\u2248 " + sug[i].second);      // ≈ candidate
+            marks.emplace_back();
+            score.push_back(0);                               // always below real hits
+            lay.push_back(0);
+            sub.push_back(sug[i].second);
+        }
     }
     if (items.empty()) { DdClose(); return; }
     if (!g_hsrch && !word.empty() && (g_set.fuzzy || g_set.frecency)) {   // best match on top, ties keep source order
@@ -3580,9 +3851,16 @@ static void DdUpdate(HWND mainWnd) {
             [&](size_t a, size_t b) { return score[a] > score[b]; });
         std::vector<std::wstring> sItems;
         std::vector<std::vector<size_t>> sMarks;
+        std::vector<unsigned char> sLay;
+        std::vector<std::wstring> sSub;
         sItems.reserve(items.size()); sMarks.reserve(items.size());
-        for (size_t i : ord) { sItems.push_back(items[i]); sMarks.push_back(marks[i]); }
+        sLay.reserve(items.size()); sSub.reserve(items.size());
+        for (size_t i : ord) {
+            sItems.push_back(items[i]); sMarks.push_back(marks[i]);
+            sLay.push_back(lay[i]);     sSub.push_back(sub[i]);
+        }
         items = std::move(sItems); marks = std::move(sMarks);
+        lay = std::move(sLay);     sub = std::move(sSub);
     }
 
     if (!g_ddWnd) {
@@ -3605,8 +3883,13 @@ static void DdUpdate(HWND mainWnd) {
     g_ddDpi = g_mainDpi;          // v0.29: the dd rides right below the console
     g_ddItems = std::move(items);
     g_ddMarks = std::move(marks);
+    g_ddLayout = std::move(lay);
+    g_ddSub = std::move(sub);
     g_ddB = b; g_ddE = e; g_ddSel = g_hsrch ? 0 : -1;
     g_ddTop = 0; g_ddSelKb = g_hsrch;         // v0.27: Enter runs the newest match
+    g_ddCacheText = text;                     // v0.32 debounce: an identical
+    g_ddCacheB = b; g_ddCacheE = e;            // keystroke reuses this list
+    g_ddCacheHsrch = g_hsrch;
 
     DdEnsureFont();
     int rows = (int)g_ddItems.size();
@@ -4728,7 +5011,8 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     NumB(g_setPage[PG_TYPE], L(STR_DD_ROWS),   16, y, &Settings::ddLines, 1, 20); y += 34;
     CkB(g_setPage[PG_TYPE], L(STR_DD_EMPTY),   16, y, &Settings::ddOnEmpty); y += 26;
     CkB(g_setPage[PG_TYPE], L(STR_FT_FUZZY),   16, y, &Settings::fuzzy);      y += 26;
-    CkB(g_setPage[PG_TYPE], L(STR_TY_FRECENCY), 16, y, &Settings::frecency);
+    CkB(g_setPage[PG_TYPE], L(STR_TY_FRECENCY), 16, y, &Settings::frecency);  y += 26;
+    CkB(g_setPage[PG_TYPE], L(STR_FT_LAYOUT),  16, y, &Settings::layoutFallback);
 
     // --- History
     y = 12;
@@ -5037,6 +5321,7 @@ static void WriteDraftIni() {
 
     WInt(L"Type", L"EasyType",     s.easyType);
     WInt(L"Type", L"Fuzzy",        s.fuzzy ? 1 : 0);
+    WInt(L"Type", L"LayoutFallback", s.layoutFallback ? 1 : 0);
     WInt(L"DropDown", L"Enable",              s.dropDown ? 1 : 0);
     WInt(L"DropDown", L"Lines",               s.ddLines);
     WInt(L"DropDown", L"ShowHistoryOnEmpty",  s.ddOnEmpty ? 1 : 0);

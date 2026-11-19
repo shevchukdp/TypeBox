@@ -3,6 +3,38 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.32.0] - 2026-11-19
+
+### Native typing
+
+![layout rows marked ~, spell suggestions, the checkconfig v2 report](docs/screenshots/native-typing.png)
+
+- **Layout fallback** (ROADMAP-V1 v0.32, the marquee for our RU/UA audience) - a word typed
+  with the wrong keyboard layout on still lands: with ЙЦУКЕН active, the physical `l a z` keys
+  print `дфя` and TypeBox finds the alias `laz` - in the drop-down, via Tab and on Enter
+  (both directions, physical-key map of the 33 shared columns, digits pass through). Rows
+  matched only through the other layout carry a `~` accent so the suggestion never hides that
+  it crossed layouts, and a real same-layout hit always wins the tie. Exact-match only on
+  Enter (never a guess), `[Type] LayoutFallback=1` default, prefix mode (`Fuzzy=0`) included,
+  and the log marks the translation: `alias started: ghb (layout: при)`.
+- **Spell-suggest** (ROADMAP #13) - when nothing matches the caret word at all, the drop-down
+  offers up to three `≈ candidate` rows within 2 edits (bounded Levenshtein against alias
+  names, plugin words, `~sysaliases`, quicklinks and the internal commands). The `≈` is
+  display-only: picking the row writes the real word and Enter runs it.
+- **`/checkconfig` v2** (ROADMAP #46) - the counters get a real audit: aliases whose target
+  cannot be found anywhere (file, +.exe, PATH x {exe,bat,cmd,com}, URL, trusted shell host)
+  are flagged `DEAD: name -> target` with a one-line fix (`maybe 'closest'`) - reported into
+  the console (copyable) and the dialog, every finding logged as `checkconfig: dead alias`.
+  Duplicate alias names are counted too.
+- **Keystroke debounce** (ROADMAP-V1 section 4b, first perf-budget item) - the suggestion list
+  rescans only when the caret word, its span or the search mode actually change; an identical
+  keystroke reuses the cached list (the plugin `GetCountET` round-trips were the hot path).
+  Headless builds expose the scan counter in the drop-down title (`|s=N`) for suite asserts.
+- Settings -> EasyType page grew *Keyboard layout fallback*; `test-v0320`: 25 assertions -
+  layout ET (alias + plugin word), the tie rule, spell row + pick-runs-the-real-word, the
+  debounce counter, layout exec with the log marker, the full checkconfig report, Tab through
+  the layout, `Fuzzy=0` prefix+layout, `LayoutFallback=0` fully off, INI round-trip, roster 19.
+
 ## [0.31.0] - 2026-11-18
 
 ### Wake-on-LAN + the word law
