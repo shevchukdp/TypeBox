@@ -47,7 +47,8 @@ file search, `/stats`, history export, DND mode, HUD window, winget/installer st
 
 Sources reviewed Nov 2026: PowerToys **Command Palette** (0.90→0.97 release notes +
 devblogs), **Flow Launcher** plugin site (~1000 plugins), **Raycast 2.0** (Windows
-release, store, "next generation" page), Keypirinha/Wox community threads,
+release, store, "next generation" page), **Wox v2.5.0 full feature pass** (repo +
+woxlauncher.com, Nov 2026), Keypirinha HN/Reddit threads,
 windows-terminal-quake / `wt -w _quake` (Quake-mode demand), ConPTY docs.
 Prior internal waves: RI1 (#1–50), RI2 (#101–200), RI3 (#201–300).
 
@@ -62,6 +63,7 @@ Prior internal waves: RI1 (#1–50), RI2 (#101–200), RI3 (#201–300).
 | Quake terminals (WTQ, `wt -w _quake`) — sustained demand for drop-down console | our tagline *promises* "console + bash" (PLAN Phase 4) → **ConPTY bash mode** is the v1.2 flagship (with a `wt`-handoff fallback if scope explodes) |
 | Everyone distributes via **winget** + installers; CmdPal ships inside PowerToys | v1.0 exit criteria: winget manifest PR + optional installer, portable zip stays canonical |
 | Recurring plugin-dev complaints (Flow/Wox threads): silent crashes, locked DLLs, no plugin log, no data convention | **plugin DX wave** v0.36: hot-reload, `/plugdebug`, SEH guard, `Data\` convention, manifest with declared words |
+| **Wox v2.5.0** (Nov 2026): fully native + GPU, ~150 MB resident; triple store (plugins/themes/AI commands); built-in **screenshot region**, **window layouts**, **browser bookmarks + open-tab jump**, **media-player control**, **hotkey overview**, floating notes; **AGENTS.md + "ask an AI agent to build a plugin"**; free code signing via SignPath | memory story validated — ours is stricter (40 MB budget, §4b) so no chase; roster gains `shot`/`snap`/`marks`/`media` (§6); `hotkeys` cheat-sheet line (parking lot); store-lite v1.1 gains a theme gallery; v0.36 SDK goes **agent-friendly** (AGENTS.md + reference-plugin skeleton — today's coding agents write DLLs too); **Authenticode lands in v1.0** — this week's Defender `Bearfoos.A!ml` FP on the unsigned MinGW build is the proof |
 
 **Strategic synthesis — four bets to v1.0:**
 1. **Distribution + first run** (installer/winget/onboarding/autostart) — biggest gap between
@@ -86,6 +88,8 @@ Prior internal waves: RI1 (#1–50), RI2 (#101–200), RI3 (#201–300).
 - ❌ "AI-first" repositioning — AI is one opt-in plugin, not the product.
 - ❌ Registry writes without an explicit opt-in UI (autostart/trust live on a `[Registry]`-page,
   every entry individually togglable).
+- ❌ Embedded browser pane — Wox opens sites *inside* the launcher; links hand off to the
+  user's browser. The console stays a console.
 
 ---
 
@@ -109,12 +113,12 @@ Effort S ≈ ≤2 d, M ≤ 1 w (our real cadence: S-hours to days).
 | Ver | Codename | Items (RI refs) | Sizes |
 |---|---|---|---|
 | **v0.35.0** | — *(combined into the shipped v0.35.0 row above)* | — | — |
-| **v0.36.0** | **plugin DX** *(v1.0 blocker)* | ① `include/typebox_plugin.h` SDK + PLUGIN_API.md worked examples (ROADMAP #41); ② **plugin manifest** `*.tbplugin.json` — declared words/author/hostmin, loader rejects word collisions **at load** (audit-words rules move into the host) — this is ABI-v1-compatible because the manifest is a sidecar; ③ **hot-reload** button (FreeLibrary/LoadLibrary, ROADMAP #42); ~~④ `/plugdebug` view~~ · ~~⑤ SEH guard~~ · ~~⑥ `Data\<dll>\` convention~~ — **landed early in v0.35.0** (RI3 #270/#275) | M |
+| **v0.36.0** | **plugin DX** *(v1.0 blocker)* | ① `include/typebox_plugin.h` SDK + PLUGIN_API.md worked examples (ROADMAP #41) **+ AGENTS.md and a reference-plugin skeleton so coding agents can generate a DLL from a spec — the Wox "ask an AI agent to build a plugin" pattern**; ② **plugin manifest** `*.tbplugin.json` — declared words/author/hostmin, loader rejects word collisions **at load** (audit-words rules move into the host) — this is ABI-v1-compatible because the manifest is a sidecar; ③ **hot-reload** button (FreeLibrary/LoadLibrary, ROADMAP #42); ~~④ `/plugdebug` view~~ · ~~⑤ SEH guard~~ · ~~⑥ `Data\<dll>\` convention~~ — **landed early in v0.35.0** (RI3 #270/#275) | M |
 | **v0.37.0** | drag, drop, boot | ① **drop-in**: files dragged onto the console insert quoted paths; ② **drop-out**: file/clip rows draggable into Explorer/chat (OLE `IDropSource`, CmdPal 0.97 parity signal) — prototype early, time-boxed; ~~③ **autostart**~~ (HKCU Run word + headless dry-run law, **landed early in v0.35.0**; the `[Registry]` opt-in page stays) · ④ tray menu expansion — the DND toggle **landed early in v0.35.0**, fuzzy/theme toggles stay (ROADMAP #31) | S · L · S · S |
-| **v0.38.0** | first run, find settings | ① **onboarding**: no-INI first start → generated starter INI + welcome line-set + sample alias + `/help` tour (ROADMAP #49); ② Settings search box (ROADMAP #50); ③ idle auto-hide (RI3 #212); ④ follow-focus per-monitor summon (RI3 #214); ⑤ DWM border/caption tint (RI3 #216) | M · M · S · S · S |
+| **v0.38.0** | first run, find settings | ① **onboarding**: no-INI first start → generated starter INI + welcome line-set + sample alias + `/help` tour (+ confetti flourish on the first successful run — the Wox launch signal, cheap GDI) (ROADMAP #49); ② Settings search box (ROADMAP #50); ③ idle auto-hide (RI3 #212); ④ follow-focus per-monitor summon (RI3 #214); ⑤ DWM border/caption tint (RI3 #216) | M · M · S · S · S |
 | **v0.39.0** | trust | ① filename hygiene — RLO + double-extension anatomy warning before shell-run (RI3 #282, extends the v0.16 guard); ② trusted folders — green lamp for `[Security] Trusted=` paths (#283); ③ danger-gate list refresh + `/checkconfig` wiring | M · S · S |
 | **v0.40.0** | everyone | ① **UIA provider** so NVDA/Recorder read the painted dropdown (ROADMAP #76/RI2 #184) — prototype NVDA pass first; ② font fallback cascade (`[Font] Cascade=`, CJK tofu fix, RI3 #217); ③ per-page language override `[Language] Console=ru` (RI3 #222) | L · M · S |
-| **v1.0.0** | **platform** | ABI-freeze declaration + VERSIONING policy (ABI v1 guaranteed until 2.0); **installer story** — portable zip canonical + `winget` manifest PR + optional `install.ps1`; docs site pass (every feature one screenshot, CONFIG completeness audit); E2E matrix run (clean Win10/11, 96/150/200 % DPI, Win8.1 degrade check); `/update` weekly-consent check (typed once); **`/perf` report card green on the §4b budgets**; branding/release-notes polish pass; README comparison table gains CmdPal + Raycast columns | L |
+| **v1.0.0** | **platform** | ABI-freeze declaration + VERSIONING policy (ABI v1 guaranteed until 2.0); **Authenticode code signing** — SignPath OSS or Azure Trusted Signing (the v0.35 Defender `Bearfoos.A!ml` FP on the unsigned build is the business case; CI signs the artifact, zip stays canonical); **installer story** — portable zip canonical + `winget` manifest PR + optional `install.ps1` (scoop/choco manifests optional follow-ups, the Wox distribution table); docs site pass (every feature one screenshot, CONFIG completeness audit); E2E matrix run (clean Win10/11, 96/150/200 % DPI, Win8.1 degrade check); `/update` weekly-consent check (typed once); **`/perf` report card green on the §4b budgets**; branding/release-notes polish pass; README comparison table gains CmdPal + Raycast columns | L |
 
 **Ladder invariants:** ≥1 user-visible "screenshot moment" per wave · new words pass
 `audit-words` · every power/network surface keeps the headless dry-run contract · suites copy
@@ -190,7 +194,8 @@ idle CPU % (measured 5 s), ET latency p50/p95, per-plugin load ms, dropdown repa
 · clock chip options (#29) · mouse side-button hotkeys (#33) · double-tap-modifier summon
 (RI #54) · `[Ignores]` inverse per-app list (#38) · `Win+R` App-Paths handoff (#34)
 · console width auto-fit (#30) · history InvertScroll · result earcons (RI3 #219)
-· `/profile` INI profiles switcher (RI #66).
+· `/profile` INI profiles switcher (RI #66) · file-dialog quick-jump (`jumpto`: fill the
+active file dialog's path edit from the console — the Wox quick-jump signal).
 
 ---
 
@@ -198,7 +203,7 @@ idle CPU % (measured 5 s), ET latency p50/p95, per-plugin load ms, dropdown repa
 
 | Ver | Codename | Items | Notes / risk |
 |---|---|---|---|
-| **v1.1** | **store-lite** | ① plugin gallery: `[Plugins] Gallery=` JSON index (in-repo, hash-pinned), one-click **download to `Plugins\`** with digest check + confirm dialog; ② seed wave of community plugins (§6: `emoji qr port cron epoch httpcode du`); ③ manifest v2: gallery metadata = same sidecar file | supply-chain discipline: hash pins + HTTPS + pinned digest list in repo |
+| **v1.1** | **store-lite** | ① plugin gallery: `[Plugins] Gallery=` JSON index (in-repo, hash-pinned), one-click **download to `Plugins\`** with digest check + confirm dialog; ② seed wave of community plugins (§6: `emoji qr port cron epoch httpcode du`); ③ manifest v2: gallery metadata = same sidecar file; ④ **theme gallery** — shareable `[Theme]` packs as one `.tbtheme.json` (Wox theme-store signal, same digest-pinned rails) | supply-chain discipline: hash pins + HTTPS + pinned digest list in repo |
 | **v1.2** | **bash mode** *(fulfills the tagline)* | **ConPTY session view**: `/bash` or second hotkey opens the drop-down console in terminal mode (Guake-style slide, themed, `[Bash] Shell=pwsh|cmd`), VT subset renderer (SGR colors, alt-screen, scrollback 2000), history bridged into `History.dat`, `sudo !!`, copy on select | **XL — biggest risk on the board.** Time-boxed spike first; fallback plan (decided at spike end): `wt -w _quake` handoff alias + history bridge, revisit real renderer for v1.5 |
 | **v1.3** | brain, off the leash | ① **`ai` plugin** (typed-only): `[AI] Engine=ollama\|openai-compat`, user endpoint/model, `[AI] Enabled=0` default OFF, answers stream into the console line, every answer tagged `[net]`; ② `tr <text>` translation plugin (user endpoint, e.g. self-hosted LibreTranslate — no hard-coded vendor) | offline-first preserved: enabled-by-off, network only on a typed line, endpoint is user-owned |
 | **v1.4** | config everywhere | ① `/sync push|pull` **WebDAV** (typed-only, PBKDF2+AES via bcrypt, `.bak` chain, diff preview before apply) — completes the USB/Git story with phone-safe backup; ② config diff viewer `/config diff`; ③ profile hardening (`/profile work`, machine overlay lint) | crypto in-core = bcrypt only; no new exe deps |
@@ -232,6 +237,10 @@ Post-1.5 parking (v1.6+ candidates, already specced in RI3): Windows OCR `ocr` p
 | `cmdbook` | personal command vault `[CommandVault]` categories + templates + `%s` (network-cmds only if user typed them) | none | ✅ | M | Flow `command-vault` — fits alias culture |
 | `tr` | translate, user endpoint, `[Translate] Enabled=0` default | winhttp | ❌ typed | S/M | v1.3 |
 | `ai` | chat/summarize via user endpoint (Ollama LAN first-class) | winhttp | ❌ typed | M | v1.3 |
+| `shot` | `shot` region capture (crosshair shared with `color`), `shot now` full-screen → PNG to `[Shot] Folder=` + clipboard | gdi32 | ✅ | M | Wox v2.5 screenshot |
+| `snap` | `snap <window> left/right/corners/grid` presets; `snap save/apply <name>` layouts best-effort (window identity is the flake — time-boxed) | user32 | ✅ | M | Wox window layouts / Raycast WM |
+| `marks` | `marks <text>` browser bookmarks: Chrome/Edge `Bookmarks` JSON + Firefox exported `bookmarks.html`, offline read, Enter opens | none | ✅ | M | Wox browser-bookmarks; open-tab jump = UIA stretch, time-boxed |
+| `media` | `media play\|pause\|next\|prev\|vol N`, `media now` track info via SMTC over COM | ole32 | ✅ | M | Wox media-player plugin |
 
 Policy: **one** of these per wave (word-law), headless dry-run for anything with side
 effects, ET rows for discoverability, checklist row count grows with each (currently
@@ -255,6 +264,7 @@ fits up to 19 comfortably — re-verify layout at #20–21).
 | **HUD window** | borderless always-on-top clock/timer/clip-count chip strip, `hud` toggle | separate HWND | M | parking lot (fits any wave) |
 | **Clipboard ring images** | image rows in `clip ring` (thumb + paste via CF_BITMAP) | cliphist plugin | L | v1.x |
 | **Earcons/low-vision pack** | outcome sounds, fat caret, border flash | host `[Show]`/`[Sounds]` | S | parking lot |
+| **Hotkey overview** | `hotkeys` line: the registered summon, Alt+digit/click/Tab/T tray contract, console chords — a printable cheat sheet (Wox hotkey-overview) | console line mode | S | parking lot |
 
 ---
 
