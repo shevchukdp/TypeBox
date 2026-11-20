@@ -3,6 +3,42 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.35.0] - 2026-11-20
+
+### Dashboards, plugin DX & a calmer boot — three planned waves in one
+
+![/stats dashboards, starred favorites, CSV history and the autostart word](docs/screenshots/dashboard.png)
+
+- **`/stats`** (RI3 #208) - one console line shows it all: the last 14 days as a
+  block-glyph sparkline (`▁▂▄▆█`), your top five commands with counts, and a plugin
+  table. The day counters live in `Usage.dat` as reserved `day#YYYYMMDD` rows (pruned
+  after 35 days), the plugin tallies as `plug#<dll>` rows - `#` keys never leak into
+  rankings or candidates, so the v0.17 frecency contract is untouched.
+- **History as CSV** (RI3 #207) - `/export history <file.csv> [redact]` writes a BOM'd,
+  Excel-friendly CSV (`seq,command` header, quoted cells); `redact` keeps the words but
+  drops every argument, so the file is safe for a bug report. `/import history
+  <file.csv>` merges rows back: case-insensitive duplicates skipped, `[History] Max`
+  honored. The bare `/export <file>` INI copy keeps its old contract byte-for-byte.
+- **Favorites** (RI3 #223/#225) - `Ctrl+S` stars the highlighted drop-down row (or the
+  whole typed line) into `Favorites.dat` (cap 512); `favs ` filters the starred board,
+  and once you have stars the empty console opens as a board with `* favorites` /
+  `* history` section headers. Headers are no-ops without favorites: arrows, Alt+digits,
+  clicks and the ghost skip them, and the old drop-down gates never see them change.
+  `favs` / `favs <text>` / `favs clear` keep the board inspectable from the keyboard;
+  `favs` and `autostart` joined the reserved-word law.
+- **Plugin DX, early from the v0.36 row** (RI3 #270/#275) - `/plugdebug` prints who
+  answered, how often, how slow; every plugin call is now fault-guarded (a crashing
+  plugin is marked broken and skipped for the session - the host survives one bad DLL);
+  and the host pre-creates the portable writable home `Data\<dll>\` for each plugin.
+- **Boot, early from the v0.37 row** (ROADMAP #31) - `autostart on|off|status` writes
+  the quoted exe path to the HKCU Run key; the offline-first law now covers the
+  registry too (headless answers `would write` / `would delete` and never touches it,
+  `status` is a read). The tray menu grew a checkable **Do Not Disturb** item.
+- Host plumbing: two new ET/dd candidate words (`favs`, `autostart`), `/stats` and
+  `/plugdebug` in the internal command set, `advapi32` joined the link list (CMake and
+  the documented g++ line), and the console-line answers reuse the `/day`
+  `g_internalAnswer` idiom so the console stays open after `/export history`.
+
 ## [0.34.0] - 2026-11-20
 
 ### Time machine

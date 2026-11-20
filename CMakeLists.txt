@@ -24,7 +24,7 @@ target_compile_definitions(TypeBox PRIVATE
     TYPEBOX_VERSION=${TYPEBOX_VERSION})
 
 target_link_libraries(TypeBox PRIVATE
-    user32 shell32 shlwapi gdi32 comctl32 comdlg32 winmm winhttp bcrypt)
+    user32 shell32 shlwapi gdi32 comctl32 comdlg32 winmm winhttp bcrypt advapi32)
 
 # Example plugin (TypeAndRun ABI) — ships in the release zip under Plugins\.
 add_library(calc SHARED examples/plugin_calc/calc.c)

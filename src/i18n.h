@@ -94,6 +94,18 @@ enum StrId {
     STR_SCH_USAGE, STR_SCH_BADDUR, STR_SCH_BADAT, STR_SCH_NOCMD, STR_SCH_ARMED,
     STR_TIM_EMPTY, STR_TIM_USAGE, STR_TIM_CANCEL, STR_TIM_CLEARED, STR_TIM_NOSUCH,
     STR_DND_ON, STR_DND_FOR, STR_DND_OFF, STR_DND_BAD,
+    // v0.35 "dashboards + dx + boot" combined wave (side table columns 34-61,
+    // EN+RU compiled; other packs fall back to English):
+    // /stats answers, /export|/import history CSV, favorites (Ctrl+S, `favs`,
+    // drop-down section headers), autostart utility word, tray DND toggle,
+    // /plugdebug answers.
+    STR_STATS_PRE, STR_STATS_TOP, STR_STATS_PLUG, STR_STATS_DAYS, STR_STATS_EMPTY,
+    STR_EXP_USAGE, STR_EXP_OK, STR_EXP_BAD, STR_EXP_RED,
+    STR_IMP_USAGE, STR_IMP_OK, STR_IMP_BAD,
+    STR_FAV_HDR, STR_FAV_HIST, STR_FAV_EMPTY, STR_FAV_LISTP, STR_FAV_CLEAR,
+    STR_FAV_USAGE, STR_FAV_ON, STR_FAV_OFF,
+    STR_AUTO_ON, STR_AUTO_OFF, STR_AUTO_WWRITE, STR_AUTO_WDELETE, STR_AUTO_BAD,
+    STR_TRAY_DND, STR_PLDBG_EMPTY, STR_PLDBG_PRE,
     STR_LAST
 };
 
@@ -1102,7 +1114,7 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 // v0.23 pos + stayawake answers.
 // Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][47] = {
+static const wchar_t* const kExItems[LANG_COUNT][75] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1140,7 +1152,28 @@ static const wchar_t* const kExItems[LANG_COUNT][47] = {
               L"dnd: on (indefinite)",
               L"dnd: on for %d min",
               L"dnd: off",
-              L"dnd: minutes must be 1..1440" },
+              L"dnd: minutes must be 1..1440",
+              // v0.35 dashboards + dx + boot (columns 47-74, EN is the fallback pack)
+              L"stats", L"top", L"plug", L"14d",
+              L"stats: nothing yet - go type something",
+              L"usage: /export history <file.csv> [redact]",
+              L"history: exported %d rows to %s",
+              L"history: cannot write %s",
+              L" (redacted)",
+              L"usage: /import history <file.csv>",
+              L"history: imported %d rows (%d duplicates skipped)",
+              L"history: cannot read %s",
+              L"* favorites", L"* history",
+              L"favs: empty - Ctrl+S stars the selected row",
+              L"favs", L"favs: %d cleared",
+              L"favs: use list or clear - Ctrl+S stars the selected row",
+              L"favs: starred \"%s\"", L"favs: unstarred \"%s\"",
+              L"autostart: on (HKCU Run)", L"autostart: off",
+              L"autostart: [headless] would write HKCU Run",
+              L"autostart: [headless] would delete HKCU Run",
+              L"autostart: use on, off or status",
+              L"Do Not Disturb",
+              L"plugdebug: no plugins", L"plugdebug:" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1178,7 +1211,28 @@ static const wchar_t* const kExItems[LANG_COUNT][47] = {
               L"тишина: включена (бессрочно)",
               L"тишина: включена на %d мин",
               L"тишина: выключена",
-              L"тишина: минуты должны быть 1..1440" },
+              L"тишина: минуты должны быть 1..1440",
+              // v0.35 dashboards + dx + boot (EN fallback lives in the en pack)
+              L"статистика", L"топ", L"плагины", L"14д",
+              L"статистика: пока пусто - напиши что-нибудь",
+              L"использование: /export history <файл.csv> [redact]",
+              L"история: выгружено %d строк в %s",
+              L"история: не могу записать %s",
+              L" (без аргументов)",
+              L"использование: /import history <файл.csv>",
+              L"история: загружено %d строк (%d дублетов пропущено)",
+              L"история: не могу прочитать %s",
+              L"* избранное", L"* история",
+              L"избранное: пусто - Ctrl+S помечает выбранную строку",
+              L"избранное", L"избранное: очищено (%d)",
+              L"избранное: list или clear - Ctrl+S помечает выбранную строку",
+              L"избранное: помечено «%s»", L"избранное: снято «%s»",
+              L"автозапуск: включён (HKCU Run)", L"автозапуск: выключен",
+              L"автозапуск: [headless] записал бы HKCU Run",
+              L"автозапуск: [headless] удалил бы HKCU Run",
+              L"автозапуск: on, off или status",
+              L"Не беспокоить",
+              L"плагины: нет плагинов", L"плагины:" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1350,7 +1404,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_DND_BAD) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_PLDBG_PRE) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail

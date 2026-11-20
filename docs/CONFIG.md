@@ -193,7 +193,41 @@ at 18:30 backup.bat                            ; wall clock, 24h; a past time me
 notice): bare = indefinite, `1..1440` minutes self-expires, `/dnd` again prints the status,
 `/dnd off` ends it. `[Sounds] Quiet=22:00-07:30` arms the same silence nightly — a window
 that wraps midnight is fine. The log still tells the truth: shushed sound paths answer
-`sounds: suppressed (quiet)`.
+`sounds: suppressed (quiet)`. The tray menu carries the same switch as a checkable
+**Do Not Disturb** item (right-click the tray icon).
+
+### Dashboards, favorites & autostart (TypeBox 0.35.0)
+
+- **`/stats`** — one console line: the last 14 days as block-glyph sparkline
+  (`▁▂▄▆█`), your top five commands with counts, and the plugin table. Everything
+  comes from `Usage.dat` — the wave added no new store except the tiny favorites
+  file, and it never touches the network.
+- **`/plugdebug`** — every plugin, its hits and average milliseconds since the
+  start; a plugin that faults is marked `FAULT` and skipped for the session
+  (the host survives it), the log keeps `plugin: <dll> FAULTED in RunString`.
+- **`/export history <file.csv> [redact]`** — BOM'd CSV (`seq,command` header,
+  quoted cells, doubled `""` quotes) that Excel opens correctly. `redact` keeps
+  every command word but drops every argument — safe for a screenshot. The old
+  bare `/export <file>` INI copy behaves exactly as before.
+- **`/import history <file.csv>`** — merges exported rows back: exact duplicates
+  (case-insensitive) are skipped, the `[History] Max` cap is honored, nothing
+  else is rewritten.
+- **Favorites** — `Ctrl+S` stars/unstars the highlighted drop-down row, or the
+  whole line when nothing is highlighted, into `Favorites.dat` (UTF-8, one line
+  per favorite, cap 512, portable next to the exe). Type `favs ` and the
+  drop-down becomes the starred board; with at least one star the empty console
+  opens as a board with `* favorites` / `* history` section headers — arrows,
+  Alt+digits and clicks never stop on a header, and without favorites the board
+  is byte-for-byte the old list. `favs` / `favs <text>` list them, `favs clear`
+  empties the file.
+- **`autostart on|off|status`** — adds/removes the `TypeBox` value under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` (quoted exe path). The
+  offline-first law covers the registry: under `TYPEBOX_HEADLESS` nothing is
+  ever written — the answer is `would write` / `would delete`; `status` is a
+  read and always answers truthfully.
+- **`Data\<dll>\`** — the host pre-creates this folder next to the exe for every
+  enabled plugin: the portable, writable home plugin authors should use instead
+  of inventing `%APPDATA%` paths.
 
 ### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
 
@@ -338,9 +372,11 @@ exe. `[Undo] UseUndo=1` → `Ctrl+Z` or `/undo` restores the last executed comma
 
 ### Import / export
 Internal commands wrap the portable file:
-- `/export <path>` — saves `TypeBox.ini` to `<path>` (take it anywhere).
-- `/import <path>` — restores it (current config kept as `TypeBox.ini.bak`),
+- `/export <path>` - saves `TypeBox.ini` to `<path>` (take it anywhere).
+- `/import <path>` - restores it (current config kept as `TypeBox.ini.bak`),
   then reloads settings, aliases and hotkey.
+- `/export history <file.csv> [redact]` / `/import history <file.csv>` -
+  command history as CSV, see **Dashboards, favorites & autostart** above.
 
 ### `[Log]` — portable error log
 Everything TypeBox cannot do itself (failed hotkey registration, plugin load errors,

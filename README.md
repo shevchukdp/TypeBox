@@ -54,6 +54,10 @@
 |---|
 | ![timemachine](docs/screenshots/time-machine.png) |
 
+| `/stats` dashboards, starred favorites and a calmer boot — the combined v0.35 wave |
+|---|
+| ![dashboards](docs/screenshots/dashboard.png) |
+
 ## Why TypeBox
 
 | | **TypeBox** | TypeAndRun | PowerToys Run | Flow Launcher |
@@ -68,9 +72,31 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.34.0)
+## Working today (v0.35.0)
 
-Everything below ships in **[v0.34.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.31 woke the fleet with **wol #19** and made command-word uniqueness a build-time law, v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Dashboards, favorites & a calmer boot (v0.35)**
+
+- **`/stats`** — the last 14 days as a one-line sparkline (`▁▂▄▆█` block glyphs), the top five
+  commands with their counts, and how often each plugin answered: all from `Usage.dat`, no
+  new files, no network — `stats 14d ▂▅▇▃ | top: calc 12, ff 4 | plug: util 3/2ms`
+- **`/plugdebug`** — who answered, how often, how slow; a plugin that faults is respectfully
+  retired for the rest of the session (the host survives one bad DLL now), and every plugin
+  gets its writable home `Data\<dll>\` pre-created next to the exe
+- **History as CSV** — `/export history <file.csv> [redact]` writes a BOM'd Excel-friendly
+  CSV; `redact` keeps every command word but drops every argument, so the file is safe for a
+  bug report; `/import history <file.csv>` merges old rows back, duplicates skipped, the
+  `[History] Max` cap honored. The old bare `/export <file>` INI copy is untouched
+- **Favorites** — `Ctrl+S` stars the highlighted drop-down row (or the whole line you typed)
+  into `Favorites.dat`; typing `favs ` filters them, with `* favorites` / `* history` section
+  headers appearing only once you have stars — arrows, Alt+digits and clicks skip headers, and
+  `favs` / `favs <text>` / `favs clear` keep the board inspectable from the keyboard
+- **`autostart on|off|status`** — the HKCU Run key without leaving the console; under headless
+  the registry is never touched (the answer only says `would write`/`would delete`, the
+  offline-first law extended to the registry), and `status` stays a safe read
+- **Tray Do Not Disturb** — the tray menu grew a checkable night switch next to the `/dnd`
+  word and the `[Sounds] Quiet` window
 
 **Time machine (v0.34)**
 

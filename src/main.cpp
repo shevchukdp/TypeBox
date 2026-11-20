@@ -12,7 +12,7 @@
 // Build (MinGW): g++ -std=c++17 -DUNICODE -D_UNICODE -O2 src/main.cpp
 //                -o TypeBox.exe -municode -mwindows
 //                -luser32 -lshell32 -lshlwapi -lgdi32 -lcomctl32 -lcomdlg32
-//                -lwinmm -lwinhttp -lbcrypt
+//                -lwinmm -lwinhttp -lbcrypt -ladvapi32
 
 #include <windows.h>
 #include <commdlg.h>
@@ -26,6 +26,8 @@
 #include <vector>
 #include <map>
 #include <fstream>
+#include <sstream>        // v0.35: /import history CSV rows
+#include <csetjmp>        // v0.35: plugin fault guard (GCC has no __try)
 #include <cstring>
 #include <cwctype>
 #include <cmath>
@@ -1194,6 +1196,18 @@ static void LoadUsage() {
         }
         if (r.count >= 1) g_usage[FromUtf8(line.substr(0, t1))] = r;
     }
+    // v0.35 /stats: day# rows older than 35 days go away with the load.
+    {
+        time_t cut = time(nullptr) - 35 * 86400; struct tm cb; localtime_s(&cb, &cut);
+        int cutYmd = cb.tm_year * 10000 + (cb.tm_mon + 1) * 100 + cb.tm_mday;
+        for (auto it = g_usage.begin(); it != g_usage.end(); ) {
+            if (it->first.rfind(L"day#", 0) == 0) {
+                int d = _wtoi(std::wstring(it->first, 4).c_str());   // YYYYMMDD digits
+                if (d > 0 && d < cutYmd) { it = g_usage.erase(it); continue; }
+            }
+            ++it;
+        }
+    }
 }
 static void SaveUsage() {
     std::ofstream f(UsageFile().c_str(), std::ios::binary | std::ios::trunc);
@@ -1222,7 +1236,58 @@ static void RecordUsage(const std::wstring& line) {
     int ymd = LocalYmd();                       // v0.27: per-day tally for /day
     if (r.day != ymd) { r.day = ymd; r.today = 1; }
     else              { r.today += 1; }
+    // v0.35 /stats: the GLOBAL daily counter lives under the reserved key
+    // "day#YYYYMMDD" - the '#' keeps it out of ranking/candidates, exactly
+    // like the v0.33 argument-memory keys do.
+    wchar_t dk[24]; wsprintfW(dk, L"day#%d", ymd);
+    UsageRec& d = g_usage[dk];
+    d.count += 1; d.last = (long long)time(nullptr);
     SaveUsage();                              // tiny file; deterministic for tests
+}
+
+// ---------------------------------------------------------------- favorites (v0.35)
+// RI3 #223/#225: Ctrl+S stars the highlighted drop-down row (or the typed
+// line), `favs ` filters them, and the empty console opens with section
+// headers. Favorites.dat is one entry per line, UTF-8 - the History.dat
+// dialect, because it must survive the same manual edits.
+static std::vector<std::wstring> g_favorites;
+
+static std::wstring FavoritesFile() { return ExeDir() + L"Favorites.dat"; }
+
+static void LoadFavorites() {
+    g_favorites.clear();
+    std::ifstream f(FavoritesFile().c_str(), std::ios::binary);
+    if (!f) return;
+    std::string line;
+    while (std::getline(f, line) && (int)g_favorites.size() < 512) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty()) continue;
+        g_favorites.push_back(FromUtf8(line));
+    }
+}
+static void SaveFavorites() {
+    std::ofstream f(FavoritesFile().c_str(), std::ios::binary | std::ios::trunc);
+    if (!f) return;
+    for (const auto& h : g_favorites) f << ToUtf8(h) << '\n';
+}
+// true = it is starred now; false = it was starred and came off.
+static bool ToggleFavorite(const std::wstring& raw) {
+    std::wstring w = Trim(raw);
+    if (w.empty()) return false;
+    for (size_t i = 0; i < g_favorites.size(); ++i)
+        if (_wcsicmp(g_favorites[i].c_str(), w.c_str()) == 0) {
+            g_favorites.erase(g_favorites.begin() + i);
+            SaveFavorites();
+            return false;
+        }
+    g_favorites.insert(g_favorites.begin(), w);
+    if ((int)g_favorites.size() > 512) g_favorites.resize(512);
+    SaveFavorites();
+    return true;
+}
+static bool IsFavorite(const std::wstring& w) {
+    for (auto& f : g_favorites) if (_wcsicmp(f.c_str(), w.c_str()) == 0) return true;
+    return false;
 }
 
 // v0.33 (ROADMAP-V1 "write less", RI3 #203): per-slot argument memory. Running
@@ -1381,6 +1446,11 @@ struct Plugin {
     std::wstring   file;
     bool           loaded = false;   // Load(HWND) called
     bool           inHistory = false;
+    // v0.35 plugin DX (ROADMAP-V1 v0.36 row, early-landed): /plugdebug counters
+    // and the SEH self-disable - a plugin that faults stops being asked again.
+    long long      hits = 0;
+    long long      msTotal = 0;
+    bool           broken = false;
     PLoad          Load          = nullptr;
     PUnload        Unload        = nullptr;
     PGetInfo       GetInfo       = nullptr;
@@ -1485,6 +1555,18 @@ static void DiscoverPlugins() {
             FreeLibrary(h);
             return;
         }
+        // v0.35 plugin DX (RI3 #275 landed early): Data\<dll>\ is the writable
+        // per-plugin convention - the host pre-creates it portable next to the
+        // exe so plugins never invent %APPDATA% homes.
+        {
+            size_t bs = file.find_last_of(L"\\/");
+            std::wstring base = (bs == std::wstring::npos ? file : file.substr(bs + 1));
+            size_t dot = base.find_last_of(L'.');
+            if (dot != std::wstring::npos && dot > 0) base = base.substr(0, dot);  // util.dll -> util
+            std::wstring root = ExeDir() + L"Data";
+            CreateDirectoryW(root.c_str(), nullptr);            // exists = fine
+            CreateDirectoryW((root + L"\\" + base).c_str(), nullptr);
+        }
         g_plugins.push_back(p);
     };
 
@@ -1523,12 +1605,45 @@ static void CallPluginsUnload() {
 
 // Ask plugins to handle the line (first plugin that returns run != 0 wins).
 static void DdClose();   // fwd (defined with the drop-down below)
+
+// v0.35 plugin DX: one bad plugin must never take the host with it. MinGW's
+// GCC has no __try, so the guard is the classic MinGW pattern: a process-wide
+// exception filter that longjmps back to the guarded call while the stack is
+// still intact - but ONLY while a plugin export is on the stack (the flag).
+// A host crash keeps its old unhandled behavior (CONTINUE_SEARCH).
+static jmp_buf        g_pluginJmp;
+static volatile long  g_pluginGuard = 0;
+static LONG WINAPI PluginFaultFilter(EXCEPTION_POINTERS* ep) {
+    (void)ep;
+    if (g_pluginGuard) { g_pluginGuard = 0; longjmp(g_pluginJmp, 1); }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
     std::string ansi = ToAnsi(line);
+    static bool s_filter = false;
+    if (!s_filter) { SetUnhandledExceptionFilter(PluginFaultFilter); s_filter = true; }
     for (auto& p : g_plugins) {
-        if (!p.RunString || !PluginLoadAllowed(p)) continue;
+        if (!p.RunString || !PluginLoadAllowed(p) || p.broken) continue;
         if (!p.loaded && p.Load) { p.Load(mainWnd); p.loaded = true; }
-        TExec ex = p.RunString(ansi.c_str());
+        TExec ex = {};
+        volatile bool ok = true;
+        DWORD t0 = (DWORD)GetTickCount64();
+        if (setjmp(g_pluginJmp) == 0) {
+            g_pluginGuard = 1;
+            ex = p.RunString(ansi.c_str());
+            g_pluginGuard = 0;
+        } else {
+            ok = false;                    // the fault filter longjmped here
+        }
+        p.hits    += 1;
+        p.msTotal += (long long)((DWORD)GetTickCount64() - t0);
+        if (!ok) {
+            p.broken = true;
+            LogError(L"plugin: " + PluginKey(p) +
+                     L" FAULTED in RunString - skipped for the rest of this session");
+            continue;
+        }
         if (ex.size == (int)sizeof(TExec) && ex.run) {
             std::wstring text = FromAnsi(ex.con_text);
             if (!text.empty()) {
@@ -1546,6 +1661,11 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
             }
             g_lastPluginName = PluginKey(p);
             LogInfo(L"plugin: " + g_lastPluginName + L" handled: " + line);
+            // v0.35 /stats: who answers what - "plug#<key>" rows, the '#' keeps
+            // them out of ranking/candidates like every other reserved key.
+            UsageRec& pr = g_usage[L"plug#" + Lower(PluginKey(p))];
+            pr.count += 1; pr.last = (long long)time(nullptr);
+            SaveUsage();
             PlayTypeSound(7);
             return EXC_PLUGIN;
         }
@@ -1557,6 +1677,8 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
 
 static void ShowBox(HWND mainWnd);
 static void HideBox(HWND mainWnd);
+static void ShowAnswer(HWND mainWnd, const std::wstring& text);   // v0.35: used by /export|/import history
+static void InternalAnswer(HWND mainWnd, const std::wstring& text); // v0.35: console-line answers (g_internalAnswer)
 static int  RunLine(const std::wstring& line, HWND mainWnd);
 static int  RunUtilityCommands(const std::wstring& line, HWND mainWnd);   // v0.23
 
@@ -2151,6 +2273,8 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"search add <name> <url-with-%s> | search list | search del <name> | search test <name> <query>\n"
             L"Ghost text: when one row continues the line, End (or Right) accepts the dimmed tail\n"
             L"Scheduled (v0.34): in 10m <cmd> | at 18:30 <cmd> | /timers | /cancel <n>|all | /dnd [min]\n"
+            L"Dashboards (v0.35): /stats | /plugdebug | /export history <f.csv> [redact] | /import history <f.csv>\n"
+            L"Favorites (v0.35): Ctrl+S stars the selected row - type \"favs \" to filter them; autostart on|off|status\n"
             L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
         if (g_headless) {   // v0.34: the console ALSO carries the help (copyable, testable);
@@ -2207,7 +2331,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         std::vector<std::wstring> pool;
         for (auto& a : g_aliases) pool.push_back(a.name);
         for (auto& p : g_plugins)
-            if (p.GetCount && p.GetString)
+            if (p.GetCount && p.GetString && !p.broken)
                 for (int i = 0; i < p.GetCount(); ++i) pool.push_back(FromAnsi(p.GetString(i)));
         for (size_t i = 0; i < g_aliases.size(); ++i) {
             const Alias& a = g_aliases[i];
@@ -2300,7 +2424,47 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         CallPluginsUnload();
     } else if (c == L"/export") {
         // Export settings: copy the portable ini to the given file.
-        std::wstring dest = RestWords(line);
+        // v0.35 (RI3 #207): `/export history <file.csv> [redact]` writes the
+        // command history as CSV - `redact` keeps the words but drops every
+        // argument, so the file is safe to put on a screenshot or in a bug
+        // report. The bare `/export <file>` INI copy is the old contract.
+        std::wstring rest0 = RestWords(line);
+        if (Lower(FirstWord(rest0)) == L"history") {
+            size_t sp0 = rest0.find_first_of(L" \t");
+            std::wstring a = sp0 == std::wstring::npos ? L"" : Trim(rest0.substr(sp0 + 1));
+            bool redact = false;
+            if (a.size() >= 8 && a[a.size() - 7] == L' ' &&
+                !_wcsicmp(a.c_str() + (a.size() - 6), L"redact")) {
+                std::wstring cut = Trim(a.substr(0, a.size() - 7));
+                if (!cut.empty()) { a = cut; redact = true; }
+            }
+            std::wstring path = a;
+            if (path.empty()) { InternalAnswer(mainWnd, L(STR_EXP_USAGE)); return; }
+            std::ofstream f(path.c_str(), std::ios::binary | std::ios::trunc);
+            if (!f) {
+                wchar_t msg[512]; wsprintfW(msg, L(STR_EXP_BAD), path.c_str());
+                InternalAnswer(mainWnd, msg);
+                LogError(L"history: cannot write " + path);
+                return;
+            }
+            f.write("\xEF\xBB\xBF", 3);                              // Excel-friendly
+            f << "seq,command\r\n";
+            int n = 0;
+            for (auto& h : g_history) {
+                std::wstring cmd = redact ? FirstWord(h) : h;
+                if (cmd.empty()) continue;
+                std::wstring q;
+                for (wchar_t ch : cmd) { if (ch == L'"') q += L"\"\""; else q += ch; }
+                f << ++n << ",\"" << ToUtf8(q) << "\"\r\n";
+            }
+            f.close();
+            wchar_t msg[512]; wsprintfW(msg, L(STR_EXP_OK), n, path.c_str());
+            InternalAnswer(mainWnd, msg + (redact ? std::wstring(L(STR_EXP_RED)) : std::wstring()));
+            LogInfo(L"history: exported " + std::to_wstring(n) + L" rows -> " + path +
+                    (redact ? L" (redacted)" : L""));
+            return;
+        }
+        std::wstring dest = rest0;
         if (dest.empty()) {
             TbMessageBox(mainWnd, L"Usage: /export <path-to-file>",
                         L"TypeBox — export", MB_OK | MB_ICONINFORMATION);
@@ -2315,7 +2479,70 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         }
     } else if (c == L"/import") {
         // Import settings: restore an exported file (current ini is kept as .bak).
-        std::wstring src = RestWords(line);
+        // v0.35 (RI3 #207): `/import history <file.csv>` merges rows exported
+        // before - exact duplicates (old or among the new) are skipped, the
+        // [History] Max cap is honored, nothing is ever silently lost.
+        std::wstring rest0 = RestWords(line);
+        if (Lower(FirstWord(rest0)) == L"history") {
+            size_t sp0 = rest0.find_first_of(L" \t");
+            std::wstring path = sp0 == std::wstring::npos ? L"" : Trim(rest0.substr(sp0 + 1));
+            if (path.empty()) { InternalAnswer(mainWnd, L(STR_IMP_USAGE)); return; }
+            std::ifstream f(path.c_str(), std::ios::binary);
+            if (!f) {
+                wchar_t msg[512]; wsprintfW(msg, L(STR_IMP_BAD), path.c_str());
+                InternalAnswer(mainWnd, msg);
+                LogError(L"history: cannot read " + path);
+                return;
+            }
+            std::string blob((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            f.close();
+            if (blob.size() >= 3 && (unsigned char)blob[0] == 0xEF &&
+                (unsigned char)blob[1] == 0xBB && (unsigned char)blob[2] == 0xBF)
+                blob.erase(0, 3);                                   // BOM off
+            int added = 0, skipped = 0;
+            std::istringstream ss(blob);
+            std::string row; bool first = true;
+            while (std::getline(ss, row)) {
+                if (!row.empty() && row.back() == '\r') row.pop_back();
+                if (row.empty()) continue;
+                if (first) {                                        // our own header
+                    first = false;
+                    if (row.size() >= 4 &&
+                        (row[0] == 's' || row[0] == 'S') && (row[1] == 'e' || row[1] == 'E') &&
+                        (row[2] == 'q' || row[2] == 'Q') && row[3] == ',') continue;
+                }
+                size_t comma = row.find(',');
+                std::string tail = comma == std::string::npos ? row : row.substr(comma + 1);
+                std::string cell;
+                if (!tail.empty() && tail[0] == '"') {              // quoted command cell
+                    size_t i = 1;
+                    while (i < tail.size()) {
+                        if (tail[i] == '"') {
+                            if (i + 1 < tail.size() && tail[i + 1] == '"') { cell += '"'; i += 2; continue; }
+                            break;
+                        }
+                        cell += tail[i++];
+                    }
+                } else cell = tail;
+                std::wstring cmd = Trim(FromUtf8(cell));
+                if (cmd.empty()) continue;
+                bool dup = false;
+                for (auto& h : g_history)
+                    if (_wcsicmp(h.c_str(), cmd.c_str()) == 0) { dup = true; break; }
+                if (dup) { ++skipped; continue; }
+                g_history.push_back(cmd); ++added;
+            }
+            if ((int)g_history.size() > g_set.historyMax)
+                g_history.erase(g_history.begin(),
+                                g_history.end() - g_set.historyMax);
+            SaveHistory();
+            wchar_t msg[512]; wsprintfW(msg, L(STR_IMP_OK), added, skipped);
+            InternalAnswer(mainWnd, msg);
+            LogInfo(L"history: imported " + std::to_wstring(added) + L" rows from " +
+                    path + L" (" + std::to_wstring(skipped) + L" duplicates skipped)");
+            return;
+        }
+        std::wstring src = rest0;
         if (src.empty() || !PathFileExistsW(src.c_str())) {
             TbMessageBox(mainWnd, L"Usage: /import <path-to-file>\n(file not found)",
                         L"TypeBox — import", MB_OK | MB_ICONINFORMATION);
@@ -2419,6 +2646,97 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             }
         }
         LogInfo(L"/day: " + ans);
+        SetWindowTextW(g_edit, ans.c_str());
+        SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        g_internalAnswer = true;
+    } else if (c == L"/stats") {
+        // v0.35 (RI3 #208): the dashboard in the line - a 14-day sparkline
+        // from the reserved day# rows, the all-time top words, and which
+        // plugins actually answer (plug# rows). '#' rows never rank, so the
+        // bookkeeping can never leak into the drop-down.
+        static const wchar_t kBlk[8] = { L'\u2581', L'\u2582', L'\u2583', L'\u2584',
+                                         L'\u2585', L'\u2586', L'\u2587', L'\u2588' };
+        int vals[14] = {}; int maxv = 0, total = 0;
+        time_t nowT = time(nullptr);
+        for (int d = 13; d >= 0; --d) {
+            time_t t = nowT - (time_t)d * 86400; struct tm tb; localtime_s(&tb, &t);
+            wchar_t key[24]; wsprintfW(key, L"day#%d",
+                (tb.tm_year + 1900) * 10000 + (tb.tm_mon + 1) * 100 + tb.tm_mday);
+            auto it = g_usage.find(key);
+            vals[13 - d] = (it != g_usage.end()) ? it->second.count : 0;
+            if (vals[13 - d] > maxv) maxv = vals[13 - d];
+            total += vals[13 - d];
+        }
+        std::vector<std::pair<int, std::wstring>> top, plugs;
+        for (auto& kv : g_usage) {
+            if (kv.first.find(L'#') != std::wstring::npos) {
+                if (kv.first.rfind(L"plug#", 0) == 0 && kv.second.count > 0)
+                    plugs.push_back(std::make_pair(kv.second.count, kv.first.substr(5)));
+                continue;
+            }
+            if (kv.second.count > 0) top.push_back(std::make_pair(kv.second.count, kv.first));
+        }
+        std::sort(top.begin(), top.end(),
+                  [](const std::pair<int, std::wstring>& a,
+                     const std::pair<int, std::wstring>& b) { return a.first > b.first; });
+        std::sort(plugs.begin(), plugs.end(),
+                  [](const std::pair<int, std::wstring>& a,
+                     const std::pair<int, std::wstring>& b) { return a.first > b.first; });
+        std::wstring ans;
+        if (!total && top.empty()) ans = L(STR_STATS_EMPTY);
+        else {
+            std::wstring spark;
+            for (int i = 0; i < 14; ++i) {
+                if (!vals[i]) { spark += L'\u00b7'; continue; }
+                int lvl = (int)((long long)(vals[i] - 1) * 8 / (maxv > 0 ? maxv : 1));
+                if (lvl > 7) lvl = 7; if (lvl < 0) lvl = 0;
+                spark += kBlk[lvl];
+            }
+            ans = std::wstring(L(STR_STATS_PRE)) + L" " + L(STR_STATS_DAYS) + L" " + spark +
+                  L" | " + L(STR_STATS_TOP) + L": ";
+            int shown = 0;
+            if (top.empty()) ans += L"-";
+            for (auto& p : top) {
+                if (shown >= 5) { ans += L", ..."; break; }
+                if (shown) ans += L", ";
+                ans += p.second + L" " + std::to_wstring(p.first);
+                ++shown;
+            }
+            if (!plugs.empty()) {
+                ans += std::wstring(L" | ") + L(STR_STATS_PLUG) + L": ";
+                shown = 0;
+                for (auto& p : plugs) {
+                    if (shown >= 5) { ans += L", ..."; break; }
+                    if (shown) ans += L", ";
+                    ans += p.second + L" " + std::to_wstring(p.first);
+                    ++shown;
+                }
+            }
+        }
+        LogInfo(L"/stats: " + ans);
+        SetWindowTextW(g_edit, ans.c_str());
+        SendMessageW(g_edit, EM_SETSEL, 0, -1);
+        g_internalAnswer = true;
+    } else if (c == L"/plugdebug") {
+        // v0.35 plugin DX (ROADMAP-V1 v0.36 row, RI3 #270 early-landed):
+        // who answered what, how often, how slow - and who faulted once and
+        // was respectfully retired for the rest of the session.
+        std::wstring ans;
+        if (g_plugins.empty()) ans = L(STR_PLDBG_EMPTY);
+        else {
+            ans = std::wstring(L(STR_PLDBG_PRE)) + L" " +
+                  std::to_wstring((int)g_plugins.size()) + L" | ";
+            int shown = 0;
+            for (auto& p : g_plugins) {
+                if (shown >= 6) { ans += L", ..."; break; }
+                if (shown) ans += L"  |  ";
+                long long avg = p.hits ? p.msTotal / p.hits : 0;
+                ans += PluginKey(p) + (p.broken ? L" FAULT" : (p.loaded ? L" ok" : L" idle")) +
+                       L" " + std::to_wstring(p.hits) + L"/" + std::to_wstring(avg) + L"ms";
+                ++shown;
+            }
+        }
+        LogInfo(L"/plugdebug: " + ans);
         SetWindowTextW(g_edit, ans.c_str());
         SendMessageW(g_edit, EM_SETSEL, 0, -1);
         g_internalAnswer = true;
@@ -2918,8 +3236,8 @@ static const wchar_t* const kInternalCmds[] = {
     L"/about", L"/cancel", L"/checkconfig", L"/config", L"/day", L"/dnd", L"/exit",
     L"/export", L"/help",
     L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
-    L"/log", L"/openconfig", L"/path", L"/reread", L"/settings", L"/show",
-    L"/sys", L"/tabs", L"/timers", L"/unload", L"/undo", L"/update" };
+    L"/log", L"/openconfig", L"/path", L"/plugdebug", L"/reread", L"/settings",
+    L"/show", L"/stats", L"/sys", L"/tabs", L"/timers", L"/unload", L"/undo", L"/update" };
 
 struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
 static Anchor g_anchor;
@@ -3158,6 +3476,16 @@ static void ShowAnswer(HWND mainWnd, const std::wstring& text) {
     SendMessageW(g_edit, EM_SETSEL, 0, -1);
 }
 
+// v0.35: the /export|/import history answers live in the console line, not in
+// a dialog - the console stays open (Submit's g_internalAnswer exemption),
+// exactly like /day and /timers do.
+static void InternalAnswer(HWND mainWnd, const std::wstring& text) {
+    (void)mainWnd;
+    SetWindowTextW(g_edit, text.c_str());
+    SendMessageW(g_edit, EM_SETSEL, 0, -1);
+    g_internalAnswer = true;
+}
+
 static bool ApplyPosRect(HWND w, int x, int y, int ww, int hh) {
     if (ww < 40 || hh < 20) return false;
     // v0.27.1: the slot is computed EXACTLY as the human would get it, but in
@@ -3323,12 +3651,13 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
         auto collides = [&](const std::wstring& nm, std::wstring& why) -> bool {
             if (_wcsicmp(nm.c_str(), L"pos") == 0 || _wcsicmp(nm.c_str(), L"stayawake") == 0 ||
                 _wcsicmp(nm.c_str(), L"search") == 0 || _wcsicmp(nm.c_str(), L"snippet") == 0 ||
-                _wcsicmp(nm.c_str(), L"in") == 0 || _wcsicmp(nm.c_str(), L"at") == 0) {
+                _wcsicmp(nm.c_str(), L"in") == 0 || _wcsicmp(nm.c_str(), L"at") == 0 ||
+                _wcsicmp(nm.c_str(), L"favs") == 0 || _wcsicmp(nm.c_str(), L"autostart") == 0) {
                 why = L"a reserved word"; return true;
             }
             if (FindAlias(nm)) { why = L"an alias"; return true; }
             for (auto& p : g_plugins)
-                if (p.GetCount && p.GetString && PluginLoadAllowed(p))
+                if (p.GetCount && p.GetString && PluginLoadAllowed(p) && !p.broken)
                     for (int i = 0; i < p.GetCount(); ++i)
                         if (_wcsicmp(FromAnsi(p.GetString(i)).c_str(), nm.c_str()) == 0) {
                             why = L"a plugin command"; return true;
@@ -3529,6 +3858,110 @@ static int RunUtilityCommands(const std::wstring& line, HWND mainWnd) {
         wsprintfW(msg, L(STR_SCH_ARMED), t.id, how.c_str(), when, cmd.c_str());
         LogInfo(L"scheduled: armed #" + std::to_wstring(t.id) + L" due " + when + L": " + cmd);
         ShowAnswer(mainWnd, msg);
+        return EXC_PLUGIN;
+    }
+
+    // ---- v0.35 (RI3 #223/#225): favorites. Ctrl+S stars the highlighted row
+    // (EditProc); `favs ` filters them from the console; these CLI shapes make
+    // the board inspectable from the keyboard alone.
+    if (w == L"favs") {
+        std::vector<std::wstring> a = SplitWords(line);
+        std::wstring sub = a.size() > 1 ? Lower(a[1]) : L"";
+        std::wstring ans;
+        if (sub.empty() || sub == L"list") {
+            if (g_favorites.empty()) ans = L(STR_FAV_EMPTY);
+            else {
+                ans = std::wstring(L(STR_FAV_LISTP)) + L": " +
+                      std::to_wstring((int)g_favorites.size()) + L" | ";
+                int shown = 0;
+                for (auto& fv : g_favorites) {
+                    if (shown >= 5) { ans += L", ..."; break; }
+                    if (shown) ans += L", ";
+                    ans += fv; ++shown;
+                }
+            }
+        } else if (sub == L"clear") {
+            int n = (int)g_favorites.size();
+            g_favorites.clear();
+            SaveFavorites();
+            wchar_t m[96]; wsprintfW(m, L(STR_FAV_CLEAR), n);
+            ans = m;
+            DdClose();
+        } else {
+            // `favs <text>` answers like the board filters: substring, case-free.
+            std::wstring q = Lower(RestWords(line));
+            int total = 0, shown = 0;
+            bool any = false;
+            for (auto& fv : g_favorites) {
+                if (!q.empty() && !StrStrIW(fv.c_str(), q.c_str())) continue;
+                if (!any) {
+                    ans = std::wstring(L(STR_FAV_LISTP)) + L": ";
+                    for (auto& fv2 : g_favorites)
+                        if (q.empty() || StrStrIW(fv2.c_str(), q.c_str())) ++total;
+                    ans += std::to_wstring(total) + L" | ";
+                    any = true;
+                }
+                if (shown >= 5) { ans += L", ..."; break; }
+                if (shown) ans += L", ";
+                ans += fv; ++shown;
+            }
+            if (!any) { ans = L(STR_FAV_EMPTY); }
+        }
+        LogInfo(L"favs: answered (" + (sub.empty() ? std::wstring(L"list") : sub) + L")");
+        ShowAnswer(mainWnd, ans);
+        return EXC_PLUGIN;
+    }
+
+    // ---- v0.35 boot (ROADMAP-V1 v0.37 row, early-landed): HKCU Run autostart.
+    // The offline-first law covers the registry too: under headless the key is
+    // never touched - the answer only says what WOULD happen, like the power
+    // words and the wol packet. Reading the state stays allowed (it is inert).
+    if (w == L"autostart") {
+        const wchar_t* kRunKey = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        std::vector<std::wstring> a = SplitWords(line);
+        std::wstring what = a.size() > 1 ? Lower(a[1]) : L"status";
+        if (what != L"on" && what != L"off" && what != L"status") {
+            ShowAnswer(mainWnd, L(STR_AUTO_BAD)); return EXC_PLUGIN;
+        }
+        std::wstring ans;
+        if (what == L"on") {
+            if (g_headless) ans = L(STR_AUTO_WWRITE);
+            else {
+                HKEY hk; ans = L(STR_AUTO_OFF);
+                if (RegCreateKeyExW(HKEY_CURRENT_USER, kRunKey, 0, nullptr, 0,
+                                    KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr, &hk, nullptr) == ERROR_SUCCESS) {
+                    wchar_t exe[MAX_PATH * 2] = {};
+                    GetModuleFileNameW(nullptr, exe, MAX_PATH * 2);
+                    std::wstring val = L"\"" + std::wstring(exe) + L"\"";
+                    LONG rr = RegSetValueExW(hk, L"TypeBox", 0, REG_SZ,
+                        (const BYTE*)val.c_str(), (DWORD)((val.size() + 1) * sizeof(wchar_t)));
+                    RegCloseKey(hk);
+                    if (rr == ERROR_SUCCESS) ans = L(STR_AUTO_ON);
+                }
+            }
+        } else if (what == L"off") {
+            if (g_headless) ans = L(STR_AUTO_WDELETE);
+            else {
+                HKEY hk;
+                if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0,
+                                  KEY_SET_VALUE | KEY_WOW64_64KEY, &hk) == ERROR_SUCCESS) {
+                    RegDeleteValueW(hk, L"TypeBox");      // missing value = fine
+                    RegCloseKey(hk);
+                }
+                ans = L(STR_AUTO_OFF);
+            }
+        } else {                                          // status - read-only
+            bool on = false; HKEY hk;
+            if (RegOpenKeyExW(HKEY_CURRENT_USER, kRunKey, 0,
+                              KEY_READ | KEY_WOW64_64KEY, &hk) == ERROR_SUCCESS) {
+                on = RegQueryValueExW(hk, L"TypeBox", nullptr, nullptr, nullptr, nullptr)
+                     == ERROR_SUCCESS;
+                RegCloseKey(hk);
+            }
+            ans = on ? L(STR_AUTO_ON) : L(STR_AUTO_OFF);
+        }
+        LogInfo(L"autostart: " + what + L" -> " + ans);
+        ShowAnswer(mainWnd, ans);
         return EXC_PLUGIN;
     }
 
@@ -4058,8 +4491,9 @@ static void TabComplete(HWND edit) {
             if (g_set.etInternal) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
                      L"/day", L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
-                     L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path", L"/reread", L"/settings",
-                     L"/show", L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" })
+                     L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path",
+                     L"/plugdebug", L"/reread", L"/settings", L"/show", L"/stats",
+                     L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" })
                     add(cmd);
             }
             if (g_set.etAlias)
@@ -4068,9 +4502,12 @@ static void TabComplete(HWND edit) {
                 for (const auto& s : g_sysAliases) add(s.name);
             if (!g_webLinks.empty())
                 for (auto& wl : g_webLinks) add(wl.name);   // quicklinks (g/yt/gh)
+            if (g_set.etInternal) {                          // v0.35 host words
+                add(L"favs"); add(L"autostart");
+            }
             if (g_set.execPlugins)
                 for (auto& p : g_plugins)
-                    if (p.GetCount && p.GetString)
+                    if (p.GetCount && p.GetString && !p.broken)
                         for (int i = 0; i < p.GetCount(); ++i)
                             add(FromAnsi(p.GetString(i)));
         }
@@ -4085,7 +4522,7 @@ static void TabComplete(HWND edit) {
             {
                 std::string aLine = ToAnsi(text);
                 for (auto& p : g_plugins)
-                    if (p.GetCountET && p.GetStringET) {
+                    if (p.GetCountET && p.GetStringET && !p.broken) {
                         // v0.24: whole line, not just the caret word - plugins key
                         // their subcommand templates on "cmd " (cliphist "clip ri").
                         int cnt = p.GetCountET(aLine.c_str());
@@ -4138,6 +4575,8 @@ static HWND                      g_ddOwner = nullptr;
 static HFONT                     g_ddFont = nullptr;
 static std::vector<std::wstring> g_ddItems;
 static std::vector<std::vector<size_t>> g_ddMarks;   // per-row matched offsets
+static std::vector<char> g_ddHdr;   // v0.35 RI3 #225: 1 = section header row
+static bool DdIsHdr(int i);         // fwd (defined with the navigation helpers)
 static const std::vector<size_t> kNoMarks;           // for rows without a pattern
 static int    g_ddSel = -1, g_ddRowH = 22;
 static int    g_ddTop = 0;          // first visible row when the list overflows
@@ -4222,6 +4661,7 @@ static void DdClose() {
     g_ddSelKb = false;
     g_ddItems.clear();
     g_ddMarks.clear();
+    g_ddHdr.clear();                      // v0.35: section headers live per-list
     g_ddLayout.clear();
     g_ddSub.clear();
     g_ddCacheText.clear();                    // v0.32: force a fresh scan next time
@@ -4282,7 +4722,8 @@ static void PaintDropDown(HDC dc) {
             px += ds.cx + Sc(g_ddDpi, 6);
         }
         COLORREF hot = MixColor(g_effBg, g_accent, 88);           // matched chars
-        COLORREF dim = MixColor(g_effBg, g_effFg, di == g_ddSel ? 100 : 72);
+        COLORREF dim = MixColor(g_effBg, g_effFg,
+                                DdIsHdr(di) ? 48 : (di == g_ddSel ? 100 : 72)); // v0.35 headers read as section ink
         const std::vector<size_t>& mk =
             (di < (int)g_ddMarks.size()) ? g_ddMarks[di] : kNoMarks;
         size_t h = 0;                                             // marks are ascending
@@ -4301,6 +4742,26 @@ static void PaintDropDown(HDC dc) {
         }
     }
     SelectObject(dc, oldF);
+}
+
+// v0.35 (RI3 #225): section headers ride inside the list but are never
+// selected, picked, Alt-numbered or clicked - arrows walk around them.
+static bool DdIsHdr(int i) {
+    return i >= 0 && i < (int)g_ddHdr.size() && g_ddHdr[i] != 0;
+}
+static void DdMoveSel(int dir) {
+    int n = (int)g_ddItems.size();
+    if (!n) return;
+    int i = g_ddSel;
+    for (int k = 0; k < n; ++k) {
+        i = dir > 0 ? (i + 1) % n : (i <= 0 ? n - 1 : i - 1);
+        if (!DdIsHdr(i)) {
+            g_ddSel = i; g_ddSelKb = true;
+            DdKeepVisible(); DdSyncTitle();
+            InvalidateRect(g_ddWnd, nullptr, FALSE);
+            return;
+        }
+    }
 }
 
 static void DdPick(bool run);   // used by the mouse handler below
@@ -4334,7 +4795,7 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         return TRUE;
     case WM_MOUSEMOVE: {
         int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
-        if (idx >= 0 && idx < (int)g_ddItems.size() && idx != g_ddSel) {
+        if (idx >= 0 && idx < (int)g_ddItems.size() && idx != g_ddSel && !DdIsHdr(idx)) {
             g_ddSel = idx; g_ddSelKb = false;     // hover alone must not arm Enter
             DdSyncTitle();
             InvalidateRect(h, nullptr, FALSE);
@@ -4343,7 +4804,7 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     }
     case WM_LBUTTONUP: {
         int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
-        if (idx >= 0 && idx < (int)g_ddItems.size()) { g_ddSel = idx; DdPick(true); }
+        if (idx >= 0 && idx < (int)g_ddItems.size() && !DdIsHdr(idx)) { g_ddSel = idx; DdPick(true); }
         return 0;
     }
     case WM_MOUSEWHEEL: {                          // scroll past the [DropDown] Lines cap
@@ -4365,6 +4826,7 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 // Replace the caret word with the selected candidate; run=true submits too.
 static void DdPick(bool run) {
     if (!g_edit || g_ddSel < 0 || g_ddSel >= (int)g_ddItems.size() || !g_ddOwner) return;
+    if (DdIsHdr(g_ddSel)) return;                // v0.35: headers are decoration
     // v0.32: "≈ candidate" spell rows carry their real text in g_ddSub.
     std::wstring item = (g_ddSel < (int)g_ddSub.size()) ? g_ddSub[g_ddSel]
                                                         : g_ddItems[g_ddSel];
@@ -4409,14 +4871,20 @@ static void DdUpdate(HWND mainWnd) {
     std::vector<int> score;
     std::vector<unsigned char> lay;                       // v0.32: row matched via layout
     std::vector<std::wstring> sub;                        // v0.32: text a pick writes back
+    std::vector<char> hdr;                                // v0.35: section header rows
     const int dir = (g_set.layoutFallback && !g_hsrch) ? LayoutDir(word) : 0;
+    // v0.35 (RI3 #223): `favs <rest>` filters the starred lines; a pick writes
+    // the chosen line back whole, so Enter runs it right away.
+    bool favFilter = (b == 0 && g_favorites.size() &&
+                      (_wcsnicmp(text.c_str(), L"favs", 4) == 0) &&
+                      (text.size() == 4 || text[4] == L' ' || text[4] == L'\t'));
     auto add = [&](const std::wstring& raw) {
         std::wstring c = Trim(raw);                       // plugins may return "calc "
         if (c.empty() || (int)items.size() >= 100) return;
         std::vector<size_t> mk;
         int sc = 1;                                       // empty word: keep source order
         bool viaLay = false;
-        if (!word.empty()) {
+        if (!word.empty() && !favFilter) {
             if (g_set.fuzzy) {
                 sc = FuzzyScoreLayout(c, word, dir, &mk, &viaLay);
                 if (sc <= 0) return;
@@ -4433,7 +4901,7 @@ static void DdUpdate(HWND mainWnd) {
         for (auto& x : items)
             if (_wcsicmp(x.c_str(), c.c_str()) == 0) return;
         items.push_back(c); marks.push_back(std::move(mk)); score.push_back(sc);
-        lay.push_back(viaLay ? 1 : 0); sub.push_back(c);
+        lay.push_back(viaLay ? 1 : 0); sub.push_back(c);  hdr.push_back(0);
     };
     if (g_hsrch) {
         // v0.27 (RI3 #12): bck-i-search — rows = history containing the query,
@@ -4455,17 +4923,64 @@ static void DdUpdate(HWND mainWnd) {
             if (dup) continue;
             if ((int)items.size() >= 100) break;
             items.push_back(h); marks.push_back(std::move(mk)); score.push_back(1);
-            lay.push_back(0); sub.push_back(h);
+            lay.push_back(0); sub.push_back(h);           hdr.push_back(0);
         }
         if (items.empty()) { DdClose(); return; }
+    } else if (favFilter) {
+        // v0.35 (RI3 #223/#225): the starred board - one header, the matches,
+        // marks on the filter substring. No matches: no list, no theatre.
+        std::wstring q = text.size() > 4 ? Trim(text.substr(4)) : L"";
+        items.push_back(L(STR_FAV_HDR)); marks.emplace_back(); score.push_back(0);
+        lay.push_back(0); sub.push_back(items[0]);         hdr.push_back(1);
+        int real = 0;
+        for (auto& fv : g_favorites) {
+            if ((int)items.size() >= 100) break;
+            std::vector<size_t> mk;
+            if (!q.empty()) {
+                const wchar_t* f = StrStrIW(fv.c_str(), q.c_str());   // shlwapi
+                if (!f) continue;
+                size_t off = (size_t)(f - fv.c_str());
+                for (size_t k = 0; k < q.size(); ++k) mk.push_back(off + k);
+            }
+            items.push_back(fv); marks.push_back(std::move(mk)); score.push_back(1);
+            lay.push_back(0); sub.push_back(fv);           hdr.push_back(0);
+            ++real;
+        }
+        if (!real) { DdClose(); return; }
     } else if (word.empty()) {
+        // v0.35 (RI3 #225): with at least one star the empty console opens as
+        // a sectioned board - favorites first, history below. Without stars
+        // it is the exact v0.27 list the old gates pinned (headers absent).
+        int nfav = 0;
+        if (!g_favorites.empty())
+            for (auto& fv : g_favorites) {
+                if ((int)items.size() >= 100) break;
+                std::wstring c = Trim(fv);
+                if (c.empty()) continue;
+                items.push_back(c); marks.emplace_back(); score.push_back(1);
+                lay.push_back(0); sub.push_back(c);        hdr.push_back(0);
+                ++nfav;
+            }
         if (g_set.ddOnEmpty)                        // empty console = history (parity)
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
+        if (nfav) {
+            auto ins = [&](int at, const std::wstring& t) {
+                items.insert(items.begin() + at, t);
+                marks.insert(marks.begin() + at, std::vector<size_t>());
+                score.insert(score.begin() + at, 0);
+                lay.insert(lay.begin() + at, 0);
+                sub.insert(sub.begin() + at, t);
+                hdr.insert(hdr.begin() + at, 1);
+            };
+            ins(0, L(STR_FAV_HDR));
+            if ((int)items.size() > nfav + 1) ins(nfav + 1, L(STR_FAV_HIST));
+        }
     } else {
         bool firstWord = (b == 0);
         if (firstWord && g_set.etInternal) {
             for (auto c : kInternalCmds) add(c);
             add(L"pos"); add(L"stayawake");      // v0.23 host utility words
+            add(L"favs"); add(L"autostart");     // v0.35 utility words
         }
         if (firstWord && g_set.etAlias)
             for (auto& a : g_aliases) add(a.name);
@@ -4477,14 +4992,14 @@ static void DdUpdate(HWND mainWnd) {
             for (auto& sn : g_snippets) add(sn.name);   // v0.33 snippet names too
         if (firstWord && g_set.execPlugins)
             for (auto& p : g_plugins)
-                if (p.GetCount && p.GetString && PluginLoadAllowed(p))
+                if (p.GetCount && p.GetString && PluginLoadAllowed(p) && !p.broken)
                     for (int i = 0; i < p.GetCount(); ++i) add(FromAnsi(p.GetString(i)));
         if (g_set.etHistory && word[0] != L'/')
             for (size_t i = g_history.size(); i-- > 0; ) add(g_history[i]);
         if (g_set.execPlugins && word[0] != L'/') {
             std::string aLine = ToAnsi(text);   // v0.32 perf: convert the line ONCE
             for (auto& p : g_plugins)
-                if (p.GetCountET && p.GetStringET && PluginLoadAllowed(p)) {
+                if (p.GetCountET && p.GetStringET && PluginLoadAllowed(p) && !p.broken) {
                     int cnt = p.GetCountET(aLine.c_str());  // v0.24: whole line
                     for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
                 }
@@ -4495,7 +5010,7 @@ static void DdUpdate(HWND mainWnd) {
     // v0.32 spell-suggest (ROADMAP #13): nothing survived the fuzzy pass ->
     // offer up to 3 "≈ candidate" rows within 2 edits of the typed word.
     // The ≈ is display-only: picking a row writes g_ddSub (the real word).
-    if (!word.empty() && !g_hsrch && items.empty() && b == 0) {
+    if (!word.empty() && !g_hsrch && !favFilter && items.empty() && b == 0) {
         std::vector<std::pair<int, std::wstring>> sug;
         auto trySug = [&](const std::wstring& cand) {
             std::wstring c = Trim(cand);
@@ -4506,6 +5021,7 @@ static void DdUpdate(HWND mainWnd) {
         if (g_set.etInternal) {
             for (auto c : kInternalCmds) trySug(c);
             trySug(L"pos"); trySug(L"stayawake");
+            trySug(L"favs"); trySug(L"autostart");   // v0.35
         }
         if (g_set.etAlias)
             for (auto& a : g_aliases) trySug(a.name);
@@ -4515,7 +5031,7 @@ static void DdUpdate(HWND mainWnd) {
         for (auto& sn : g_snippets) trySug(sn.name);    // v0.33
         if (g_set.execPlugins)
             for (auto& p : g_plugins)
-                if (p.GetCount && p.GetString && PluginLoadAllowed(p))
+                if (p.GetCount && p.GetString && PluginLoadAllowed(p) && !p.broken)
                     for (int i = 0; i < p.GetCount(); ++i) trySug(FromAnsi(p.GetString(i)));
         std::stable_sort(sug.begin(), sug.end(),
             [](const std::pair<int, std::wstring>& a, const std::pair<int, std::wstring>& b2) {
@@ -4527,10 +5043,11 @@ static void DdUpdate(HWND mainWnd) {
             score.push_back(0);                               // always below real hits
             lay.push_back(0);
             sub.push_back(sug[i].second);
+            hdr.push_back(0);
         }
     }
     if (items.empty()) { DdClose(); return; }
-    if (!g_hsrch && !word.empty() && (g_set.fuzzy || g_set.frecency)) {   // best match on top, ties keep source order
+    if (!g_hsrch && !favFilter && !word.empty() && (g_set.fuzzy || g_set.frecency)) {   // best match on top, ties keep source order
         std::vector<size_t> ord(items.size());
         for (size_t i = 0; i < ord.size(); ++i) ord[i] = i;
         std::stable_sort(ord.begin(), ord.end(),
@@ -4539,14 +5056,18 @@ static void DdUpdate(HWND mainWnd) {
         std::vector<std::vector<size_t>> sMarks;
         std::vector<unsigned char> sLay;
         std::vector<std::wstring> sSub;
+        std::vector<char> sHdr;                               // v0.35: stay parallel
         sItems.reserve(items.size()); sMarks.reserve(items.size());
         sLay.reserve(items.size()); sSub.reserve(items.size());
+        sHdr.reserve(items.size());
         for (size_t i : ord) {
             sItems.push_back(items[i]); sMarks.push_back(marks[i]);
             sLay.push_back(lay[i]);     sSub.push_back(sub[i]);
+            sHdr.push_back(hdr[i]);
         }
         items = std::move(sItems); marks = std::move(sMarks);
         lay = std::move(sLay);     sub = std::move(sSub);
+        hdr = std::move(sHdr);
     }
 
     if (!g_ddWnd) {
@@ -4569,9 +5090,11 @@ static void DdUpdate(HWND mainWnd) {
     g_ddDpi = g_mainDpi;          // v0.29: the dd rides right below the console
     g_ddItems = std::move(items);
     g_ddMarks = std::move(marks);
+    g_ddHdr = std::move(hdr);     // v0.35: the sectioned board
     g_ddLayout = std::move(lay);
     g_ddSub = std::move(sub);
     g_ddB = b; g_ddE = e; g_ddSel = g_hsrch ? 0 : -1;
+    if (favFilter) { g_ddB = 0; g_ddE = text.size(); }   // pick replaces the line
     g_ddTop = 0; g_ddSelKb = g_hsrch;         // v0.27: Enter runs the newest match
     g_ddCacheText = text;                     // v0.32 debounce: an identical
     g_ddCacheB = b; g_ddCacheE = e;            // keystroke reuses this list
@@ -4586,6 +5109,7 @@ static void DdUpdate(HWND mainWnd) {
         const std::wstring* uniq = nullptr;
         bool dup = false;
         for (size_t i = 0; i < g_ddItems.size() && !dup; ++i) {
+            if (DdIsHdr((int)i)) continue;                   // v0.35: headers never ghost
             if (i < g_ddLayout.size() && g_ddLayout[i]) continue;
             if (i >= g_ddSub.size() || g_ddItems[i] != g_ddSub[i]) continue;
             const std::wstring& c = g_ddSub[i];
@@ -4621,6 +5145,9 @@ static void ShowTrayMenu(HWND hWnd) {
     AppendMenuW(menu, MF_STRING, 1, L(STR_TRAY_SHOW));
     AppendMenuW(menu, MF_STRING, 4, L(STR_TRAY_SETTINGS));
     AppendMenuW(menu, MF_STRING, 2, L(STR_TRAY_CONFIG));
+    // v0.35 boot wave (ROADMAP #31 early-landed): the night switch, where the
+    // tray is. Checked = sounds and balloons are shushed right now.
+    AppendMenuW(menu, MF_STRING | (QuietNow() ? MF_CHECKED : 0), 5, L(STR_TRAY_DND));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 3, L(STR_TRAY_EXIT));
     if (!g_headless) SetForegroundWindow(hWnd); // so the menu dismisses on click-away
@@ -6544,27 +7071,19 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
             if (DdVisible() && g_ddSel >= 0) { DdPick(false); return 0; }  // accept row
             TabComplete(hWnd);  return 0;
         case VK_UP:
-            if (DdVisible() && !g_ddItems.empty()) {
-                g_ddSel = g_ddSel <= 0 ? (int)g_ddItems.size() - 1 : g_ddSel - 1;
-                g_ddSelKb = true; DdKeepVisible();
-                DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
-                return 0;
-            }
+            if (DdVisible() && !g_ddItems.empty()) { DdMoveSel(-1); return 0; }  // v0.35: walks around headers
             if (g_histPos > 0) SetHistory(--g_histPos);
             return 0;
         case VK_DOWN:
-            if (DdVisible() && !g_ddItems.empty()) {
-                g_ddSel = (g_ddSel + 1) % (int)g_ddItems.size();
-                g_ddSelKb = true; DdKeepVisible();
-                DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
-                return 0;
-            }
+            if (DdVisible() && !g_ddItems.empty()) { DdMoveSel(+1); return 0; }  // v0.35
             if (g_histPos < g_history.size()) SetHistory(++g_histPos);
             else { g_histPos = g_history.size(); SetHistory(g_histPos); }
             return 0;
         case VK_HOME:
             if (DdVisible() && !g_ddItems.empty()) {
                 g_ddSel = 0; g_ddTop = 0; g_ddSelKb = true;
+                for (int i = 0; i < (int)g_ddItems.size(); ++i)
+                    if (!DdIsHdr(i)) { g_ddSel = i; break; }   // v0.35
                 DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
                 return 0;
             }
@@ -6575,6 +7094,8 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
             if (g_set.ghost && !g_ddSelKb && GhostVisibleNow()) { GhostAccept(hWnd); return 0; }
             if (DdVisible() && !g_ddItems.empty()) {
                 g_ddSel = (int)g_ddItems.size() - 1; g_ddSelKb = true; DdKeepVisible();
+                for (int i = (int)g_ddItems.size() - 1; i >= 0; --i)
+                    if (!DdIsHdr(i)) { g_ddSel = i; break; }   // v0.35
                 DdSyncTitle(); InvalidateRect(g_ddWnd, nullptr, FALSE);
                 return 0;
             }
@@ -6610,12 +7131,36 @@ static LRESULT CALLBACK EditProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp,
                 return 0;
             }
             break;
+        case L'S': case L's':
+            // v0.35 (RI3 #223): Ctrl+S stars the highlighted drop-down row -
+            // or the whole typed line when nothing is picked. lParam is the
+            // authority under headless (GetKeyState would read the human's
+            // physical Ctrl, the same trap as Shift+Enter).
+            if (ctrl || (GET_KEYSTATE_WPARAM(lp) & MK_CONTROL)) {
+                std::wstring what;
+                if (DdVisible() && g_ddSel >= 0 && !DdIsHdr(g_ddSel) &&
+                    g_ddSel < (int)g_ddSub.size())
+                    what = g_ddSub[g_ddSel];
+                else {
+                    int len = GetWindowTextLengthW(hWnd);
+                    what = std::wstring(len, L'\0');
+                    if (len) GetWindowTextW(hWnd, &what[0], len + 1);
+                }
+                what = Trim(what);
+                if (!what.empty()) {
+                    bool added = ToggleFavorite(what);
+                    LogInfo((added ? L"favs: starred " : L"favs: unstarred ") + what);
+                    DdClose();       // the board repaints on the next keystroke
+                }
+                return 0;
+            }
+            break;
         default:
             if (((GetKeyState(VK_MENU) & 0x8000) || (lp & 0x100000)) &&   // Alt context bit
                 wp >= L'1' && wp <= L'9' &&
                 DdVisible() && !g_ddItems.empty()) {       // Alt+digit: run a visible row
                 int row = g_ddTop + (int)wp - (int)L'1';
-                if (row >= 0 && row < (int)g_ddItems.size()) { g_ddSel = row; DdPick(true); }
+                if (row >= 0 && row < (int)g_ddItems.size() && !DdIsHdr(row)) { g_ddSel = row; DdPick(true); }
                 return 0;
             }
             break;
@@ -6988,6 +7533,10 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         if (LOWORD(wp) == 1)      g_visible ? HideBox(hWnd) : ShowBox(hWnd);
+        else if (LOWORD(wp) == 5) {                       // v0.35 tray: night switch
+            g_dndOn = !g_dndOn; g_dndUntil = 0;           // toggles the indefinite DND
+            LogInfo(g_dndOn ? L"tray: dnd on (indefinite)" : L"tray: dnd off");
+        }
         else if (LOWORD(wp) == 2) ShellExecuteW(hWnd, L"open", g_iniPath.c_str(),
                                                 nullptr, nullptr, SW_SHOWNORMAL);
         else if (LOWORD(wp) == 3) DestroyWindow(hWnd);
@@ -7217,6 +7766,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     LoadHistory();
     LoadUsage();        // v0.17: Usage.dat powers the drop-down's frecency ranking
     LoadTimers();       // v0.34: Timers.dat - due-while-closed ones are "missed", not run
+    LoadFavorites();    // v0.35: Favorites.dat - Ctrl+S stars, `favs ` filters
     DiscoverPlugins();
 
     // [Show] Priority — process class of TypeBox itself
