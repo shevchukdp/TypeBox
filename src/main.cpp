@@ -90,6 +90,9 @@ struct Settings {
     int  transparent = 255;    // 0..255 alpha
     bool autoHide = false;     // hide after AutoHideValue seconds of idleness
     int  autoHideValue = 30;
+    bool followFocus   = true;  // v0.38 (RI3 #214): summon on the monitor holding the focus
+    bool autoHideFocus = true;  // v0.38: AutoHide re-arms while the console itself is focused
+    bool dwmTint       = true;  // v0.38 (RI3 #216): DWM caption/border follow the theme
     bool dragMove = true;      // [Show] DragMove: status strip doubles as drag handle (v0.19)
     // [Exec]
     bool execInternal = true, execAliases = true, execWww = true,
@@ -785,6 +788,9 @@ static void LoadSettings() {
     g_set.transparent       = ReadIniInt(L"Show", L"Transparent", 255);
     g_set.autoHide          = ReadIniBool(L"Show", L"AutoHide", false);
     g_set.autoHideValue     = ReadIniInt(L"Show", L"AutoHideValue", 30);
+    g_set.followFocus       = ReadIniBool(L"Show", L"FollowFocus", true);
+    g_set.autoHideFocus     = ReadIniBool(L"Show", L"AutoHideFocus", true);
+    g_set.dwmTint           = ReadIniBool(L"Show", L"DwmTint", true);
 
     g_set.execInternal = ReadIniBool(L"Exec", L"Internal", true);
     g_set.execAliases  = ReadIniBool(L"Exec", L"Aliases",  true);
@@ -2639,7 +2645,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Shift+Enter kills the process started by the last alias.\n\n";
         msg += std::wstring(L(STR_HELP_HEAD)) + L"\n"
             L"/about /checkconfig /config /exit /help /hide /homedir\n"
-            L"/inidir /inifiles /load /reread /settings /show /unload\n"
+            L"/inidir /inifiles /load /reread /settings /show /unload /welcome\n"
             L"TypeBox additions: /export <file>  /import <file>  /undo  /log  /sys  /openconfig  /path\n"
             L"/day prints today's executions  /tabs url1 url2 ... opens them all in the browser\n"
             L"/update checks GitHub Releases for a newer version (user-initiated only)\n"
@@ -2650,6 +2656,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Scheduled (v0.34): in 10m <cmd> | at 18:30 <cmd> | /timers | /cancel <n>|all | /dnd [min]\n"
             L"Dashboards (v0.35): /stats | /plugdebug | /export history <f.csv> [redact] | /import history <f.csv>\n"
             L"Plugin DX (v0.36): /reload <plugin> hot-reloads one dll | declare words in Plugins\\<name>.tbplugin.json\n"
+            L"First run (v0.38): /welcome replays the tour | Settings has a search box | [Show] FollowFocus and DwmTint\n"
             L"Favorites (v0.35): Ctrl+S stars the selected row - type \"favs \" to filter them; autostart on|off|status\n"
             L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
@@ -2661,6 +2668,17 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             g_internalAnswer = true;
         }
         TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — help", MB_OK | MB_ICONINFORMATION);
+    } else if (c == L"/welcome") {              // v0.38: the onboarding tour, on demand
+        std::wstring msg = std::wstring(L(STR_OB_TOUR));
+        if (g_headless) {                       // same law as /help: the line carries it
+            std::wstring one = msg;
+            for (auto& ch : one) if (ch == L'\n') ch = L' ';
+            SetWindowTextW(g_edit, one.c_str());
+            SendMessageW(g_edit, EM_SETSEL, 0, -1);
+            g_internalAnswer = true;
+        }
+        TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — welcome", MB_OK | MB_ICONINFORMATION);
+        LogInfo(L"onboarding: tour shown");
     } else if (c == L"/about") {
         std::wstring msg =
             L"TypeBox " + WVersion() + L"\n\n" +
@@ -3650,7 +3668,8 @@ static const wchar_t* const kInternalCmds[] = {
     L"/export", L"/help",
     L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
     L"/log", L"/openconfig", L"/path", L"/plugdebug", L"/reload", L"/reread", L"/settings",
-    L"/show", L"/stats", L"/sys", L"/tabs", L"/timers", L"/unload", L"/undo", L"/update" };
+    L"/show", L"/stats", L"/sys", L"/tabs", L"/timers", L"/unload", L"/undo", L"/update",
+    L"/welcome" };
 
 struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
 static Anchor g_anchor;
@@ -3791,10 +3810,28 @@ static bool g_posMoved = false;
 // applies the rect shifted -32000px off both axes.
 static RECT g_posRect = {};
 
+// v0.38 (RI3 #214): on a multi-monitor desktop the console is summoned on the
+// monitor that HOLDS THE FOCUS. Single-monitor boxes and headless keep the
+// exact old whole-desktop math (old suites' position contracts stay untouched).
+static bool g_followed = false;
+static void FollowFocusWorkArea(HWND mainWnd, RECT& wr) {
+    g_followed = false;
+    if (!g_set.followFocus || g_headless) return;
+    if (GetSystemMetrics(SM_CMONITORS) < 2) return;
+    HWND fg = GetForegroundWindow();
+    if (!fg) return;
+    DWORD pid = 0; GetWindowThreadProcessId(fg, &pid);
+    if (pid == GetCurrentProcessId()) return;   // our own console/settings stay put
+    HMONITOR hm = MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST);
+    MONITORINFO mi = { sizeof(mi) };
+    if (GetMonitorInfoW(hm, &mi)) { wr = mi.rcWork; g_followed = true; }
+}
+
 static void ShowBox(HWND mainWnd) {
     // v0.29: [Show] px are 96-logical - scale them to THIS window's dpi
     const int lw = Sc(g_mainDpi, g_set.width), lh = Sc(g_mainDpi, g_set.height);
     RECT wr; GetWindowRect(GetDesktopWindow(), &wr);
+    FollowFocusWorkArea(mainWnd, wr);       // v0.38: focus monitor outranks the desktop
     int x, y;
     if (g_set.x >= 0) x = g_set.x;
     else              x = (wr.right - lw) / 2;
@@ -4734,6 +4771,67 @@ static void PaintStatusBar(HDC dc, RECT rc, int dpi) {
     SelectObject(dc, oldF);
 }
 
+// ---------------------------------------------------------------- v0.38 onboarding
+// ROADMAP #49: a no-INI first start writes a starter config (visible defaults
+// + two sample aliases), the console opens with a welcome line, and the FIRST
+// successful run earns a tiny confetti burst - the Wox launch signal, plain
+// GDI on one 33 ms drift timer. Headless never writes the INI and never
+// throws confetti: the silent-test-host law covers onboarding too.
+static bool g_firstRun = false;
+struct Confetti { float x, y, vx, vy; COLORREF c; };
+static Confetti g_confetti[90];
+static int  g_confettiN = 0;
+static const UINT kConfettiTimer = 3;      // WM_TIMER id, free before v0.38
+
+static void StartConfetti(HWND mainWnd) {
+    if (g_headless) { LogInfo(L"confetti: skipped (headless)"); return; }
+    if (g_confettiN > 0) return;
+    static const COLORREF cs[] = { RGB(255,184,108), RGB(122,209,255),
+                                   RGB(255,121,198), RGB(130,230,150), RGB(255,235,120) };
+    RECT rc; GetClientRect(mainWnd, &rc);
+    if (rc.right < 20) rc.right = 400;
+    srand(GetTickCount());
+    for (int i = 0; i < 90; ++i) {
+        Confetti& p = g_confetti[i];
+        p.x  = (float)(rand() % rc.right);
+        p.y  = (float)-(rand() % 80);
+        p.vx = (rand() % 41 - 20) / 10.0f;
+        p.vy = 1.0f + (rand() % 30) / 10.0f;
+        p.c  = cs[i % 5];
+    }
+    g_confettiN = 90;
+    SetTimer(mainWnd, kConfettiTimer, 33, nullptr);
+    InvalidateRect(mainWnd, nullptr, TRUE);
+    LogInfo(L"confetti: fired (90 specks)");
+}
+static void PaintConfetti(HDC dc, const RECT& rc) {
+    if (g_confettiN <= 0) return;
+    for (int i = 0; i < g_confettiN; ++i) {
+        Confetti& p = g_confetti[i];
+        if (p.y < -8 || p.y > rc.bottom) continue;
+        RECT q = { (int)p.x, (int)p.y, (int)p.x + 5, (int)p.y + 5 };
+        HBRUSH b = CreateSolidBrush(p.c);
+        FillRect(dc, &q, b);
+        DeleteObject(b);
+    }
+}
+static void MaybeWriteStarterIni(bool force) {
+    if (!force && g_headless) return;            // suites always bring their own config
+    if (!force && !g_localIni.empty()) return;   // a local config means: not a fresh box
+    if (PathFileExistsW(g_iniPath.c_str())) {
+        if (force) LogInfo(L"onboarding: existing config kept");
+        return;
+    }
+    WritePrivateProfileStringW(L"Onboarding", L"FirstRun", L"0", g_iniPath.c_str());
+    WritePrivateProfileStringW(L"Show", L"ShowConsoleOnStart", L"1", g_iniPath.c_str());
+    WritePrivateProfileStringW(L"Aliases", L"wiki",
+                               L"https://ru.wikipedia.org/wiki/%s", g_iniPath.c_str());
+    WritePrivateProfileStringW(L"Aliases", L"note", L"notepad", g_iniPath.c_str());
+    WritePrivateProfileStringW(nullptr, nullptr, nullptr, g_iniPath.c_str()); // flush
+    g_firstRun = true;
+    LogInfo(L"onboarding: starter INI written (aliases: wiki, note)");
+}
+
 static void Submit(HWND mainWnd) {
     std::wstring line = GetEditText(g_edit);
     if (line.empty()) return;
@@ -4765,6 +4863,12 @@ static void Submit(HWND mainWnd) {
     ExecType t = (ExecType)RunLine(run, mainWnd);
     g_elevateNext = false;
     if (t != EXC_NONE) RecordUsage(run);   // v0.17 frecency (independent of history rules)
+    if (t != EXC_NONE && g_firstRun) {     // v0.38: the launch signal, exactly once
+        StartConfetti(mainWnd);
+        g_firstRun = false;
+        WritePrivateProfileStringW(L"Onboarding", L"FirstRun", L"1", g_iniPath.c_str());
+        LogInfo(L"onboarding: first run celebrated");
+    }
     if (t != EXC_NONE && HistoryAllows(t)) {
         g_history.push_back(line);
         if ((int)g_history.size() > g_set.historyMax)
@@ -4906,7 +5010,7 @@ static void TabComplete(HWND edit) {
                      L"/day", L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
                      L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path",
                      L"/plugdebug", L"/reload", L"/reread", L"/settings", L"/show", L"/stats",
-                     L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" })
+                     L"/sys", L"/tabs", L"/unload", L"/undo", L"/update", L"/welcome" })
                     add(cmd);
             }
             if (g_set.etAlias)
@@ -6443,8 +6547,104 @@ static void UiCollect() {
 
 static void WriteDraftIni();
 static void LiveApply(HWND mainWnd);
+static void SettingsShowPage(int p);
+
+// ---------------------------------------------------------------- v0.38 settings search
+// ROADMAP #50: a cue-bannered edit above the page list filters the 16 pages by
+// their titles AND every control label on them (collected once, after build).
+// Enter in the box jumps to the first match; clearing the box restores the
+// full list. The listbox rows map through g_pageMap, so a filtered selection
+// still opens the page it names.
+static HWND g_setSearch = nullptr;
+static std::vector<std::wstring> g_pageText[PG_COUNT];
+static std::vector<int> g_pageMap;
+static int g_curPage = 0;                      // the page being shown (search keeps it lit)
+
+static BOOL CALLBACK PageKwCb(HWND c, LPARAM lp) {
+    wchar_t buf[220];
+    if (GetWindowTextW(c, buf, 219) > 1)
+        ((std::vector<std::wstring>*)lp)->push_back(Lower(buf));
+    return TRUE;
+}
+static void CollectPageKeywords() {
+    for (int i = 0; i < PG_COUNT; ++i) {
+        g_pageText[i].clear();
+        g_pageText[i].push_back(Lower(std::wstring(L(kPageStr[i]))));
+        if (g_setPage[i]) EnumChildWindows(g_setPage[i], PageKwCb, (LPARAM)&g_pageText[i]);
+    }
+}
+static void ApplySettingsSearch() {
+    if (!g_setList) return;
+    wchar_t q[128] = L"";
+    if (g_setSearch) GetWindowTextW(g_setSearch, q, 127);
+    std::wstring needle = Lower(q);
+    g_pageMap.clear();
+    SendMessageW(g_setList, LB_RESETCONTENT, 0, 0);
+    for (int i = 0; i < PG_COUNT; ++i) {
+        bool hit = needle.empty();
+        if (!hit)
+            for (auto& s : g_pageText[i])
+                if (s.find(needle) != std::wstring::npos) { hit = true; break; }
+        if (hit) {
+            g_pageMap.push_back(i);
+            SendMessageW(g_setList, LB_ADDSTRING, 0, (LPARAM)L(kPageStr[i]));
+        }
+    }
+    if (needle.empty()) {
+        int at = -1;
+        for (size_t i = 0; i < g_pageMap.size(); ++i)
+            if (g_pageMap[i] == g_curPage) { at = (int)i; break; }
+        SendMessageW(g_setList, LB_SETCURSEL, at < 0 ? 0 : at, 0);   // the shown page stays lit
+    } else if (!g_pageMap.empty()) {
+        SendMessageW(g_setList, LB_SETCURSEL, 0, 0);
+        SettingsShowPage(g_pageMap[0]);
+    }
+}
+static LRESULT CALLBACK SearchEditProc(HWND h, UINT m, WPARAM w, LPARAM l, UINT_PTR, DWORD_PTR) {
+    if (m == WM_KEYDOWN && w == VK_RETURN) {          // Enter jumps to the first match
+        if (!g_pageMap.empty()) {
+            SendMessageW(g_setList, LB_SETCURSEL, 0, 0);
+            SettingsShowPage(g_pageMap[0]);
+        }
+        return 0;
+    }
+    return DefSubclassProc(h, m, w, l);
+}
+
+// ---------------------------------------------------------------- v0.38 DWM tint
+// RI3 #216: the settings caption and border wear the theme - dark-mode caption
+// for dark schemes, caption=bg, border=accent. dwmapi is fetched the house way
+// (dynamic, optional): on Win7/8 or attribute-less builds it simply logs
+// "dwm: unavailable" once and stays out of the way.
+typedef HRESULT (WINAPI* DwmSetAttrFn)(HWND, DWORD, LPCVOID, UINT);
+static DwmSetAttrFn pDwmSetAttr = nullptr;
+static bool g_dwmOk = false, g_dwmLogged = false;
+static void DwmTintApply(HWND w) {
+    if (!w) return;
+    static bool tried = false;
+    if (!tried) {
+        tried = true;
+        HMODULE d = LoadLibraryW(L"dwmapi.dll");
+        if (d) pDwmSetAttr = (DwmSetAttrFn)GetProcAddress(d, "DwmSetWindowAttribute");
+        g_dwmOk = pDwmSetAttr != nullptr;
+    }
+    if (!g_set.dwmTint || !g_dwmOk) {
+        if (!g_dwmLogged && !g_dwmOk) { g_dwmLogged = true; LogInfo(L"dwm: unavailable"); }
+        return;
+    }
+    int lum = (GetRValue(g_effBg) * 299 + GetGValue(g_effBg) * 587 +
+               GetBValue(g_effBg) * 114) / 1000;
+    BOOL dark = lum < 140 ? TRUE : FALSE;
+    pDwmSetAttr(w, 20, &dark, sizeof(dark));            // DWMWA_USE_IMMERSIVE_DARK_MODE
+    COLORREF cap = g_effBg, bord = g_accent;
+    pDwmSetAttr(w, 35, &cap,  sizeof(cap));             // DWMWA_CAPTION_COLOR
+    pDwmSetAttr(w, 34, &bord, sizeof(bord));            // DWMWA_BORDER_COLOR
+    if (!g_dwmLogged) { g_dwmLogged = true; LogInfo(L"dwm: caption+border tinted from theme"); }
+}
 
 static void SettingsShowPage(int p) {
+    if (p < 0 || p >= PG_COUNT) return;
+    g_curPage = p;
     for (int i = 0; i < PG_COUNT; ++i)
         ShowWindow(g_setPage[i], i == p ? SW_SHOW : SW_HIDE);
 }
@@ -6604,8 +6804,13 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     case WM_COMMAND: {
         HWND src = (HWND)l;
         int code = HIWORD(w);
+        if (src == g_setSearch && code == EN_CHANGE) {   // v0.38: filter the page list
+            ApplySettingsSearch();
+            return 0;
+        }
         if (src == g_setList && code == LBN_SELCHANGE) {
-            SettingsShowPage((int)SendMessageW(src, LB_GETCURSEL, 0, 0));
+            int s = (int)SendMessageW(src, LB_GETCURSEL, 0, 0);
+            SettingsShowPage(s >= 0 && s < (int)g_pageMap.size() ? g_pageMap[s] : s);
             return 0;
         }
         // v0.13: previews must follow the combo instantly - the user tries
@@ -6886,8 +7091,13 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
         L"TypeBoxSettings", (std::wstring(L(STR_DLG_TITLE)) + L" — " + WVersion()).c_str(),
         WS_CAPTION | WS_SYSMENU, sx, sy, Sc(g_setDpi, W), Sc(g_setDpi, H), mainWnd, nullptr, hInst, nullptr);
 
+    g_setSearch = MkOn(g_setWnd, L"EDIT", L"", WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL,
+                       8, 8, 140, 22);                 // v0.38: ROADMAP #50 search box
+    SendMessageW(g_setSearch, EM_SETCUEBANNER, TRUE, (LPARAM)L(STR_SET_SEARCH));
+    SetWindowSubclass(g_setSearch, SearchEditProc, 7, 0);
+    g_setAll.push_back(g_setSearch);
     g_setList = MkOn(g_setWnd, L"LISTBOX", L"", WS_BORDER | WS_VSCROLL | LBS_NOTIFY,
-                     8, 8, 140, 360);
+                     8, 36, 140, 332);
     for (int i = 0; i < PG_COUNT; ++i)
         SendMessageW(g_setList, LB_ADDSTRING, 0, (LPARAM)L(kPageStr[i]));
     SendMessageW(g_setList, LB_SETCURSEL, startPage, 0);
@@ -6911,6 +7121,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     CkB(g_setPage[PG_APPEAR], L(STR_AP_BALLOONS), 16, y, &Settings::balloonTips);      y += 26;
     CkB(g_setPage[PG_APPEAR], L(STR_AP_AUTOHIDE), 16, y, &Settings::autoHide);         y += 30;
     NumB(g_setPage[PG_APPEAR], L(STR_AP_IDLESEC), 16, y, &Settings::autoHideValue, 1, 3600); y += 32;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_FOLLOWFOCUS), 16, y, &Settings::followFocus);    y += 24;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_AUTOHIDEFOCUS), 16, y, &Settings::autoHideFocus); y += 24;
+    CkB(g_setPage[PG_APPEAR], L(STR_AP_DWMTINT), 16, y, &Settings::dwmTint);            y += 28;
     MkLabel(g_setPage[PG_APPEAR], L(STR_AP_PRIORITY), 16, y + 2);
     {
         const wchar_t* it[] = { L"idle", L"normal", L"high", L"realtime" };
@@ -7301,6 +7514,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     VarsEditRow(g_varSel);
 
     UiLoad();
+    CollectPageKeywords();                       // v0.38: labels are the search corpus
+    ApplySettingsSearch();                       // (empty query = the full 16)
+    DwmTintApply(g_setWnd);                      // v0.38: the caption wears the theme
     SettingsShowPage(startPage);
     ShowWindow(g_setWnd, SW_SHOW);
     UpdateWindow(g_setWnd);
@@ -7332,6 +7548,9 @@ static void WriteDraftIni() {
     WB(L"Show", L"AutoHide",           s.autoHide);
     WInt(L"Show", L"AutoHideValue",    s.autoHideValue);
     WB(L"Show", L"DragMove",           s.dragMove);
+    WB(L"Show", L"FollowFocus",        s.followFocus);     // v0.38
+    WB(L"Show", L"AutoHideFocus",      s.autoHideFocus);   // v0.38
+    WB(L"Show", L"DwmTint",            s.dwmTint);         // v0.38
     WInt(L"Show", L"Width",            s.width);
     WInt(L"Show", L"Height",           s.height);
     WInt(L"Show", L"X",                s.x);
@@ -8049,6 +8268,36 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         LogInfo(ok ? L"dragout: data ok" : L"dragout: data BAD");
         return 0;
     }
+    case WM_APP + 36: {
+        // v0.38 harness: onboarding state (lp=1 also fires the confetti self-test,
+        // which under headless must answer "skipped" and throw nothing)
+        LogInfo(std::wstring(L"onboarding: firstRun=") + (g_firstRun ? L"1" : L"0") +
+                L" starter=" + (PathFileExistsW(g_iniPath.c_str()) ? L"yes" : L"no"));
+        if (wp == 1) StartConfetti(hWnd);
+        return 0;
+    }
+    case WM_APP + 37: {
+        // v0.38 harness: open Settings off-screen for the search probes.
+        // The QUERY itself arrives via WM_COPYDATA dwData=38 - a raw LPARAM
+        // pointer from another process is NOT marshalled (only COPYDATA is).
+        if (!g_setWnd) OpenSettings(hWnd, PG_APPEAR);
+        LogInfo(L"setsearch: opened");
+        return 0;
+    }
+    case WM_APP + 39: {
+        // v0.38 harness: report the follow-focus summon decision
+        LogInfo(L"follow: " + std::wstring(g_set.followFocus ? L"on" : L"off") +
+                L" monitors=" + std::to_wstring(GetSystemMetrics(SM_CMONITORS)) +
+                L" last=" + (g_followed ? L"monitor" : L"desktop"));
+        return 0;
+    }
+    case WM_APP + 40: {
+        // v0.38 harness: fire the DWM tint and report the verdict
+        DwmTintApply(g_setWnd ? g_setWnd : hWnd);
+        LogInfo(L"dwm: probe state=" + std::wstring(g_dwmOk ? L"ok" : L"none") +
+                L" tint=" + (g_set.dwmTint ? L"1" : L"0"));
+        return 0;
+    }
     case WM_SIZE: {
         // keep the edit centered in the space ABOVE the 20px status strip;
         // height follows the font (UX A4: a fixed 24 clipped the 18pt glyphs)
@@ -8069,7 +8318,22 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_TIMER:
-        if (wp == 1 && g_visible) HideBox(hWnd);   // [Show] AutoHide
+        if (wp == 1 && g_visible) {                  // [Show] AutoHide
+            if (g_set.autoHideFocus && !g_headless && GetForegroundWindow() == hWnd)
+                SetTimer(hWnd, 1, (UINT)g_set.autoHideValue * 1000, nullptr); // still looking: wait
+            else HideBox(hWnd);
+        }
+        else if (wp == 3) {                          // v0.38: confetti drift
+            bool alive = false;
+            RECT rc; GetClientRect(hWnd, &rc);
+            for (int i = 0; i < g_confettiN; ++i) {
+                Confetti& p = g_confetti[i];
+                p.x += p.vx; p.y += p.vy; p.vy += 0.12f;
+                if (p.y < rc.bottom + 12) alive = true;
+            }
+            if (!alive) { KillTimer(hWnd, 3); g_confettiN = 0; }
+            if (g_visible) InvalidateRect(hWnd, nullptr, TRUE);
+        }
         else if (wp == 2) {                        // clock: refresh the strip
             RECT rc; GetClientRect(hWnd, &rc);
             rc.top = rc.bottom - SbH();
@@ -8100,6 +8364,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (g_bgBrush) FillRect(dc, &rc, g_bgBrush);
         if (g_sbFont) PaintStatusBar(dc, rc, g_mainDpi);
         PaintFrame(dc, rc);                     // v0.15 custom-theme frame on top
+        PaintConfetti(dc, rc);                  // v0.38: the once-in-a-lifetime sprinkle
         EndPaint(hWnd, &ps);
         return 0;
     }
@@ -8260,6 +8525,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
                                            g_iniPath.c_str());
                 LogInfo(L"tray: theme " + g_set.theme);
                 ApplyThemeVisual();
+                if (g_setWnd) DwmTintApply(g_setWnd);   // v0.38: the tint follows the scheme
                 InvalidateRect(hWnd, nullptr, TRUE);
                 if (g_edit) InvalidateRect(g_edit, nullptr, TRUE);
                 if (g_ddWnd) InvalidateRect(g_ddWnd, nullptr, TRUE);
@@ -8292,6 +8558,19 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_COPYDATA: {
         // Second instance forwards its command line for execution.
         auto cds = (PCOPYDATASTRUCT)lp;
+        if (cds && cds->dwData == 38) {          // v0.38 harness: Settings search probe
+            std::wstring q((const wchar_t*)cds->lpData, cds->cbData / sizeof(wchar_t));
+            while (!q.empty() && q.back() == L'\0') q.pop_back();
+            if (!g_setWnd) OpenSettings(hWnd, PG_APPEAR);
+            if (g_setSearch) {
+                SetWindowTextW(g_setSearch, q.c_str());
+                ApplySettingsSearch();
+                LogInfo(L"setsearch: " + std::to_wstring(g_pageMap.size()) +
+                        L" pages (top=" + (g_pageMap.empty() ? std::wstring(L"-")
+                                                             : std::wstring(L(kPageStr[g_pageMap[0]]))) + L")");
+            } else LogInfo(L"setsearch: no box");
+            return TRUE;
+        }
         if (cds && cds->cbData >= sizeof(wchar_t)) {
             std::wstring cmd((const wchar_t*)cds->lpData, cds->cbData / sizeof(wchar_t));
             while (!cmd.empty() && cmd.back() == L'\0') cmd.pop_back();
@@ -8364,6 +8643,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         bool wantVersion = false;
         bool wantCheckI18n = false;
         bool wantDpiMath = false;
+        bool wantOnb = false;
         for (int i = 1; i < argc; ++i)
             if (_wcsicmp(argv[i], L"--version") == 0 || _wcsicmp(argv[i], L"/version") == 0)
                 wantVersion = true;
@@ -8374,8 +8654,18 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
                 wantCheckI18n = true;
             if (_wcsicmp(argv[i], L"--dpi-math") == 0)
                 wantDpiMath = true;
+            if (_wcsicmp(argv[i], L"--onboarding-test") == 0)
+                wantOnb = true;
         }
         if (argv) LocalFree(argv);
+        // v0.38 self-test (ROADMAP #49): prove the starter-config writer in-process
+        // - same window-less pattern as --check-i18n; headless law stays intact.
+        if (wantOnb) {
+            g_iniPath = ExeDir() + L"TypeBox.ini";
+            MaybeWriteStarterIni(true);
+            LogInfo(L"onboarding: self-test done");
+            return 0;
+        }
         // CI gate (v0.13.1): dump the CURRENT language pack's compiled literals to
         // i18n-check.txt next to the exe. In-process on purpose: it proves the
         // compiler (MSVC /utf-8) kept the 20 language packs intact, without any
@@ -8462,6 +8752,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
         std::wstring loc = ExeDir() + L"TypeBox.local.ini";
         if (GetFileAttributesW(loc.c_str()) != INVALID_FILE_ATTRIBUTES) g_localIni = loc;
     }
+    MaybeWriteStarterIni(false);   // v0.38: fresh box -> starter config BEFORE any read
     InitCommonControls();
 
     // Single instance: forward the command line to the running one.
@@ -8558,6 +8849,14 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, LPWSTR, int) {
     SetTimer(mainWnd, 2, 15000, nullptr);   // status bar clock refresh
     SetTimer(mainWnd, 79, 1000, nullptr);   // v0.34: scheduled scan (returns instantly when empty)
     if (g_set.showOnStart) ShowBox(mainWnd);
+    if (g_firstRun) {                            // v0.38: greet in the line itself -
+        if (g_edit) {                            // no dialog, no balloon, no noise
+            SetWindowTextW(g_edit, L(STR_OB_WELCOME));
+            SendMessageW(g_edit, EM_SETSEL, 0, -1);
+            g_internalAnswer = true;
+        }
+        LogInfo(L"onboarding: welcome shown");
+    }
 
     // v0.20: opt-in silent release check (default off - offline-first).
     if (g_set.updCheckOnStart && !g_testSettings)

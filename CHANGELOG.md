@@ -3,6 +3,59 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.38.0] - 2026-11-21
+
+### First run, find settings - the empty folder greets you, and Settings learns to search
+
+![onboarding starter, welcome tour, settings search, DWM tint](docs/screenshots/first-run.png)
+
+- **Onboarding** (ROADMAP-V1 v0.38 ①, ROADMAP #49) - a no-INI first start now **writes a
+  starter TypeBox.ini** (`[Onboarding] FirstRun=0` + two visible defaults + sample aliases
+  `wiki`/`note`), the console opens with a welcome line, and the FIRST successful run earns a
+  tiny confetti burst (the Wox launch signal, 90 plain-GDI specks on one 33 ms timer). `/welcome`
+  replays the seven-step tour any time. Headless stays law-abiding: never writes the INI, never
+  throws confetti - the probes answer `confetti: skipped (headless)`.
+- **Settings search** (ROADMAP-V1 v0.38 ②, ROADMAP #50) - a cue-bannered box above the page
+  list filters all 16 pages by their titles **and every control label on them** (the corpus is
+  collected once at dialog build); Enter jumps to the first match, clearing restores the list.
+- **Idle AutoHide, made honest** (ROADMAP-V1 v0.38 ③, RI3 #212) - `[Show] AutoHide` now waits
+  while the console itself is the foreground window (`[Show] AutoHideFocus=1`, default): the
+  timer fires when "idle" finally means idle. `AutoHideFocus=0` restores the v0.29 semantics.
+- **Follow-focus summon** (ROADMAP-V1 v0.38 ④, RI3 #214) - on multi-monitor desktops the
+  console is summoned on the monitor that HOLDS THE FOCUS (work area centered, same ratios);
+  single-monitor boxes and headless keep the exact old math. `[Show] FollowFocus=0` opts out.
+- **DWM tint** (ROADMAP-V1 v0.38 ⑤, RI3 #216) - the Settings caption and border wear the
+  theme: dark-mode caption for dark schemes, caption=bg, border=accent; `dwmapi` is loaded the
+  house way (dynamic, optional) so Win7/8 and attribute-less builds just log `dwm: unavailable`.
+  `[Show] DwmTint=0` opts out; the tray **Next theme** repaints the tint live.
+- Harness grew `obstate`/`obconfetti`/`setsearch` (WM_COPYDATA - a raw cross-process LPARAM
+  pointer is never dereferenced)/`followlog`/`dwmtint` probes plus `--onboarding-test`;
+  the wave suite adds 25 asserts (starter contents + no-rewrite, headless starter silence,
+  tour line + dialog law, search filter math, AutoHide timing, follow/dwm gates, old contracts).
+
+## [0.37.0] - 2026-11-21
+
+### Drag, drop, boot - files flow both ways, and the tray grows a switchboard
+
+![drop-in, the draggable row, headless no-run law, tray theme cycle](docs/screenshots/drag-drop.png)
+
+- **Drop-in** (ROADMAP-V1 v0.37 ①) - drag files onto the console and they land at the caret as
+  quoted paths (shell `WM_DROPFILES` -> `EM_REPLACESEL`, spaces handled); `[UI] DropIn=0` keeps
+  the line untouched and just logs `drop-in: ignored (...)`
+- **Drop-out** (ROADMAP-V1 v0.37 ②, CmdPal 0.97 parity signal) - press and move on a drop-down
+  row that *is* an existing file (a history line, a path candidate) starts a real OLE drag: a
+  hand-written minimal `IDataObject`/`IDropSource` pair offers `CF_HDROP` + `CF_UNICODETEXT`, so
+  Explorer, chat apps and editors receive a genuine file copy - no temp files, no shell tricks.
+  `[DropDown] DragOut=0` disarms it. Under headless the OLE loop **never runs**: the log answers
+  `would drag: <path>` and a click never turns into a run (offline-first law holds for drags too)
+- **Tray switchboard** (ROADMAP-V1 v0.37 ④, ROADMAP #31) - the tray menu grows two more items
+  beside Do Not Disturb: a checkable **Fuzzy matching** toggle and **Next theme** - both write
+  the INI (`[Type] Fuzzy`, `[Theme] Name`) so the choice survives the restart; the console
+  repaints instantly (`ApplyThemeVisual`) and an open drop-down rescan follows the fuzzy switch
+- Test harness grew `dropfiles`/`dragself`/`dragrow`/`dragmove`/`clickrow`/`ddrows`/`traycmd`
+  probes; the wave suite adds 25 asserts (drop-in quoting + gate, CF_HDROP payload self-test,
+  the no-pick-on-drag law, tray toggles + INI, 6x reload/load stress)
+
 ## [0.36.0] - 2026-11-21
 
 ### The plugin workshop - an SDK, a word law, hot reload, and a stopwatch on every dll
@@ -42,29 +95,6 @@ Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (e
 - `tools/audit-words.ps1` unchanged (still 45 words, still OK); i18n +5 EN/RU strings
   (reload usage/no-plugin/ok/fail + Settings button); CI builds `tbplugin_skeleton` explicitly;
   `test-v0360` 30/30 (dev mode), full old-suite regression re-run against the final exe
-
-## [0.37.0] - 2026-11-21
-
-### Drag, drop, boot - files flow both ways, and the tray grows a switchboard
-
-![drop-in, the draggable row, headless no-run law, tray theme cycle](docs/screenshots/drag-drop.png)
-
-- **Drop-in** (ROADMAP-V1 v0.37 ①) - drag files onto the console and they land at the caret as
-  quoted paths (shell `WM_DROPFILES` -> `EM_REPLACESEL`, spaces handled); `[UI] DropIn=0` keeps
-  the line untouched and just logs `drop-in: ignored (...)`
-- **Drop-out** (ROADMAP-V1 v0.37 ②, CmdPal 0.97 parity signal) - press and move on a drop-down
-  row that *is* an existing file (a history line, a path candidate) starts a real OLE drag: a
-  hand-written minimal `IDataObject`/`IDropSource` pair offers `CF_HDROP` + `CF_UNICODETEXT`, so
-  Explorer, chat apps and editors receive a genuine file copy - no temp files, no shell tricks.
-  `[DropDown] DragOut=0` disarms it. Under headless the OLE loop **never runs**: the log answers
-  `would drag: <path>` and a click never turns into a run (offline-first law holds for drags too)
-- **Tray switchboard** (ROADMAP-V1 v0.37 ④, ROADMAP #31) - the tray menu grows two more items
-  beside Do Not Disturb: a checkable **Fuzzy matching** toggle and **Next theme** - both write
-  the INI (`[Type] Fuzzy`, `[Theme] Name`) so the choice survives the restart; the console
-  repaints instantly (`ApplyThemeVisual`) and an open drop-down rescan follows the fuzzy switch
-- Test harness grew `dropfiles`/`dragself`/`dragrow`/`dragmove`/`clickrow`/`ddrows`/`traycmd`
-  probes; the wave suite adds 25 asserts (drop-in quoting + gate, CF_HDROP payload self-test,
-  the no-pick-on-drag law, tray toggles + INI, 6x reload/load stress)
 
 ## [0.35.0] - 2026-11-20
 

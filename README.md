@@ -66,6 +66,10 @@
 |---|
 | ![dragdrop](docs/screenshots/drag-drop.png) |
 
+| a fresh folder greets you - starter config, welcome tour, confetti at the first run; Settings learned to search — the v0.38 first run, find settings wave |
+|---|
+| ![firstrun](docs/screenshots/first-run.png) |
+
 ## Why TypeBox
 
 | | **TypeBox** | TypeAndRun | PowerToys Run | Flow Launcher |
@@ -80,9 +84,25 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.37.0)
+## Working today (v0.38.0)
 
-Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`, v0.36 opens the **plugin workshop** - SDK header + reference skeleton, sidecar manifests with a word law, `/reload` hot-reload, per-plugin performance counters, v0.37 makes files **flow both ways** - drop-in quoted paths, OLE drag-out to Explorer, and two new tray toggles). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave, v0.36 the plugin DX wave, v0.37 the drag-and-drop wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`, v0.36 opens the **plugin workshop** - SDK header + reference skeleton, sidecar manifests with a word law, `/reload` hot-reload, per-plugin performance counters, v0.37 makes files **flow both ways** - drop-in quoted paths, OLE drag-out to Explorer, and two new tray toggles, v0.38 gives the empty folder a **first run worth having** - starter config + welcome tour + confetti, and teaches Settings to **find anything** - a search box over all 16 pages). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave, v0.36 the plugin DX wave, v0.37 the drag-and-drop wave, v0.38 the first-run wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**First run & find settings (v0.38)**
+
+- **Onboarding** - delete/rename `TypeBox.ini` and start again: the host writes a **starter
+  config** (sample `wiki`/`note` aliases included), greets you with a welcome line, and
+  celebrates your first successful run with a plain-GDI **confetti** burst; `/welcome`
+  replays the tour. A headless test instance writes nothing and throws nothing.
+- **Settings search** - the box above the page list filters all 16 pages by titles **and**
+  every control label; Enter jumps to the first match.
+- **Idle AutoHide, honest** - `[Show] AutoHide` now waits while the console is focused
+  (`[Show] AutoHideFocus=1`); the timer finally means idle.
+- **Follow-focus summon** - on multi-monitor desks the console appears on the monitor holding
+  the focus (`[Show] FollowFocus=1`; single-monitor and headless keep the old geometry).
+- **Theme-wearing window frame** - the Settings caption/border adopt the theme (dark-mode
+  caption, accent border), via optional `dwmapi` — `[Show] DwmTint=0` opts out, and the tray
+  **Next theme** repaints it live.
 
 **Drag, drop & a tray switchboard (v0.37)**
 

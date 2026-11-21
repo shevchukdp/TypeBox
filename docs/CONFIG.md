@@ -239,6 +239,26 @@ next keystroke.
   enabled plugin: the portable, writable home plugin authors should use instead
   of inventing `%APPDATA%` paths.
 
+### First run — starter config & tour (TypeBox 0.38.0)
+
+A fresh folder (no `TypeBox.ini`, no `TypeBox.local.ini`) is no longer silent:
+the host writes a **starter `TypeBox.ini`** — `[Onboarding] FirstRun=0`,
+`[Show] ShowConsoleOnStart=1`, and two sample aliases:
+
+```ini
+[Aliases]
+wiki = https://ru.wikipedia.org/wiki/%s
+note = notepad
+```
+
+The console then opens with a welcome line, and the **first successful run**
+earns a small confetti burst (plain GDI, once per install; `FirstRun=1` is
+written so it never repeats). `/welcome` replays the guided tour any time.
+Headless test instances obey the silence law: they never write the starter
+config and never draw confetti (`confetti: skipped (headless)` in the log).
+To replay first run by hand: quit, rename `TypeBox.ini`, start again.
+`TypeBox.exe --onboarding-test` self-tests the writer without a window.
+
 ### `TypeBox.local.ini` — per-machine overrides (TypeBox 0.17.0)
 
 Drop an INI named `TypeBox.local.ini` next to `TypeBox.ini` and it wins on every
@@ -269,6 +289,9 @@ startup logs `local config: on (TypeBox.local.ini)`. Note: plugins read
 | `TrayIcon` / `BalloonTips` | tray presence / notifications | `1` / `1` |
 | `Transparent` | window alpha `0..255` | `255` |
 | `AutoHide` / `AutoHideValue` | auto-hide after N idle seconds | `0` / `30` |
+| `AutoHideFocus` | `1` = the auto-hide timer waits while the console itself is focused (v0.38; `0` = old "idle since shown" semantics) | `1` |
+| `FollowFocus` | `1` = on multi-monitor desktops, summon on the monitor holding the focus (v0.38; single-monitor and headless always keep the old whole-desktop math) | `1` |
+| `DwmTint` | `1` = the Settings caption/border wear the theme via optional `dwmapi` (v0.38; Win10 18985+ — otherwise logs `dwm: unavailable`) | `1` |
 | `DragMove` | `1` = press-and-drag the 20 px status strip to move the console; the spot is remembered for the session, the INI position is restored on every restart | `1` |
 | `Priority` | process class: `idle` · `normal` · `high` · `realtime` | `normal` |
 | `DropIn` | (0.37) `1` = files dragged onto the console insert quoted paths at the caret; `0` logs `drop-in: ignored` and never touches the line | `1` |
@@ -573,10 +596,15 @@ in galancev/typeandrun) and activated as features land.
 
 `/settings` (or tray → **Settings...**) opens a portable settings window —
 12 pages (Appearance, Console, Font, Hotkey, Execution, EasyType, History, Log,
-Aliases, Sounds, Plugins, Environment). It edits a scratch copy: **Cancel discards**; **OK/Apply** write
+Aliases, Sounds, Plugins, Environment). A **search box** above the page list
+(v0.38) filters all pages by their titles *and* every control label on them —
+type `fuzzy`, press Enter, and you are on the page that owns that switch.
+It edits a scratch copy: **Cancel discards**; **OK/Apply** write
 `TypeBox.ini` key-by-key (your comments and unknown keys survive; `[Aliases]`
 is rewritten in canonical form) and apply live — hotkey re-registration with a
 log entry on conflict, font, geometry, alpha, priority, tray, AutoHide timer.
+The caption and border wear the current theme (v0.38, optional `dwmapi`;
+`[Show] DwmTint=0` opts out).
 `/config` opens the alias editor page directly; `/openconfig` opens the raw file.
 The dialog position is remembered in `[Coordinates] SettingsX/SettingsY`.
 Everything remains pure INI — hand-editing the file and `/reread` still works.

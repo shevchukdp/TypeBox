@@ -112,6 +112,10 @@ enum StrId {
     // v0.37 "drag, drop, boot" wave (side table columns 80-81, EN+RU compiled):
     // tray menu expansion - fuzzy toggle + next theme (ROADMAP #31).
     STR_TRAY_FUZZY, STR_TRAY_NEXTTHEME,
+    // v0.38 "first run, find settings" wave (side table columns 82-87, EN+RU compiled):
+    // onboarding welcome + tour, settings search, three new [Show] switches.
+    STR_OB_WELCOME, STR_OB_TOUR, STR_SET_SEARCH,
+    STR_AP_FOLLOWFOCUS, STR_AP_AUTOHIDEFOCUS, STR_AP_DWMTINT,
     STR_LAST
 };
 
@@ -1120,7 +1124,7 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 // v0.23 pos + stayawake answers.
 // Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][82] = {
+static const wchar_t* const kExItems[LANG_COUNT][88] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1185,7 +1189,13 @@ static const wchar_t* const kExItems[LANG_COUNT][82] = {
                L"usage: /reload <plugin> - unload + load that dll again (counters reset)",
                L"reload: no plugin named", L"reload: ok",
                L"reload FAILED - dll could not be loaded, plugin unloaded",
-                L"Fuzzy matching", L"Next theme" },
+                L"Fuzzy matching", L"Next theme",
+                L"Welcome to TypeBox! Type calc and press Enter, drop files in from Explorer, right-click the tray for fuzzy/theme. /help lists it all.",
+                L"Getting around TypeBox in 30 seconds:\n1) Type anything - app, alias, URL, file, command - Enter runs it.\n2) Drag files onto the console: paths land quoted at the caret.\n3) Press and move on a drop-down row that IS a file: it drags out to Explorer.\n4) Tray icon: Do Not Disturb, Fuzzy matching, Next theme.\n5) Settings now has a search box - type to find any option.\n6) /help lists every command; Up/Down walk the history.",
+                L"Search settings...",
+                L"Summon on the focused monitor",
+                L"Auto-hide only when unfocused",
+                L"Tint title bar and border (theme)" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1250,7 +1260,13 @@ static const wchar_t* const kExItems[LANG_COUNT][82] = {
                L"использование: /reload <плагин> — выгрузить и загрузить dll заново (счётчики обнуляются)",
                L"перегрузка: плагин не найден", L"перегрузка: ok",
                L"перегрузка НЕ УДАЛАСЬ - dll не загрузилась, плагин выгружен",
-                L"Нечёткий поиск", L"Следующая тема" },
+                L"Нечёткий поиск", L"Следующая тема",
+                L"Добро пожаловать в TypeBox! Наберите calc и Enter, файлы бросайте на консоль из Explorer, в трее — fuzzy и тема. /help покажет всё.",
+                L"TypeBox за 30 секунд:\n1) Печатайте что угодно — приложение, алиас, URL, файл, команду — Enter запускает.\n2) Перетащите файлы на консоль: пути встанут в кавычках в каретку.\n3) Нажмите и ведите по строке списка, которая является файлом: он переедет в Explorer.\n4) Значок в трее: Не беспокоить, Нечёткий поиск, Следующая тема.\n5) В Настройках теперь есть поиск — печатайте, чтобы найти любую опцию.\n6) /help перечисляет все команды; Up/Down листают историю.",
+                L"Поиск настроек...",
+                L"Появляться на активном мониторе",
+                L"Скрывать по бездействию, только без фокуса",
+                L"Тонировать заголовок и рамку (тема)" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1422,7 +1438,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_TRAY_NEXTTHEME) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_AP_DWMTINT) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail
