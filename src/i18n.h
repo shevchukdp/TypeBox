@@ -109,6 +109,9 @@ enum StrId {
     // v0.36 "plugin DX" wave (side table columns 75-79, EN+RU compiled):
     // hot-reload button + /reload <plugin> (ROADMAP #42).
     STR_PL_RELOAD, STR_RLD_USAGE, STR_RLD_NOPLG, STR_RLD_OK, STR_RLD_FAIL,
+    // v0.37 "drag, drop, boot" wave (side table columns 80-81, EN+RU compiled):
+    // tray menu expansion - fuzzy toggle + next theme (ROADMAP #31).
+    STR_TRAY_FUZZY, STR_TRAY_NEXTTHEME,
     STR_LAST
 };
 
@@ -1117,7 +1120,7 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 // v0.23 pos + stayawake answers.
 // Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][80] = {
+static const wchar_t* const kExItems[LANG_COUNT][82] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1181,7 +1184,8 @@ static const wchar_t* const kExItems[LANG_COUNT][80] = {
                L"Reload plugin",
                L"usage: /reload <plugin> - unload + load that dll again (counters reset)",
                L"reload: no plugin named", L"reload: ok",
-               L"reload FAILED - dll could not be loaded, plugin unloaded" },
+               L"reload FAILED - dll could not be loaded, plugin unloaded",
+                L"Fuzzy matching", L"Next theme" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1245,7 +1249,8 @@ static const wchar_t* const kExItems[LANG_COUNT][80] = {
                L"Перегрузить плагин",
                L"использование: /reload <плагин> — выгрузить и загрузить dll заново (счётчики обнуляются)",
                L"перегрузка: плагин не найден", L"перегрузка: ok",
-               L"перегрузка НЕ УДАЛАСЬ - dll не загрузилась, плагин выгружен" },
+               L"перегрузка НЕ УДАЛАСЬ - dll не загрузилась, плагин выгружен",
+                L"Нечёткий поиск", L"Следующая тема" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1417,7 +1422,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_RLD_FAIL) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_TRAY_NEXTTHEME) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail

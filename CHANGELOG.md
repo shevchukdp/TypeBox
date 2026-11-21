@@ -43,6 +43,29 @@ Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (e
   (reload usage/no-plugin/ok/fail + Settings button); CI builds `tbplugin_skeleton` explicitly;
   `test-v0360` 30/30 (dev mode), full old-suite regression re-run against the final exe
 
+## [0.37.0] - 2026-11-21
+
+### Drag, drop, boot - files flow both ways, and the tray grows a switchboard
+
+![drop-in, the draggable row, headless no-run law, tray theme cycle](docs/screenshots/drag-drop.png)
+
+- **Drop-in** (ROADMAP-V1 v0.37 ①) - drag files onto the console and they land at the caret as
+  quoted paths (shell `WM_DROPFILES` -> `EM_REPLACESEL`, spaces handled); `[UI] DropIn=0` keeps
+  the line untouched and just logs `drop-in: ignored (...)`
+- **Drop-out** (ROADMAP-V1 v0.37 ②, CmdPal 0.97 parity signal) - press and move on a drop-down
+  row that *is* an existing file (a history line, a path candidate) starts a real OLE drag: a
+  hand-written minimal `IDataObject`/`IDropSource` pair offers `CF_HDROP` + `CF_UNICODETEXT`, so
+  Explorer, chat apps and editors receive a genuine file copy - no temp files, no shell tricks.
+  `[DropDown] DragOut=0` disarms it. Under headless the OLE loop **never runs**: the log answers
+  `would drag: <path>` and a click never turns into a run (offline-first law holds for drags too)
+- **Tray switchboard** (ROADMAP-V1 v0.37 ④, ROADMAP #31) - the tray menu grows two more items
+  beside Do Not Disturb: a checkable **Fuzzy matching** toggle and **Next theme** - both write
+  the INI (`[Type] Fuzzy`, `[Theme] Name`) so the choice survives the restart; the console
+  repaints instantly (`ApplyThemeVisual`) and an open drop-down rescan follows the fuzzy switch
+- Test harness grew `dropfiles`/`dragself`/`dragrow`/`dragmove`/`clickrow`/`ddrows`/`traycmd`
+  probes; the wave suite adds 25 asserts (drop-in quoting + gate, CF_HDROP payload self-test,
+  the no-pick-on-drag law, tray toggles + INI, 6x reload/load stress)
+
 ## [0.35.0] - 2026-11-20
 
 ### Dashboards, plugin DX & a calmer boot — three planned waves in one

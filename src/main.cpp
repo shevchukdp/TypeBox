@@ -34,6 +34,10 @@
 #include <algorithm>
 #include <functional>
 #include <ctime>
+#include <initguid.h>     // v0.37: emit IID_IDataObject/IID_IDropSource here
+#include <ole2.h>         // v0.37 drop-out: DoDragDrop/IDataObject
+#include <oleidl.h>
+#include <shlobj.h>       // v0.37: DROPFILES + SHCreateStdEnumFmtEtc (MinGW homes)
 
 #ifndef TYPEBOX_VERSION
 #define TYPEBOX_VERSION 0.0.0-dev
@@ -129,6 +133,9 @@ struct Settings {
     bool dropDown = true;
     int  ddLines = 8;          // visible rows before scrolling ends
     bool ddOnEmpty = true;     // empty line shows the history (TypeAndRun behaviour)
+    // v0.37 "drag, drop, boot": file drag directions
+    bool dropIn  = true;       // [UI] DropIn: dropped files insert quoted paths
+    bool dragOut = true;       // [DropDown] DragOut: file rows drag out via OLE
     // [Color] scheme 0 (COLORREF integers, -1 = system default)
     int  consoleBg = -1, consoleFg = -1;
     // [History] [Undo]
@@ -814,6 +821,8 @@ static void LoadSettings() {
     g_set.ghost          = ReadIniInt(L"Type", L"Ghost", 1) != 0;
     g_set.argMemory      = ReadIniInt(L"Type", L"ArgMemory", 1) != 0;
     g_set.dropDown   = ReadIniInt(L"DropDown", L"Enable", 1) != 0;
+    g_set.dropIn     = ReadIniInt(L"UI", L"DropIn", 1) != 0;      // v0.37
+    g_set.dragOut    = ReadIniInt(L"DropDown", L"DragOut", 1) != 0; // v0.37
     g_set.ddLines    = ReadIniInt(L"DropDown", L"Lines", 8);
     if (g_set.ddLines < 1) g_set.ddLines = 1;
     if (g_set.ddLines > 20) g_set.ddLines = 20;
@@ -5171,6 +5180,158 @@ static void DdMoveSel(int dir) {
 
 static void DdPick(bool run);   // used by the mouse handler below
 
+// ---------------- v0.37 drop-in / drop-out (ROADMAP #31 wave) ---------------
+// drop-in: files dragged onto the console insert quoted paths at the caret.
+// drop-out: a row that names an existing file drags out (Explorer/chat) as a
+// real CF_HDROP. OLE is touched only on a physical press-and-move, and NEVER
+// under headless - no side effects on air (offline-first rule).
+#ifndef GHMEM                                  // MinGW winbase lacks the combo
+#define GHMEM (GMEM_MOVEABLE | GMEM_ZEROINIT)
+#endif
+static void InsertDroppedFiles(HDROP h) {
+    if (!h) return;
+    UINT n = DragQueryFileW(h, 0xFFFFFFFF, nullptr, 0);
+    if (!g_edit || !n) { DragFinish(h); return; }
+    if (!g_set.dropIn) {
+        DragFinish(h);
+        LogInfo(L"drop-in: ignored ([UI] DropIn=0)");
+        return;
+    }
+    std::wstring ins;
+    for (UINT i = 0; i < n; ++i) {
+        wchar_t path[2 * MAX_PATH] = {};
+        UINT len = DragQueryFileW(h, i, path, (UINT)(sizeof(path) / sizeof(path[0])));
+        if (!len) continue;
+        if (!ins.empty()) ins += L' ';
+        std::wstring p(path, len);
+        if (p.find(L' ') != std::wstring::npos) ins += L'"' + p + L'"';
+        else                                    ins += p;
+    }
+    DragFinish(h);
+    if (ins.empty()) return;
+    SendMessageW(g_edit, EM_REPLACESEL, TRUE, (LPARAM)ins.c_str());
+    LogInfo(L"drop-in: " + std::to_wstring(n) + L" file(s) inserted");
+}
+
+// the smallest IDataObject/IDropSource that speaks CF_HDROP + CF_UNICODETEXT
+class TbFileDrop : public IDataObject {
+    LONG m_ref = 1;
+public:
+    std::wstring path;
+    explicit TbFileDrop(const std::wstring& p) : path(p) {}
+    virtual HRESULT WINAPI QueryInterface(REFIID riid, void** ppv) {
+        if (riid == IID_IUnknown || riid == IID_IDataObject) { *ppv = (IDataObject*)this; AddRef(); return S_OK; }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    virtual ULONG WINAPI AddRef(void)  { return InterlockedIncrement(&m_ref); }
+    virtual ULONG WINAPI Release(void) { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    static HRESULT FillMedium(FORMATETC* fe, STGMEDIUM* sm, const std::wstring& p) {
+        if (!fe || !sm || fe->tymed != TYMED_HGLOBAL) return DV_E_TYMED;
+        if (fe->cfFormat == CF_HDROP) {
+            size_t c = p.size() + 2;
+            HGLOBAL g = GlobalAlloc(GHMEM, sizeof(DROPFILES) + c * sizeof(wchar_t));
+            if (!g) return E_OUTOFMEMORY;
+            DROPFILES* df = (DROPFILES*)GlobalLock(g);
+            if (!df) return E_OUTOFMEMORY;
+            df->pFiles = sizeof(DROPFILES); df->pt.x = df->pt.y = 0; df->fNC = FALSE; df->fWide = TRUE;
+            lstrcpynW((wchar_t*)((char*)df + sizeof(DROPFILES)), p.c_str(), (int)c);
+            GlobalUnlock(g);
+            sm->tymed = TYMED_HGLOBAL; sm->hGlobal = g; sm->pUnkForRelease = nullptr;
+            return S_OK;
+        }
+        if (fe->cfFormat == CF_UNICODETEXT) {
+            size_t c = p.size() + 1;
+            HGLOBAL g = GlobalAlloc(GHMEM, c * sizeof(wchar_t));
+            if (!g) return E_OUTOFMEMORY;
+            if (GlobalLock(g)) { lstrcpynW((wchar_t*)GlobalLock(g), p.c_str(), (int)c); GlobalUnlock(g); }
+            sm->tymed = TYMED_HGLOBAL; sm->hGlobal = g; sm->pUnkForRelease = nullptr;
+            return S_OK;
+        }
+        return DV_E_FORMATETC;
+    }
+    virtual HRESULT WINAPI GetData(FORMATETC* fe, STGMEDIUM* sm) { return FillMedium(fe, sm, path); }
+    virtual HRESULT WINAPI GetDataHere(FORMATETC*, STGMEDIUM*) { return DV_E_FORMATETC; }
+    virtual HRESULT WINAPI QueryGetData(FORMATETC* fe) {
+        if (!fe || fe->tymed != TYMED_HGLOBAL) return DV_E_TYMED;
+        if (fe->cfFormat != CF_HDROP && fe->cfFormat != CF_UNICODETEXT) return DV_E_FORMATETC;
+        return S_OK;
+    }
+    virtual HRESULT WINAPI GetCanonicalFormatEtc(FORMATETC*, FORMATETC* out) { if (out) out->ptd = nullptr; return S_OK; }
+    virtual HRESULT WINAPI SetData(FORMATETC*, STGMEDIUM*, BOOL) { return E_NOTIMPL; }
+    virtual HRESULT WINAPI EnumFormatEtc(DWORD dir, IEnumFORMATETC** en) {
+        if (dir != DATADIR_GET || !en) return E_NOTIMPL;
+        FORMATETC fs[2] = { { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL },
+                            { CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL } };
+        return SHCreateStdEnumFmtEtc(2, fs, en);
+    }
+    virtual HRESULT WINAPI DAdvise(FORMATETC*, DWORD, IAdviseSink*, DWORD*) { return OLE_E_ADVISENOTSUPPORTED; }
+    virtual HRESULT WINAPI DUnadvise(DWORD) { return OLE_E_ADVISENOTSUPPORTED; }
+    virtual HRESULT WINAPI EnumDAdvise(IEnumSTATDATA**) { return OLE_E_ADVISENOTSUPPORTED; }
+};
+class TbFileDropSrc : public IDropSource {
+    LONG m_ref = 1;
+public:
+    virtual HRESULT WINAPI QueryInterface(REFIID riid, void** ppv) {
+        if (riid == IID_IUnknown || riid == IID_IDropSource) { *ppv = (IDropSource*)this; AddRef(); return S_OK; }
+        *ppv = nullptr; return E_NOINTERFACE;
+    }
+    virtual ULONG WINAPI AddRef(void)  { return InterlockedIncrement(&m_ref); }
+    virtual ULONG WINAPI Release(void) { LONG r = InterlockedDecrement(&m_ref); if (!r) delete this; return r; }
+    virtual HRESULT WINAPI QueryContinueDrag(BOOL esc, DWORD keys) {
+        if (esc) return DRAGDROP_S_CANCEL;
+        if (!(keys & MK_LBUTTON)) return DRAGDROP_S_DROP;
+        return S_OK;
+    }
+    virtual HRESULT WINAPI GiveFeedback(DWORD) { return DRAGDROP_S_USEDEFAULTCURSORS; }
+};
+static bool          g_dragArmed = false;
+static bool          g_dragFired = false;
+static int           g_dragIdx = -1;
+static std::wstring  g_dragPath;
+static POINT         g_dragStart = {};
+
+static std::wstring DdRowText(int idx) {
+    std::wstring raw = (idx < (int)g_ddSub.size()) ? g_ddSub[idx] : g_ddItems[idx];
+    size_t b = raw.find_first_not_of(L" \t"), e = raw.find_last_not_of(L" \t");
+    if (b == std::wstring::npos) return L"";
+    return raw.substr(b, e - b + 1);
+}
+
+// A row can drag out only when it names an existing file: whole text, or the
+// first token of a "path args" history line. Prototype rule (time-boxed).
+static std::wstring DdRowFile(int idx) {
+    std::wstring t = DdRowText(idx);
+    if (t.size() >= 2 && t.front() == L'"' && t.back() == L'"')
+        t = t.substr(1, t.size() - 2);
+    if (t.empty() || t.size() > 2 * MAX_PATH) return L"";
+    if (PathFileExistsW(t.c_str())) return t;
+    size_t sp = t.find(L' ');
+    if (sp != std::wstring::npos) {
+        std::wstring first = t.substr(0, sp);
+        if (first.find(L'\\') != std::wstring::npos && PathFileExistsW(first.c_str()))
+            return first;
+    }
+    return L"";
+}
+
+static void DdTryDragOut(HWND h) {
+    g_dragArmed = false;
+    g_dragFired = true;
+    ReleaseCapture();
+    if (g_headless) {                       // offline-first: no OLE loop on air
+        LogInfo(L"would drag: " + g_dragPath);
+        return;
+    }
+    static bool oleReady = false;
+    if (!oleReady) { if (FAILED(OleInitialize(nullptr))) return; oleReady = true; }
+    TbFileDrop*    dobj = new TbFileDrop(g_dragPath);
+    TbFileDropSrc* dsrc = new TbFileDropSrc();
+    DWORD effect = DROPEFFECT_NONE;
+    HRESULT hr = DoDragDrop(dobj, dsrc, DROPEFFECT_COPY, &effect);
+    dobj->Release(); dsrc->Release();
+    if (SUCCEEDED(hr)) LogInfo(L"dragout: " + g_dragPath + L" (effect " + std::to_wstring(effect) + L")");
+}
+
 static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     switch (m) {
     case WM_ERASEBKGND:  return 1;                       // all painting in WM_PAINT
@@ -5199,6 +5360,17 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         SetCursor(LoadCursorW(nullptr, IDC_ARROW));
         return TRUE;
     case WM_MOUSEMOVE: {
+        // v0.37 drop-out: press-and-move on a file row starts a real OLE drag.
+        if (g_dragArmed && (w & MK_LBUTTON) && g_set.dragOut) {
+            int dx = (int)LOWORD(l) - g_dragStart.x; if (dx < 0) dx = -dx;
+            int dy = (int)HIWORD(l) - g_dragStart.y; if (dy < 0) dy = -dy;
+            int th = GetSystemMetrics(SM_CXDRAG); if (th < 4) th = 4;
+            if (dx > th || dy > th) {
+                g_dragPath = DdRowFile(g_dragIdx);        // re-check: row may have moved
+                if (!g_dragPath.empty()) { DdTryDragOut(h); return 0; }
+                g_dragArmed = false;
+            }
+        }
         int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
         if (idx >= 0 && idx < (int)g_ddItems.size() && idx != g_ddSel && !DdIsHdr(idx)) {
             g_ddSel = idx; g_ddSelKb = false;     // hover alone must not arm Enter
@@ -5207,7 +5379,27 @@ static LRESULT CALLBACK DropDownProc(HWND h, UINT m, WPARAM w, LPARAM l) {
         }
         return 0;
     }
+    case WM_LBUTTONDOWN: {                        // v0.37: arm drag-out on file rows
+        int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
+        g_dragArmed = false; g_dragFired = false;
+        if (idx >= 0 && idx < (int)g_ddItems.size() && !DdIsHdr(idx) && g_set.dragOut) {
+            std::wstring f = DdRowFile(idx);
+            if (!f.empty()) {
+                g_dragArmed = true; g_dragPath = f; g_dragIdx = idx;
+                g_dragStart.x = (LONG)(short)LOWORD(l); g_dragStart.y = (LONG)(short)HIWORD(l);
+                SetCapture(h);
+            }
+        }
+        return 0;
+    }
     case WM_LBUTTONUP: {
+        if (g_dragFired) {                         // drag just ended - never also pick
+            g_dragFired = false; g_dragArmed = false;
+            ReleaseCapture();
+            return 0;
+        }
+        g_dragArmed = false;
+        ReleaseCapture();
         int idx = g_ddTop + ((int)HIWORD(l) - Sc(g_ddDpi, 2)) / (g_ddRowH > 0 ? g_ddRowH : Sc(g_ddDpi, 22));
         if (idx >= 0 && idx < (int)g_ddItems.size() && !DdIsHdr(idx)) { g_ddSel = idx; DdPick(true); }
         return 0;
@@ -5554,6 +5746,9 @@ static void ShowTrayMenu(HWND hWnd) {
     // v0.35 boot wave (ROADMAP #31 early-landed): the night switch, where the
     // tray is. Checked = sounds and balloons are shushed right now.
     AppendMenuW(menu, MF_STRING | (QuietNow() ? MF_CHECKED : 0), 5, L(STR_TRAY_DND));
+    // v0.37 boot wave (ROADMAP #31): the two toggles people actually reach for.
+    AppendMenuW(menu, MF_STRING | (g_set.fuzzy ? MF_CHECKED : 0), 6, L(STR_TRAY_FUZZY));
+    AppendMenuW(menu, MF_STRING, 7, L(STR_TRAY_NEXTTHEME));
     AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(menu, MF_STRING, 3, L(STR_TRAY_EXIT));
     if (!g_headless) SetForegroundWindow(hWnd); // so the menu dismisses on click-away
@@ -7730,6 +7925,11 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
             WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
             0, 0, 0, 0, hWnd, nullptr, nullptr, nullptr);
         SetWindowSubclass(g_edit, EditProc, 1, (DWORD_PTR)hWnd);
+        DragAcceptFiles(hWnd, TRUE);             // v0.37 drop-in: files -> quoted paths
+        return 0;
+    }
+    case WM_DROPFILES: {                          // v0.37 drop-in (registered above)
+        InsertDroppedFiles((HDROP)wp);
         return 0;
     }
     case WM_DPICHANGED: {                        // v0.29 PMv2: one console, any monitor
@@ -7784,6 +7984,69 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
         wsprintfW(m, L"fontinfo: tmHeight=%d tmAscent=%d dpi=%d",
                   (int)tm.tmHeight, (int)tm.tmAscent, g_mainDpi);
         LogInfo(m);
+        return 0;
+    }
+    case WM_APP + 33: {
+        // v0.37 harness: build a REAL in-process HDROP and feed it through the
+        // same WM_DROPFILES path a shell drop takes (tbtest cannot share memory).
+        std::wstring a = ExeDir() + L"TypeBox.exe";
+        std::wstring b = ExeDir() + L"Plugins\\two words.txt";
+        size_t chars = a.size() + b.size() + 3;
+        HGLOBAL g = GlobalAlloc(GHMEM, sizeof(DROPFILES) + chars * sizeof(wchar_t));
+        if (!g) return 0;
+        DROPFILES* df = (DROPFILES*)GlobalLock(g);
+        if (!df) { GlobalFree(g); return 0; }
+        df->pFiles = sizeof(DROPFILES); df->fWide = TRUE; df->fNC = FALSE;
+        df->pt.x = df->pt.y = 0;
+        wchar_t* p = (wchar_t*)((char*)df + sizeof(DROPFILES));
+        lstrcpyW(p, a.c_str()); p += a.size() + 1;
+        lstrcpyW(p, b.c_str()); p += b.size() + 1;
+        *p = 0;
+        GlobalUnlock(g);
+        PostMessageW(hWnd, WM_DROPFILES, (WPARAM)g, 0);
+        return 0;
+    }
+    case WM_APP + 35: {
+        // v0.37 harness: dump the live drop-down rows (which row WILL drag out?)
+        if (!g_ddWnd) { LogInfo(L"ddrows: none"); return 0; }
+        int top = g_ddTop;
+        for (size_t i = 0; i < g_ddItems.size() && i < 12; ++i) {
+            std::wstring raw = ((int)i < (int)g_ddSub.size()) ? g_ddSub[i] : g_ddItems[i];
+            if (raw.size() > 70) raw = raw.substr(0, 70) + L"...";
+            LogInfo(L"ddrow[" + std::to_wstring(i) + L"] top=" + std::to_wstring(top) +
+                    L" rowh=" + std::to_wstring(g_ddRowH) + L": " + raw);
+        }
+        return 0;
+    }
+    case WM_APP + 34: {
+        // v0.37 harness: prove the CF_HDROP/CF_UNICODETEXT payload without a
+        // physical mouse (DoDragDrop needs one; headless must never run it).
+        std::wstring p = ExeDir() + L"TypeBox.exe";
+        TbFileDrop obj(p);
+        bool ok = false;
+        FORMATETC fe = { CF_HDROP, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM sm = {};
+        if (SUCCEEDED(obj.GetData(&fe, &sm)) && sm.tymed == TYMED_HGLOBAL && sm.hGlobal) {
+            DROPFILES* df = (DROPFILES*)GlobalLock(sm.hGlobal);
+            if (df) {
+                const wchar_t* s = (const wchar_t*)((char*)df + df->pFiles);
+                ok = df->fWide && df->pFiles == sizeof(DROPFILES) && lstrcmpW(s, p.c_str()) == 0;
+                GlobalUnlock(sm.hGlobal);
+            }
+            GlobalFree(sm.hGlobal);
+        }
+        FORMATETC fe2 = { CF_UNICODETEXT, nullptr, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM sm2 = {};
+        if (ok && SUCCEEDED(obj.GetData(&fe2, &sm2)) && sm2.tymed == TYMED_HGLOBAL) {
+            wchar_t* t = (wchar_t*)GlobalLock(sm2.hGlobal);
+            ok = t && lstrcmpW(t, p.c_str()) == 0;
+            if (t) GlobalUnlock(sm2.hGlobal);
+            GlobalFree(sm2.hGlobal);
+        } else ok = false;
+        IEnumFORMATETC* en = nullptr;
+        if (ok && (FAILED(obj.EnumFormatEtc(DATADIR_GET, &en)) || !en)) ok = false;
+        if (en) en->Release();
+        LogInfo(ok ? L"dragout: data ok" : L"dragout: data BAD");
         return 0;
     }
     case WM_SIZE: {
@@ -7981,6 +8244,27 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wp, LPARAM lp) {
                                                 nullptr, nullptr, SW_SHOWNORMAL);
         else if (LOWORD(wp) == 3) DestroyWindow(hWnd);
         else if (LOWORD(wp) == 4) OpenSettings(hWnd, PG_APPEAR);
+        else if (LOWORD(wp) == 6) {                       // v0.37 tray: fuzzy toggle
+            g_set.fuzzy = !g_set.fuzzy;
+            WritePrivateProfileStringW(L"Type", L"Fuzzy", g_set.fuzzy ? L"1" : L"0",
+                                       g_iniPath.c_str());
+            LogInfo(g_set.fuzzy ? L"tray: fuzzy on" : L"tray: fuzzy off");
+            if (g_ddWnd) DdClose();                       // next DdUpdate rescans
+        }
+        else if (LOWORD(wp) == 7) {                       // v0.37 tray: next theme
+            int n = ThemeCount();
+            if (n > 0) {
+                int i = (ThemeFromName(g_set.theme) + 1) % n;
+                g_set.theme = ThemeAt(i).name;
+                WritePrivateProfileStringW(L"Theme", L"Name", g_set.theme.c_str(),
+                                           g_iniPath.c_str());
+                LogInfo(L"tray: theme " + g_set.theme);
+                ApplyThemeVisual();
+                InvalidateRect(hWnd, nullptr, TRUE);
+                if (g_edit) InvalidateRect(g_edit, nullptr, TRUE);
+                if (g_ddWnd) InvalidateRect(g_ddWnd, nullptr, TRUE);
+            }
+        }
         else if (LOWORD(wp) >= IDCT_UNDO && LOWORD(wp) <= IDCT_EXIT) {
             // console context menu actions (v0.14)
             switch ((int)LOWORD(wp)) {

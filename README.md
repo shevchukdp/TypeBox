@@ -62,6 +62,10 @@
 |---|
 | ![plugindn](docs/screenshots/plugin-dx.png) |
 
+| files flow both ways - drop onto the console, drag out to Explorer; the tray becomes a switchboard — the v0.37 drag, drop, boot wave |
+|---|
+| ![dragdrop](docs/screenshots/drag-drop.png) |
+
 ## Why TypeBox
 
 | | **TypeBox** | TypeAndRun | PowerToys Run | Flow Launcher |
@@ -76,9 +80,22 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.36.0)
+## Working today (v0.37.0)
 
-Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`, v0.36 opens the **plugin workshop** - SDK header + reference skeleton, sidecar manifests with a word law, `/reload` hot-reload, per-plugin performance counters). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave, v0.36 the plugin DX wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`, v0.36 opens the **plugin workshop** - SDK header + reference skeleton, sidecar manifests with a word law, `/reload` hot-reload, per-plugin performance counters, v0.37 makes files **flow both ways** - drop-in quoted paths, OLE drag-out to Explorer, and two new tray toggles). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave, v0.36 the plugin DX wave, v0.37 the drag-and-drop wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Drag, drop & a tray switchboard (v0.37)**
+
+- **Drop-in** - drag files from Explorer onto the console and they land at the caret as quoted
+  paths; `[UI] DropIn=0` opts out (the drop is still logged, never inserted)
+- **Drop-out** - press and move on a drop-down row that *is* a file - a history line, a path
+  candidate - and it drags out into Explorer, a chat, an editor as a real `CF_HDROP` file copy
+  (a minimal `IDataObject`/`IDropSource`, no temp files); `[DropDown] DragOut=0` disarms it.
+  Under headless the OLE loop never runs - the log just answers `would drag: <path>`
+- **Tray switchboard** - the tray menu now carries checkable **Fuzzy matching** and **Next
+  theme** beside Do Not Disturb; both write the INI, so the choice survives the restart, and an
+  open drop-down rescan follows the fuzzy switch
+
 
 **Plugin DX (v0.36)**
 

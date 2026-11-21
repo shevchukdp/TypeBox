@@ -194,7 +194,10 @@ notice): bare = indefinite, `1..1440` minutes self-expires, `/dnd` again prints 
 `/dnd off` ends it. `[Sounds] Quiet=22:00-07:30` arms the same silence nightly — a window
 that wraps midnight is fine. The log still tells the truth: shushed sound paths answer
 `sounds: suppressed (quiet)`. The tray menu carries the same switch as a checkable
-**Do Not Disturb** item (right-click the tray icon).
+**Do Not Disturb** item (right-click the tray icon). From v0.37 the menu also grew a checkable
+**Fuzzy matching** toggle (`[Type] Fuzzy`) and a **Next theme** item (`[Theme] Name`) - both
+persist to the INI and repaint the console immediately, with an open drop-down rescanned on the
+next keystroke.
 
 ### Dashboards, favorites & autostart (TypeBox 0.35.0)
 
@@ -268,6 +271,7 @@ startup logs `local config: on (TypeBox.local.ini)`. Note: plugins read
 | `AutoHide` / `AutoHideValue` | auto-hide after N idle seconds | `0` / `30` |
 | `DragMove` | `1` = press-and-drag the 20 px status strip to move the console; the spot is remembered for the session, the INI position is restored on every restart | `1` |
 | `Priority` | process class: `idle` · `normal` · `high` · `realtime` | `normal` |
+| `DropIn` | (0.37) `1` = files dragged onto the console insert quoted paths at the caret; `0` logs `drop-in: ignored` and never touches the line | `1` |
 
 **Every pixel value in the INI is 96-DPI LOGICAL (since 0.29.0).** TypeBox runs
 Per-Monitor V2 aware (Win10 1703+; Win8.1 → Per-Monitor; Win7/8 → system aware), and each
@@ -310,6 +314,7 @@ DropDownColor trio is replaced by the scheme).
 | `Enable` | show the drop-down at all | `1` |
 | `Lines` | visible rows (1..20) before the rest is clipped | `8` |
 | `ShowHistoryOnEmpty` | empty line lists the history (TypeAndRun behaviour) | `1` |
+| `DragOut` | (0.37) `1` = press-and-move on a row that *is* an existing file starts a real OLE drag (`CF_HDROP` + `CF_UNICODETEXT`), so the file lands in Explorer/chat/editors; `0` keeps rows click-only | `1` |
 
 Settings → **EasyType** page: *Show suggestions drop-down*, *Visible rows*, *History when the
 line is empty* (log at start: `dropdown: on (8 rows)`). When the candidate list is longer than
@@ -320,6 +325,10 @@ through the *other keyboard layout* (see `LayoutFallback`), and rows starting wi
 "did you mean" suggestions (≤2 edits) that appear when nothing else matched — picking one
 writes the real word. From v0.33 the unique continuation also paints dimmed after the caret
 (**ghost text**, `[Type] Ghost`) — **End**/**Right** accepts it without touching the list.
+From v0.37 a row that *is* an existing file drags out: press and move over it and Explorer,
+a chat window or an editor receive a genuine file drop (`CF_HDROP`, with the path as
+`CF_UNICODETEXT` fallback). Headless test instances never enter the OLE drag loop - the log
+answers `would drag: <path>` and nothing runs (the offline-first law covers drags too).
 
 ### `[Snippets]` — text expansion (TypeBox 0.33.0)
 A row is `name = text`; typing `name [words]` (no other command claimed the word) expands the
