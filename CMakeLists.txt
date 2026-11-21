@@ -92,6 +92,7 @@ target_include_directories(tbplugin_skeleton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
 target_link_libraries(tbplugin_skeleton PRIVATE user32)
 set_target_properties(tbplugin_skeleton PROPERTIES
     PREFIX ""
+    OUTPUT_NAME hello                       # -> skeleton/hello.dll on every toolchain
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/skeleton
     LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/skeleton)
 
