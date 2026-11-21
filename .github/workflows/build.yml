@@ -45,6 +45,32 @@ jobs:
         shell: cmd
         run: cmake --build build
 
+      - name: Build agent-plugin skeleton (SDK ABI smoke, ROADMAP v0.36)
+        shell: cmd
+        run: cmake --build build --target tbplugin_skeleton
+
+      - name: Skeleton smoke (host accepts the agent-authored dll)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path build/skeleton/hello.dll)) { Write-Error "skeleton dll not built"; exit 1 }
+          # isolated dir: exe + skeleton only, so the manifest law must say ok
+          $sd = "build/skel-run"
+          New-Item -ItemType Directory -Path "$sd/Plugins" -Force | Out-Null
+          Copy-Item build/TypeBox.exe $sd -Force
+          Copy-Item build/skeleton/hello.dll "$sd/Plugins/" -Force
+          Copy-Item examples/plugin_skeleton/hello.tbplugin.json "$sd/Plugins/" -Force
+          $env:TYPEBOX_HEADLESS = "1"; $env:TB_QUIET = "1"
+          $p = Start-Process "$sd/TypeBox.exe" -PassThru
+          Start-Sleep -Seconds 3
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          $log = Get-Content "$sd/TypeBox.log" -Raw -ErrorAction SilentlyContinue
+          if (-not $log -or $log -notmatch "plugin manifest: hello ok") {
+            Write-Error "skeleton manifest not accepted by the host`n$log"; exit 1
+          }
+          if ($log -match "FAULTED|plugin load failed") {
+            Write-Error "skeleton faulted in the host`n$log"; exit 1
+          }
+
       - name: Smoke test (exe starts, correct version)
         shell: pwsh
         run: |

@@ -253,6 +253,17 @@ static LRESULT CALLBACK MiniProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
+/* v0.36 fix: classes must live under OUR module, not the exe - FreeLibrary
+ * then drops them automatically, and a /load reload can never find a stale
+ * class whose WndProc points into an unmapped image (0xc0000005). */
+static HMODULE SelfModule(void) {
+    HMODULE self = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)&SelfModule, &self);
+    return self;
+}
+
 static void miniShow(ULONGLONG secs) {
     wchar_t txt[64], clock[32];
     if (!g_mini) return;
@@ -260,10 +271,11 @@ static void miniShow(ULONGLONG secs) {
     wsprintfW(txt, L"stopwatch  %s", clock);
     if (!g_miniWnd) {
         WNDCLASSEXW wc;
+        HMODULE self = SelfModule();
         ZeroMemory(&wc, sizeof(wc));
         wc.cbSize = sizeof(wc);
         wc.lpfnWndProc = MiniProc;
-        wc.hInstance = GetModuleHandleW(NULL);
+        wc.hInstance = self;
         wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
         wc.lpszClassName = L"TypeBoxTimerMini";
         if (RegisterClassExW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
@@ -274,7 +286,7 @@ static void miniShow(ULONGLONG secs) {
             g_miniWnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 L"TypeBoxTimerMini", txt, WS_POPUP | WS_VISIBLE,
                 GetSystemMetrics(SM_CXSCREEN) - w - Scp(g_miniDpi, 24), Scp(g_miniDpi, 44), w, ht,
-                NULL, NULL, GetModuleHandleW(NULL), NULL);
+                NULL, NULL, self, NULL);
         }
     } else {
         SetWindowTextW(g_miniWnd, txt);
@@ -486,15 +498,16 @@ PLUGIN_API void __cdecl Load(HWND mainWnd) {
     g_mainWnd = mainWnd;
     loadConfig();
     { WNDCLASSEXW wc;
+      HMODULE self = SelfModule();
       ZeroMemory(&wc, sizeof(wc));
       wc.cbSize = sizeof(wc);
       wc.lpfnWndProc = WndProc;
-      wc.hInstance = GetModuleHandleW(NULL);
+      wc.hInstance = self;
       wc.lpszClassName = L"TypeBoxTimerWnd";
       if (RegisterClassExW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
           g_msgWnd = CreateWindowExW(0, L"TypeBoxTimerWnd", L"TypeBoxTimer", 0,
                                      0, 0, 0, 0, HWND_MESSAGE, NULL,
-                                     GetModuleHandleW(NULL), NULL);
+                                     self, NULL);
       } }
     trayAdd();
     ensureTick();                                 /* survives /reread reload   */
@@ -509,6 +522,8 @@ PLUGIN_API void __cdecl Unload(void) {
     g_tickOn = 0;
     trayRemove();
     if (g_msgWnd) { DestroyWindow(g_msgWnd); g_msgWnd = NULL; }
+    UnregisterClassW(L"TypeBoxTimerWnd", SelfModule());    /* reload gets fresh classes */
+    UnregisterClassW(L"TypeBoxTimerMini", SelfModule());
 }
 
 PLUGIN_API TInfo __cdecl GetInfo(void) {

@@ -136,6 +136,17 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return DefWindowProcW(h, m, w, l);
 }
 
+/* v0.36 fix: classes must live under OUR module, not the exe - FreeLibrary
+ * then drops them automatically, and a /load reload can never find a stale
+ * class whose WndProc points into an unmapped image (0xc0000005). */
+static HMODULE SelfModule(void) {
+    HMODULE self = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)&SelfModule, &self);
+    return self;
+}
+
 /* --------------------------------- readouts --------------------------------- */
 
 static int buildCpu(char* out, int cap) {
@@ -291,15 +302,16 @@ PLUGIN_API void __cdecl Load(HWND mainWnd) {
     { SYSTEM_INFO si; GetSystemInfo(&si);
       g_cores = (int)si.dwNumberOfProcessors; if (g_cores < 1) g_cores = 1; }
     { WNDCLASSEXW wc;
+      HMODULE self = SelfModule();
       ZeroMemory(&wc, sizeof(wc));
       wc.cbSize = sizeof(wc);
       wc.lpfnWndProc = WndProc;
-      wc.hInstance = GetModuleHandleW(NULL);
+      wc.hInstance = self;
       wc.lpszClassName = L"TypeBoxSysmonWnd";
       if (RegisterClassExW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
           g_msgWnd = CreateWindowExW(0, L"TypeBoxSysmonWnd", L"TypeBoxSysmon", 0,
                                      0, 0, 0, 0, HWND_MESSAGE, NULL,
-                                     GetModuleHandleW(NULL), NULL);
+                                     self, NULL);
       } }
     if (g_msgWnd) SetTimer(g_msgWnd, 1, (UINT)g_sampleMs, NULL);
     sampleTick();                                   /* seed; first delta at +SampleMs */
@@ -307,6 +319,7 @@ PLUGIN_API void __cdecl Load(HWND mainWnd) {
 
 PLUGIN_API void __cdecl Unload(void) {
     if (g_msgWnd) { KillTimer(g_msgWnd, 1); DestroyWindow(g_msgWnd); g_msgWnd = NULL; }
+    UnregisterClassW(L"TypeBoxSysmonWnd", SelfModule());  /* reload gets a fresh class */
     g_cpuInit = 0; g_cpuReady = 0; g_cpuPct = 0;
 }
 

@@ -106,6 +106,9 @@ enum StrId {
     STR_FAV_USAGE, STR_FAV_ON, STR_FAV_OFF,
     STR_AUTO_ON, STR_AUTO_OFF, STR_AUTO_WWRITE, STR_AUTO_WDELETE, STR_AUTO_BAD,
     STR_TRAY_DND, STR_PLDBG_EMPTY, STR_PLDBG_PRE,
+    // v0.36 "plugin DX" wave (side table columns 75-79, EN+RU compiled):
+    // hot-reload button + /reload <plugin> (ROADMAP #42).
+    STR_PL_RELOAD, STR_RLD_USAGE, STR_RLD_NOPLG, STR_RLD_OK, STR_RLD_FAIL,
     STR_LAST
 };
 
@@ -1114,7 +1117,7 @@ static const wchar_t* const kThItems[LANG_COUNT][9] = {
 // v0.23 pos + stayawake answers.
 // Columns == STR_EX_SCRIPTS .. STR_AW_BADMIN (update tail compiled EN+RU;
 // the other packs stop at column 8 and fall back to English, as before).
-static const wchar_t* const kExItems[LANG_COUNT][75] = {
+static const wchar_t* const kExItems[LANG_COUNT][80] = {
 /* en */ { L"Scripts\\ folder = commands", L"Confirm suspicious commands before running", L"script",
            L"Confirm dangerous commands (delete/format/shutdown)", L"Frecency ranking (most used goes first)",
            L"admin", L"su <command> - run it as administrator (UAC). Also: /su, sudo.",
@@ -1173,7 +1176,12 @@ static const wchar_t* const kExItems[LANG_COUNT][75] = {
               L"autostart: [headless] would delete HKCU Run",
               L"autostart: use on, off or status",
               L"Do Not Disturb",
-              L"plugdebug: no plugins", L"plugdebug:" },
+              L"plugdebug: no plugins", L"plugdebug:",
+               // v0.36 plugin DX (columns 75-79): hot-reload
+               L"Reload plugin",
+               L"usage: /reload <plugin> - unload + load that dll again (counters reset)",
+               L"reload: no plugin named", L"reload: ok",
+               L"reload FAILED - dll could not be loaded, plugin unloaded" },
 /* ru */ { L"Папка Scripts\\ — команды", L"Подтверждать подозрительные команды", L"скрипт",
            L"Подтверждать опасные команды (удаление/format/shutdown)", L"Ранжирование по частоте (чаще используемые — выше)",
            L"админ", L"su <команда> — запустить от администратора (UAC). Также /su и sudo.",
@@ -1232,7 +1240,12 @@ static const wchar_t* const kExItems[LANG_COUNT][75] = {
               L"автозапуск: [headless] удалил бы HKCU Run",
               L"автозапуск: on, off или status",
               L"Не беспокоить",
-              L"плагины: нет плагинов", L"плагины:" },
+              L"плагины: нет плагинов", L"плагины:",
+               // v0.36 plugin DX: hot-reload
+               L"Перегрузить плагин",
+               L"использование: /reload <плагин> — выгрузить и загрузить dll заново (счётчики обнуляются)",
+               L"перегрузка: плагин не найден", L"перегрузка: ok",
+               L"перегрузка НЕ УДАЛАСЬ - dll не загрузилась, плагин выгружен" },
 /* uk */ { L"Тека Scripts\\ — команди", L"Підтверджувати підозрілі команди", L"скрипт",
            L"Підтверджувати небезпечні команди (видалення/format/shutdown)", L"Ранжування за частотою (найуживаніші — вище)",
            L"адмін", L"su <команда> — запустити від адміністратора (UAC). Також /su та sudo.",
@@ -1404,7 +1417,7 @@ static const wchar_t* L(int id) {
         if (x && *x) return x;
         return L"?";
     }
-    if (id >= STR_EX_SCRIPTS && id <= STR_PLDBG_PRE) {
+    if (id >= STR_EX_SCRIPTS && id <= STR_RLD_FAIL) {
         const wchar_t* x = kExItems[g_langIdx][id - STR_EX_SCRIPTS];
         if (x && *x) return x;
         x = kExItems[LANG_EN][id - STR_EX_SCRIPTS];   // packs carry no v0.16+ tail

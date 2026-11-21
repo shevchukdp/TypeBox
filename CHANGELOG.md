@@ -3,6 +3,46 @@
 All notable changes to TypeBox are documented here.
 Version source of truth: the `VERSION` file; a git tag `vX.Y.Z` must match it (enforced in CI).
 
+## [0.36.0] - 2026-11-21
+
+### The plugin workshop - an SDK, a word law, hot reload, and a stopwatch on every dll
+
+![SDK header, sidecar manifest, /reload and ET counters](docs/screenshots/plugin-dx.png)
+
+- **One-file SDK** (ROADMAP-V1 v0.36 row) - `include/typebox_plugin.h` carries the ABI types,
+  `TB_EXPORT` for MinGW/MSVC and the authoring helpers `TbNoRun()` / `TbAnswer(text)` /
+  `TbInfo(...)` / `TbPluginDirAt(self)`; the new reference plugin
+  `examples/plugin_skeleton/skeleton.c` (+ its `hello.tbplugin.json`) is a copy-rename-build
+  starting point kept OUT of the release zip and compiled by CI every run as the ABI proof.
+  `AGENTS.md` spells the same contract for AI agents - spec in, working dll out
+- **Sidecar manifests** - a dll may ship `<dllname>.tbplugin.json` (`words`, `author`,
+  `hostmin`, `version`, `description`); at load the host enforces the v0.31 `audit-words`
+  rule itself: a declared word that collides with a host command or another plugin's live/
+  declared word blocks the load (`plugin manifest: "x" collides with <owner> - <dll> not
+  loaded`), `hostmin` above the running host refuses too (`needs TypeBox X.Y.Z`), an unreadable
+  sidecar warns and loads anyway, no sidecar is pure ABI-v1 compatibility. Settings > Plugins
+  shows the manifest block and `(FAULTED)` markers
+- **Hot reload** - `/reload <plugin>` (tab-completable, in `/help`) and the **Reload** button
+  on Settings > Plugins: guarded `Unload` -> `FreeLibrary` -> fresh `LoadLibrary` -> rebind ->
+  manifest re-read -> guarded `Load`; counters zero, ET caches drop, `plugin: reloaded <key>
+  (Nms)` logs the cost. `/reread` now also drops every ET cache
+- **Per-plugin performance track** (ROADMAP-V1 Section 4b) - `/plugdebug` appends ET fields to
+  the v0.35 contract without touching it (`<key> ok <hits>/<avg>ms et <calls>/<avg>ms c<hits>`;
+  the console curates six, the log keeps the whole roster); drop-down template results are
+  LRU-cached per plugin (8 line-keys, 8 s TTL, invalidated by `/reread` / `/reload` / rescan);
+  any `Load()` past the 20 ms budget logs `plugin: <key> Load took Nms`
+- **Fault guard completed** - `Load`/`Unload` joined `RunString`/ET under the setjmp guard: a
+  dll that faults in any export is retired for the session instead of taking the host with it
+- **Fixed: reload landmine (0xc0000005)** - cliphist/sysmon/timer registered their message
+  windows under the *exe's* module, so the classes survived `FreeLibrary` and a reload bound
+  new windows to a `WndProc` in freed memory (WER blamed whichever dll had taken the address -
+  pwgen one run, codec the next). All three now register under their own `HMODULE` and
+  `UnregisterClassW` on `Unload`; cliphist's ring background brush is reused instead of
+  leaking per load cycle
+- `tools/audit-words.ps1` unchanged (still 45 words, still OK); i18n +5 EN/RU strings
+  (reload usage/no-plugin/ok/fail + Settings button); CI builds `tbplugin_skeleton` explicitly;
+  `test-v0360` 30/30 (dev mode), full old-suite regression re-run against the final exe
+
 ## [0.35.0] - 2026-11-20
 
 ### Dashboards, plugin DX & a calmer boot — three planned waves in one

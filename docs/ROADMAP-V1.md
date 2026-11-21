@@ -108,12 +108,13 @@ Effort S ≈ ≤2 d, M ≤ 1 w (our real cadence: S-hours to days).
 | **v0.33.0** | **write less** | ① ghost-text inline completion (unique match, End/Right accepts, ROADMAP #11); ② per-`%n` argument memory (`Usage.dat` `name#slot`, RI3 #203); ③ **Snippets** `[Snippets]` + `%s` engine + Settings page + `snippet add/list/del` (ROADMAP #17/#59); ④ **Search Engines Lite** §4a (`[WebSearch]` self-service, `name:q`/`!name q` forms, `search add/list/del/test`) — **✅ shipped 2026-11-19** (40/40 suite, release-bytes gate green) |
 | **v0.34.0** | **time machine** | ① **timed commands** `in 10m <cmd>` / `at 18:30 <cmd>`, `/timers`, `/cancel N`, persistent `Timers.dat` (missed-not-run at boot, ids never reused), tray balloon + headless `would run`, danger-skip at fire (ROADMAP #15, RI3 #202-adjacent); ② DND `/dnd [min]` + `[Sounds] Quiet=22:00-07:30` gating sounds and every balloon (ROADMAP #32, RI3 #220) — **✅ shipped 2026-11-20** (50/50 suite, release-bytes gate green) |
 | **v0.35.0** | **dashboards + plugin DX + boot** *(three planned waves combined)* | ① `/stats` — 14-day sparkline + top-5 + plugin table from the reserved `day#`/`plug#` rows (RI3 #208); ② history CSV `/export history` / `/import history` with redaction (RI3 #207); ③ favorites: `Ctrl+S`, `favs ` filter, `* favorites`/`* history` section headers (RI3 #223/#225); ④ `/plugdebug` + fault guard + `Data\<dll>\` convention (v0.36 items ④⑤⑥, RI3 #270/#275); ⑤ `autostart on|off|status` HKCU Run under the dry-run law + checkable tray **Do Not Disturb** (v0.37 items ③④, ROADMAP #31) — **✅ shipped 2026-11-20** (48/48 suite, release-bytes gate green) |
+| **v0.36.0** | **plugin DX** *(v1.0 blocker)* | ① `include/typebox_plugin.h` SDK + PLUGIN_API.md + **AGENTS.md** + reference skeleton `examples/plugin_skeleton` (agent-generates-a-plugin, the Wox pattern, ROADMAP #41); ② sidecar manifest `*.tbplugin.json` — declared words/author/hostmin, word law enforced **at load** (audit-words moved into the host); ③ **hot-reload** `/reload <plugin>` + Settings Reload button (ROADMAP #42); ④ §4b perf: per-plugin ET counters in `/plugdebug` (append-only contract), per-plugin ET LRU cache (8 entries/8 s), `Load()` >20 ms audit log; ⑤ fault guard extended over `Load`/`Unload`; ⑥ fixed the reload landmine — cliphist/sysmon/timer window classes moved under their own module (+`UnregisterClassW`), killing the stale-`WndProc` 0xc0000005 after FreeLibrary — **✅ shipped 2026-11-21** (30/30 suite, release-bytes gate green) |
 
 ### Planned waves (order = dependency order; swap freely, keep the ladder invariants)
 | Ver | Codename | Items (RI refs) | Sizes |
 |---|---|---|---|
 | **v0.35.0** | — *(combined into the shipped v0.35.0 row above)* | — | — |
-| **v0.36.0** | **plugin DX** *(v1.0 blocker)* | ① `include/typebox_plugin.h` SDK + PLUGIN_API.md worked examples (ROADMAP #41) **+ AGENTS.md and a reference-plugin skeleton so coding agents can generate a DLL from a spec — the Wox "ask an AI agent to build a plugin" pattern**; ② **plugin manifest** `*.tbplugin.json` — declared words/author/hostmin, loader rejects word collisions **at load** (audit-words rules move into the host) — this is ABI-v1-compatible because the manifest is a sidecar; ③ **hot-reload** button (FreeLibrary/LoadLibrary, ROADMAP #42); ~~④ `/plugdebug` view~~ · ~~⑤ SEH guard~~ · ~~⑥ `Data\<dll>\` convention~~ — **landed early in v0.35.0** (RI3 #270/#275) | M |
+| **v0.36.0** | — *(combined into the shipped v0.36.0 row above)* | — | — |
 | **v0.37.0** | drag, drop, boot | ① **drop-in**: files dragged onto the console insert quoted paths; ② **drop-out**: file/clip rows draggable into Explorer/chat (OLE `IDropSource`, CmdPal 0.97 parity signal) — prototype early, time-boxed; ~~③ **autostart**~~ (HKCU Run word + headless dry-run law, **landed early in v0.35.0**; the `[Registry]` opt-in page stays) · ④ tray menu expansion — the DND toggle **landed early in v0.35.0**, fuzzy/theme toggles stay (ROADMAP #31) | S · L · S · S |
 | **v0.38.0** | first run, find settings | ① **onboarding**: no-INI first start → generated starter INI + welcome line-set + sample alias + `/help` tour (+ confetti flourish on the first successful run — the Wox launch signal, cheap GDI) (ROADMAP #49); ② Settings search box (ROADMAP #50); ③ idle auto-hide (RI3 #212); ④ follow-focus per-monitor summon (RI3 #214); ⑤ DWM border/caption tint (RI3 #216) | M · M · S · S · S |
 | **v0.39.0** | trust | ① filename hygiene — RLO + double-extension anatomy warning before shell-run (RI3 #282, extends the v0.16 guard); ② trusted folders — green lamp for `[Security] Trusted=` paths (#283); ③ danger-gate list refresh + `/checkconfig` wiring | M · S · S |
@@ -178,10 +179,11 @@ idle CPU % (measured 5 s), ET latency p50/p95, per-plugin load ms, dropdown repa
   per keystroke (single cached conversion per state change). **✅ landed in v0.32.0**
   (drop-down diff-cache on text/span/mode + one `ToAnsi` per rebuild; scan counter
   exposed as `|s=N` in the drop-down title for suite asserts, headless only).
-- **v0.36** (lands with /plugdebug): per-plugin **ms counters** in ET and RunString —
-  slow plugins flagged red; **ET result cache** per session, invalidate on `/reread`
-  (ROADMAP #45); plugin ABI rule documented: `Load()` sub-20 ms, no network, no disk scans
-  (audit hook in the SDK header).
+- **v0.36** ✅ *(shipped 2026-11-21)*: per-plugin **ms counters** for ET and RunString in
+  `/plugdebug` (`et <calls>/<avg>ms c<hits>`, console flags faulted plugins as `FAULT`);
+  **ET result cache** per plugin — LRU 8 line-keys, 8 s TTL, invalidated on `/reread`,
+  `/reload` and rescan (ROADMAP #45); `Load()` sub-20 ms rule documented in PLUGIN_API.md
+  with the host auditing violations into the log (`plugin: <key> Load took Nms`).
 - **v0.40**: merged idle tick — collapse the WM_TIMER zoo into one 250 ms host tick
   (clock at 1 s derived), `WM_DPICHANGED` coalescing, dropdown double-buffer cache audit.
 - **v1.0**: `/perf` card + budgets gate + leak smoke in suite; Usage.dat append-log with
@@ -273,10 +275,11 @@ fits up to 19 comfortably — re-verify layout at #20–21).
 - **Suites**: keep `test-vNNNN` per wave + full serial regression (today v0.180→v0.310);
   suites copy the **entire** plugin roster; headless contract asserts stay sacred.
 - **word-law**: `audit-words.ps1` = hard fail in plugin build + CI step + gate; from v0.36 the
-  same rule enforced at runtime via manifests (loader refuses a colliding DLL).
+  same rule enforced at runtime via manifests ✅ (loader refuses a colliding DLL, `hostmin` too).
 - **Release bytes**: every tag's zip re-gated on downloaded bytes, archived forever
   (`TypeBox-releases\`).
-- **Crash isolation** (v0.36): SEH around every plugin export call; faulting plugin →
+- **Crash isolation** (v0.36 ✅): guard around every plugin export call — RunString/ET since
+  v0.35, Load/Unload since v0.36; faulting plugin →
   auto-disable + log + tray dot; `/plugdebug` shows the corpse.
 - **Perf budget**: the §4b table is the law — `/perf` card from v1.0, counters from v0.36;
   idle CPU < 0.1 % (measured number printed in `/about`, RI #70);

@@ -1,0 +1,9 @@
+{
+  "name": "hello",
+  "version": "1.0",
+  "author": "TypeBox examples",
+  "description": "Say hello (reference plugin skeleton)",
+  "homepage": "https://github.com/shevchukdp/TypeBox",
+  "hostmin": "0.36.0",
+  "words": ["hello"]
+}

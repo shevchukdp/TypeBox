@@ -83,6 +83,18 @@ target_link_libraries(nettools PRIVATE winhttp iphlpapi ws2_32)
 target_link_libraries(off      PRIVATE advapi32 powrprof)
 target_link_libraries(wol      PRIVATE ws2_32)
 
+# v0.36 plugin DX: the reference skeleton proves include/typebox_plugin.h
+# matches the host ABI. EXCLUDE_FROM_ALL keeps it OUT of `build/*.dll` (the
+# release zip roster stays the canonical 19); CI builds the target
+# explicitly as the "an agent generated a plugin from a spec" smoke check.
+add_library(tbplugin_skeleton SHARED EXCLUDE_FROM_ALL examples/plugin_skeleton/skeleton.c)
+target_include_directories(tbplugin_skeleton PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(tbplugin_skeleton PRIVATE user32)
+set_target_properties(tbplugin_skeleton PROPERTIES
+    PREFIX ""
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/skeleton
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/skeleton)
+
 if(MSVC)
     # /utf-8: source files (i18n.h carries 20 language packs) are UTF-8; without
     # this flag MSVC decodes literals in the system ANSI codepage — the released

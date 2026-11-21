@@ -58,6 +58,10 @@
 |---|
 | ![dashboards](docs/screenshots/dashboard.png) |
 
+| write a plugin in five minutes: SDK header, sidecar manifest, `/reload` — the v0.36 plugin DX wave |
+|---|
+| ![plugindn](docs/screenshots/plugin-dx.png) |
+
 ## Why TypeBox
 
 | | **TypeBox** | TypeAndRun | PowerToys Run | Flow Launcher |
@@ -72,9 +76,29 @@
 
 TypeBox keeps the soul of TypeAndRun (aliases, `%s`, `%TYPEBOXDIR%`, history, undo, sounds, INI) and takes the quick-launch UX from PowerToys Run / Flow Launcher / Raycast.
 
-## Working today (v0.35.0)
+## Working today (v0.36.0)
 
-Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+Everything below ships in **[v0.35.0](https://github.com/shevchukdp/TypeBox/releases/latest)** — the current release (v0.32 taught the launcher **native typing** — `дфя` finds `laz`, v0.33 teaches it to **write less** — ghost completions, remembered arguments, snippets, your own search engines, v0.34 hands it a **time machine** — scheduled commands and Do Not Disturb, v0.35 combines **dashboards, favorites and a calmer boot** — `/stats`, `/plugdebug`, CSV history, Ctrl+S favorites, `autostart`, v0.36 opens the **plugin workshop** - SDK header + reference skeleton, sidecar manifests with a word law, `/reload` hot-reload, per-plugin performance counters). The project evolves in focused waves (v0.27 the power-user console wave, v0.28 the weather wave, v0.29 the sharp-screen wave, v0.30 the plugin wave, v0.31 the wake-on-LAN wave, v0.32 the native-typing wave, v0.33 the write-less wave, v0.34 the time machine wave, v0.35 the dashboards wave, v0.36 the plugin DX wave), each gated by its own test suite and re-verified against the **actual downloaded release bytes** before it is announced. Full history in [CHANGELOG.md](CHANGELOG.md), the living plan in [docs/ROADMAP-50.md](docs/ROADMAP-50.md), and the ordered master plan to v1.0/v1.5 in [docs/ROADMAP-V1.md](docs/ROADMAP-V1.md).
+
+**Plugin DX (v0.36)**
+
+- **One-file SDK** - `include/typebox_plugin.h` + the compiling reference plugin
+  [`examples/plugin_skeleton`](examples/plugin_skeleton/skeleton.c): copy the folder, change the word and
+  the answer, build with one `gcc` line; CI compiles the skeleton every run as the ABI proof.
+  [AGENTS.md](AGENTS.md) spells the same contract for AI agents - spec in, working dll out
+- **Sidecar manifests** - `<dll>.tbplugin.json` declares `words`, `author`, `hostmin`; the host refuses
+  to load a dll whose declared word collides with a host command or another plugin (the `audit-words`
+  rule, now enforced at runtime), and honors `hostmin` before it calls a single export. No manifest,
+  no problem: every v1 plugin loads exactly as before
+- **Hot reload** - `/reload <plugin>` or the **Reload** button on Settings > Plugins: unload, swap the
+  dll on disk, reload, counters zeroed - iterate on a plugin without leaving the console. As a side
+  effect this wave found and fixed a real landmine: plugins that registered their message windows under
+  the *exe's* module left a class with a `WndProc` in freed memory after reload (a rare 0xc0000005);
+  cliphist/sysmon/timer now register under their own module and unregister on `Unload`
+- **Performance track (Section 4b)** - `/plugdebug` grew per-plugin ET round-trip counters and cache
+  hits (`<key> ok 3/1ms et 2/0ms c1`), drop-down template results are LRU-cached per plugin (8 entries,
+  8 s, invalidated by `/reread`/`/reload`/rescan), and any plugin `Load()` past its 20 ms budget
+  logs itself - slow plugins can hide nowhere
 
 **Dashboards, favorites & a calmer boot (v0.35)**
 

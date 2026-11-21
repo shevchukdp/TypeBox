@@ -205,6 +205,13 @@ that wraps midnight is fine. The log still tells the truth: shushed sound paths 
 - **`/plugdebug`** — every plugin, its hits and average milliseconds since the
   start; a plugin that faults is marked `FAULT` and skipped for the session
   (the host survives it), the log keeps `plugin: <dll> FAULTED in RunString`.
+  Since v0.36 each entry also carries the ET round-trips and the drop-down
+  cache: `<key> ok <hits>/<avg>ms et <calls>/<avg>ms c<hits>` (the console
+  shows the first six, the log line keeps the whole roster).
+- **`/reload <plugin>`** (v0.36) — hot-reload one plugin in place: guarded
+  `Unload`, `FreeLibrary`, fresh `LoadLibrary`, manifest re-read, guarded
+  `Load`, counters zeroed, ET caches dropped. Same via the **Reload** button
+  on Settings > Plugins. Log: `plugin: reloaded <key> (Nms)`.
 - **`/export history <file.csv> [redact]`** — BOM'd CSV (`seq,command` header,
   quoted cells, doubled `""` quotes) that Excel opens correctly. `redact` keeps
   every command word but drops every argument — safe for a screenshot. The old
@@ -398,9 +405,16 @@ Calculator = Plugins\calc.dll
 ```
 All `*.dll` in the portable `Plugins\` folder are picked up automatically;
 `[Plugins]` entries add extra paths (relative to the exe). The execution chain
-queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`.
-`[Exec] Plugins=0` disables the whole stage. See
-[PLUGIN_API.md](PLUGIN_API.md) and [`examples/plugin_calc`](../examples/plugin_calc/calc.c).
+queries plugins after aliases; `/load` rescans, `/unload` calls their `Unload`,
+`/reload <plugin>` swaps one dll in place (v0.36). Since v0.36 a dll may carry
+a sidecar `<dllname>.tbplugin.json` (`words`, `author`, `hostmin`, `version`,
+`description`): the host enforces the declared words against host commands and
+other plugins and refuses to load below `hostmin`; no manifest = loads as
+before. `[Exec] Plugins=0` disables the whole stage. See
+[PLUGIN_API.md](PLUGIN_API.md), [../AGENTS.md](../AGENTS.md) (agent-authored
+plugins) and [`examples/plugin_skeleton`](../examples/plugin_skeleton/skeleton.c)
+(the reference plugin; [`examples/plugin_calc`](../examples/plugin_calc/calc.c)
+is the classic minimal one).
 
 **Bundled since v0.14.0** (specs: [PLUGIN_GALLERY.md](PLUGIN_GALLERY.md)):
 

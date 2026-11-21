@@ -13,4 +13,6 @@ mingw/
 build-test/
 build-test*/
 build-smoke*/
+build-*/
+repro-*/
 TypeBox.log*

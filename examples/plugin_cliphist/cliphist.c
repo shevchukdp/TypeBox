@@ -85,6 +85,7 @@ static UINT  g_ringMods = MOD_CONTROL | MOD_ALT;  /* RI3 #260 ring hotkey     */
 static UINT  g_ringVk   = 'V';
 static BOOL  g_ringHotOn = FALSE;                 /* RegisterHotKey succeeded */
 static HWND  g_ringWnd = NULL, g_ringList = NULL;
+static HBRUSH g_ringClsBrush = NULL;            /* class bg brush, one per Load cycle */
 static DWORD g_ringShown = 0;                   /* tick: WA_INACTIVE grace     */
 static WNDPROC g_listOld = NULL;                  /* listbox subclass backup  */
 static HFONT   g_ringFont = NULL;
@@ -104,6 +105,7 @@ static HBRUSH  g_ringBgBrush = NULL;              /* cozy-dark list background*/
 
 static void openRing(void);                       /* defined with the ring    */
 static void closeRing(void);
+static HMODULE SelfModule(void);
 
 static char g_result[8192];
 
@@ -743,7 +745,7 @@ static void openRing(void) {
                                 wa.left + ((wa.right - wa.left) - wdt) / 2,
                                 wa.top  + ((wa.bottom - wa.top) - hgt) / 3,
                                 wdt, hgt, NULL, NULL,
-                                GetModuleHandleW(NULL), NULL);
+                                SelfModule(), NULL);
     if (!g_ringWnd) return;
     g_ringList = CreateWindowExW(0, L"LISTBOX", NULL,
                                  WS_CHILD | WS_VISIBLE | WS_BORDER | WS_VSCROLL |
@@ -775,8 +777,20 @@ static void openRing(void) {
 
 /* ----------------------------------- ABI ------------------------------------ */
 
+/* v0.36 fix: classes must live under OUR module, not the exe - FreeLibrary
+ * then drops them automatically, and a /load reload can never find a stale
+ * class whose WndProc points into an unmapped image (0xc0000005). */
+static HMODULE SelfModule(void) {
+    HMODULE self = NULL;
+    GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCWSTR)&SelfModule, &self);
+    return self;
+}
+
 PLUGIN_API void __cdecl Load(HWND mainWnd) {
     WNDCLASSW wc;
+    HMODULE self = SelfModule();
     g_mainWnd = mainWnd;
     loadConfig();
     g_lastSeq = 0;                      /* != any real seq: first check captures current clipboard */
@@ -784,7 +798,7 @@ PLUGIN_API void __cdecl Load(HWND mainWnd) {
     ZeroMemory(&wc, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
     wc.lpszClassName = CLS_NAME;
-    wc.hInstance     = GetModuleHandleW(NULL);
+    wc.hInstance     = self;
     if (RegisterClassW(&wc) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
         g_msgWnd = CreateWindowExW(0, CLS_NAME, L"TypeBoxClipHist", 0,
                                    0, 0, 0, 0, HWND_MESSAGE, NULL,
@@ -797,8 +811,9 @@ PLUGIN_API void __cdecl Load(HWND mainWnd) {
         ZeroMemory(&rw, sizeof(rw));
         rw.lpfnWndProc   = RingProc;
         rw.lpszClassName = RING_CLS;
-        rw.hInstance     = GetModuleHandleW(NULL);
-        rw.hbrBackground = CreateSolidBrush(RGB(34, 29, 26));
+        rw.hInstance     = self;
+        rw.hbrBackground = g_ringClsBrush ? g_ringClsBrush
+                           : (g_ringClsBrush = CreateSolidBrush(RGB(34, 29, 26)));
         rw.hCursor       = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
         if (RegisterClassW(&rw) || GetLastError() == ERROR_CLASS_ALREADY_EXISTS) {
             if (g_ringVk && g_msgWnd)
@@ -825,6 +840,9 @@ PLUGIN_API void __cdecl Unload(void) {
         DestroyWindow(g_msgWnd);
         g_msgWnd = NULL;
     }
+    UnregisterClassW(CLS_NAME, SelfModule());   /* reload gets fresh classes */
+    UnregisterClassW(RING_CLS, SelfModule());
+    if (g_ringClsBrush) { DeleteObject(g_ringClsBrush); g_ringClsBrush = NULL; }
     saveHistory();
     freeAll();
 }

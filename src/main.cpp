@@ -1451,6 +1451,21 @@ struct Plugin {
     long long      hits = 0;
     long long      msTotal = 0;
     bool           broken = false;
+    // v0.36 plugin DX (ROADMAP-V1 v0.36 row + §4b): manifest fields, ET
+    // per-plugin counters, and the per-plugin ET result cache (keyed by the
+    // exact ANSI line, 1.5 s TTL, hard-invalidated by /reread and hot reload).
+    bool           hasManifest = false;
+    std::wstring   manAuthor, manVersion, manDesc, manHostmin;
+    std::vector<std::wstring> manWords;
+    long long      etCalls = 0, etMsTotal = 0, etRows = 0, etCacheHits = 0;
+    long long      loadMs = 0;
+    // small LRU: backspacing "ab" -> "abc" -> "ab" hits the older entry too.
+    struct EtEntry {
+        std::string aLine;
+        std::vector<std::wstring> rows;
+        unsigned long long tick = 0;
+    };
+    std::vector<EtEntry> etCache;
     PLoad          Load          = nullptr;
     PUnload        Unload        = nullptr;
     PGetInfo       GetInfo       = nullptr;
@@ -1530,6 +1545,146 @@ static bool PluginLoadAllowed(const Plugin& p) {
     return PluginStateOn(PluginKey(p) + L"_Load", true);
 }
 
+// v0.35 plugin DX: one bad plugin must never take the host with it. MinGW's
+// GCC has no __try, so the guard is the classic MinGW pattern: a process-wide
+// exception filter that longjmps back to the guarded call while the stack is
+// still intact - but ONLY while a plugin export is on the stack (the flag).
+// A host crash keeps its old unhandled behavior (CONTINUE_SEARCH).
+// v0.36 wraps Load/Unload and the ET round-trips in it too.
+static jmp_buf        g_pluginJmp;
+static volatile long  g_pluginGuard = 0;
+static LONG WINAPI PluginFaultFilter(EXCEPTION_POINTERS* ep) {
+    (void)ep;
+    if (g_pluginGuard) { g_pluginGuard = 0; longjmp(g_pluginJmp, 1); }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+static void EnsureFaultFilter() {
+    static bool s_filter = false;
+    if (!s_filter) { SetUnhandledExceptionFilter(PluginFaultFilter); s_filter = true; }
+}
+
+// ---------------------------------------------------------------- v0.36 plugin DX
+// Plugin manifest: Plugins\<dllname>.tbplugin.json sidecar next to the dll -
+//   { "name": "...", "version": "...", "author": "...", "description": "...",
+//     "homepage": "...", "hostmin": "0.36.0", "words": ["hello", "hi"] }
+// The loader refuses a plugin whose DECLARED words collide with the host or
+// with another plugin's words (the v0.31 audit-words law, now enforced inside
+// the host at load time), and refuses hostmin builds it cannot satisfy.
+// A plugin without a manifest loads unchanged - the ABI-v1 promise.
+// UTF-8, flat string keys + one "words" string array; unknown keys ignored.
+
+// Mirrors $hostWords in tools/audit-words.ps1 - keep both lists in step.
+static const wchar_t* const kHostWords[] = {
+    L"pos", L"stayawake", L"search", L"snippet", L"in", L"at",
+    L"favs", L"autostart" };
+
+static std::map<std::wstring, std::wstring> g_wordOwners;  // word -> owning dll key
+
+static bool JsonGetString(const std::string& j, const std::string& key,
+                          std::string& out) {
+    std::string needle = "\"" + key + "\"";
+    size_t p = j.find(needle);
+    if (p == std::string::npos) return false;
+    p = j.find(':', p + needle.size());
+    if (p == std::string::npos) return false;
+    p = j.find('"', p);
+    if (p == std::string::npos) return false;
+    ++p;
+    std::string v;
+    while (p < j.size() && j[p] != '"') {
+        if (j[p] == '\\' && p + 1 < j.size()) {
+            char c = j[p + 1];
+            v += (c == 'n') ? '\n' : (c == 't') ? '\t' : c;
+            p += 2;
+        } else v += j[p++];
+    }
+    out = v;
+    return true;
+}
+
+static std::vector<std::string> JsonGetStringArray(const std::string& j,
+                                                   const std::string& key) {
+    std::vector<std::string> out;
+    std::string needle = "\"" + key + "\"";
+    size_t p = j.find(needle);
+    if (p == std::string::npos) return out;
+    p = j.find('[', p);
+    if (p == std::string::npos) return out;
+    size_t end = j.find(']', p);
+    if (end == std::string::npos) return out;
+    size_t q = p + 1;
+    while (q < end) {
+        size_t s = j.find('"', q);
+        if (s == std::string::npos || s >= end) break;
+        size_t e = s + 1;
+        std::string v;
+        while (e < end && j[e] != '"') {
+            if (j[e] == '\\' && e + 1 < end) {
+                char c = j[e + 1];
+                v += (c == 'n') ? '\n' : (c == 't') ? '\t' : c;
+                e += 2;
+            } else v += j[e++];
+        }
+        out.push_back(v);
+        q = e + 1;
+    }
+    return out;
+}
+
+// "0.36.0" < "0.40.0"; missing tail = 0. No sscanf - the host keeps stdio out.
+static bool VerLess(const std::string& a, const std::string& b) {
+    long av[3] = { 0, 0, 0 }, bv[3] = { 0, 0, 0 };
+    auto parse = [](const std::string& s, long* v) {
+        size_t p = 0;
+        for (int i = 0; i < 3 && p <= s.size(); ++i) {
+            size_t d = s.find('.', p);
+            if (d == std::string::npos) d = s.size();
+            v[i] = atol(s.substr(p, d - p).c_str());
+            p = d + 1;
+        }
+    };
+    parse(a, av); parse(b, bv);
+    for (int i = 0; i < 3; ++i) if (av[i] != bv[i]) return av[i] < bv[i];
+    return false;
+}
+
+// Read <dllbase>.tbplugin.json into p. Returns false when no sidecar exists
+// (a plugin WITHOUT a manifest - loads unchanged). A sidecar that yields no
+// known field at all logs "unreadable" and counts as absent (forgiving).
+static bool ReadManifest(const std::wstring& dllFile, Plugin& p) {
+    std::wstring mf = dllFile;
+    size_t dot = mf.find_last_of(L'.');
+    size_t slash = mf.find_last_of(L"\\/");
+    if (dot == std::wstring::npos || (slash != std::wstring::npos && dot < slash))
+        return false;                       // dll without extension: no sidecar
+    mf = mf.substr(0, dot) + L".tbplugin.json";
+    std::ifstream f(mf.c_str(), std::ios::binary);
+    if (!f) return false;
+    f.seekg(0, std::ios::end);
+    size_t n = (size_t)f.tellg();
+    f.seekg(0, std::ios::beg);
+    if (n == 0 || n > 64 * 1024) return false;     // a manifest is a few hundred bytes
+    std::string j(n, '\0');
+    if (!f.read(&j[0], (std::streamsize)n)) return false;
+    std::string v;
+    if (JsonGetString(j, "author", v))      p.manAuthor   = FromUtf8(v);
+    if (JsonGetString(j, "version", v))     p.manVersion  = FromUtf8(v);
+    if (JsonGetString(j, "description", v)) p.manDesc     = FromUtf8(v);
+    if (JsonGetString(j, "hostmin", v))     p.manHostmin  = FromUtf8(v);
+    for (auto& w : JsonGetStringArray(j, "words")) {
+        std::wstring x = Lower(Trim(FromUtf8(w)));
+        if (!x.empty() && x.find(L'#') == std::wstring::npos)
+            p.manWords.push_back(x);
+    }
+    p.hasManifest = !(p.manAuthor.empty() && p.manVersion.empty() &&
+                      p.manDesc.empty() && p.manHostmin.empty() &&
+                      p.manWords.empty());
+    if (!p.hasManifest)
+        LogInfo(L"plugin manifest: " + std::wstring(PathFindFileNameW(mf.c_str())) +
+                L" unreadable - ignored");
+    return p.hasManifest;
+}
+
 // Scan the portable Plugins\ folder for *.dll. [Plugins] "Name"="path" entries
 // and Plugins.ini (Path= / Load= / SaveHistory=) are honored too.
 static void DiscoverPlugins() {
@@ -1538,6 +1693,7 @@ static void DiscoverPlugins() {
     for (auto& p : g_plugins)
         if (p.hmod) FreeLibrary(p.hmod);
     g_plugins.clear();
+    g_wordOwners.clear();             // v0.36: word law re-armed per scan
 
     auto tryLoad = [&](const std::wstring& file) {
         HMODULE h = LoadLibraryW(file.c_str());
@@ -1567,6 +1723,70 @@ static void DiscoverPlugins() {
             CreateDirectoryW(root.c_str(), nullptr);            // exists = fine
             CreateDirectoryW((root + L"\\" + base).c_str(), nullptr);
         }
+        // v0.36 word law at load (the v0.31 audit-words rule inside the host):
+        // seed the owner map from the plugin's LIVE command words (guarded -
+        // a GetCount that faults must not boot the host), warning-only for
+        // manifestless shadowing so existing setups keep working.
+        if (p.GetCount && p.GetString) {
+            EnsureFaultFilter();
+            if (setjmp(g_pluginJmp) == 0) {
+                g_pluginGuard = 1;
+                int gc = p.GetCount();
+                if (gc < 0) gc = 0;
+                if (gc > 128) gc = 128;
+                for (int i = 0; i < gc; ++i) {
+                    const char* w = p.GetString(i);
+                    if (!w || !*w) continue;
+                    std::wstring lw = Lower(Trim(FromAnsi(w)));
+                    if (lw.empty()) continue;
+                    auto it = g_wordOwners.find(lw);
+                    if (it == g_wordOwners.end()) g_wordOwners[lw] = PluginKey(p);
+                    else if (it->second != PluginKey(p))
+                        LogInfo(L"plugin words: \"" + lw + L"\" also offered by " +
+                                PluginKey(p) + L" (owned by " + it->second + L")");
+                }
+                g_pluginGuard = 0;
+            } else {
+                g_pluginGuard = 0;
+                p.broken = true;
+                LogError(L"plugin: " + PluginKey(p) +
+                         L" FAULTED in GetCount/GetString - skipped for the rest of this session");
+            }
+        }
+        // v0.36 manifest gate: declared words must be free, hostmin satisfiable.
+        if (ReadManifest(file, p)) {
+            std::string ver = TB_STR(TYPEBOX_VERSION);
+            std::string hmin(ToAnsi(p.manHostmin));
+            if (!p.manHostmin.empty() && VerLess(ver, hmin)) {
+                LogError(L"plugin manifest: " + PluginKey(p) + L" needs TypeBox " +
+                         p.manHostmin + L" (this is " + WVersion() + L") - not loaded");
+                FreeLibrary(h);
+                return;
+            }
+            for (auto& w : p.manWords) {
+                bool host = false;
+                for (auto hw : kHostWords)
+                    if (_wcsicmp(w.c_str(), hw) == 0) { host = true; break; }
+                if (host) {
+                    LogError(L"plugin manifest: \"" + w + L"\" is a host word - " +
+                             PluginKey(p) + L" not loaded");
+                    FreeLibrary(h);
+                    return;
+                }
+                auto it = g_wordOwners.find(w);
+                if (it != g_wordOwners.end() && it->second != PluginKey(p)) {
+                    LogError(L"plugin manifest: \"" + w + L"\" collides with " +
+                             it->second + L" - " + PluginKey(p) + L" not loaded");
+                    FreeLibrary(h);
+                    return;
+                }
+                g_wordOwners[w] = PluginKey(p);
+            }
+            LogInfo(L"plugin manifest: " + PluginKey(p) + L" ok (words=" +
+                    std::to_wstring((int)p.manWords.size()) +
+                    (p.manAuthor.empty() ? std::wstring() : L" author=" + p.manAuthor) +
+                    L")");
+        }
         g_plugins.push_back(p);
     };
 
@@ -1594,35 +1814,136 @@ static void DiscoverPlugins() {
 }
 
 static void CallPluginsLoad(HWND mainWnd) {
+    EnsureFaultFilter();
     for (auto& p : g_plugins)
-        if (p.Load && !p.loaded && PluginLoadAllowed(p)) { p.Load(mainWnd); p.loaded = true; }
+        if (p.Load && !p.loaded && !p.broken && PluginLoadAllowed(p)) {
+            // v0.36 §4b: Load() is measured, not claimed - anything past the
+            // 20 ms budget shows up in the log (and /plugdebug keeps loadMs).
+            unsigned long long t0 = GetTickCount64();
+            bool ok = true;
+            if (setjmp(g_pluginJmp) == 0) {
+                g_pluginGuard = 1;
+                p.Load(mainWnd);
+                g_pluginGuard = 0;
+            } else { g_pluginGuard = 0; ok = false; }
+            p.loadMs = (long long)(GetTickCount64() - t0);
+            if (!ok) {
+                p.broken = true;
+                LogError(L"plugin: " + PluginKey(p) +
+                         L" FAULTED in Load - skipped for the rest of this session");
+                continue;
+            }
+            p.loaded = true;
+            if (p.loadMs > 20)
+                LogInfo(L"plugin load: " + PluginKey(p) + L" took " +
+                        std::to_wstring(p.loadMs) +
+                        L"ms (>20ms budget, ROADMAP-V1 §4b)");
+        }
 }
 
 static void CallPluginsUnload() {
+    EnsureFaultFilter();
     for (auto& p : g_plugins)
-        if (p.Unload && p.loaded) { p.Unload(); p.loaded = false; }
+        if (p.Unload && p.loaded) {
+            bool ok = true;
+            if (setjmp(g_pluginJmp) == 0) {
+                g_pluginGuard = 1;
+                p.Unload();
+                g_pluginGuard = 0;
+            } else { g_pluginGuard = 0; ok = false; }
+            p.loaded = false;          // unloaded either way - never double-Unload
+            if (!ok) {
+                p.broken = true;
+                LogError(L"plugin: " + PluginKey(p) +
+                         L" FAULTED in Unload - skipped for the rest of this session");
+            }
+        }
+}
+
+// v0.36 §4b: drop every per-plugin ET result cache (same text can already
+// mean different rows after a settings/theme/reload round-trip).
+static void InvalidateEtCaches() {
+    for (auto& p : g_plugins) p.etCache.clear();
+}
+
+// Reset the bound export table (different function-pointer types, so no
+// chained assignment - each field is cleared on its own line).
+static void ClearExports(Plugin& p) {
+    p.Load = nullptr; p.Unload = nullptr; p.GetInfo = nullptr;
+    p.GetCount = nullptr; p.GetString = nullptr;
+    p.GetCountET = nullptr; p.GetStringET = nullptr; p.RunString = nullptr;
+    p.GetPluginMenu = nullptr; p.About = nullptr; p.Options = nullptr;
+    p.FastConfig = nullptr; p.HookKey = nullptr;
+}
+
+// v0.36 plugin DX (ROADMAP #42): reload ONE dll in place - Unload+FreeLibrary
+// +LoadLibrary+rebind+Load, every plugin export under the fault guard.
+// Counters start from zero (honest numbers for the new binary), broken is
+// cleared, so a FAULTED plugin comes back after a bugfix without a restart.
+// Returns false when the dll cannot be loaded again; the plugin then stays
+// unloaded until the next /load or RESCAN.
+static bool ReloadPlugin(Plugin& p, HWND mainWnd) {
+    InvalidateEtCaches();
+    if (p.hmod) {
+        if (p.Unload && p.loaded) {
+            EnsureFaultFilter();
+            if (setjmp(g_pluginJmp) == 0) { g_pluginGuard = 1; p.Unload(); g_pluginGuard = 0; }
+            else g_pluginGuard = 0;              // faulted - try to free anyway
+        }
+        FreeLibrary(p.hmod);
+        p.hmod = nullptr;
+    }
+    p.loaded = false;
+    p.hits = p.msTotal = 0; p.broken = false;
+    p.etCalls = p.etMsTotal = p.etRows = p.etCacheHits = 0;
+    p.etCache.clear();
+    p.manAuthor = p.manVersion = p.manDesc = p.manHostmin = L"";
+    p.manWords.clear(); p.hasManifest = false;
+    HMODULE h = LoadLibraryW(p.file.c_str());
+    if (!h) {
+        ClearExports(p);
+        LogError(L"plugin: reload FAILED: " + PluginKey(p) + L" (GetLastError=" +
+                 std::to_wstring(GetLastError()) + L")");
+        return false;
+    }
+    p.hmod = h;
+    BindPlugin(p);
+    if (ReadManifest(p.file, p)) {
+        std::string hmin(ToAnsi(p.manHostmin));
+        if (!p.manHostmin.empty() &&
+            VerLess(TB_STR(TYPEBOX_VERSION), hmin)) {
+            LogError(L"plugin manifest: " + PluginKey(p) + L" needs TypeBox " +
+                     p.manHostmin + L" (this is " + WVersion() + L") - not loaded");
+            FreeLibrary(p.hmod); p.hmod = nullptr;
+            ClearExports(p);
+            return false;
+        }
+    }
+    unsigned long long t0 = GetTickCount64();
+    if (PluginLoadAllowed(p) && p.Load) {
+        EnsureFaultFilter();
+        bool ok = true;
+        if (setjmp(g_pluginJmp) == 0) { g_pluginGuard = 1; p.Load(mainWnd); g_pluginGuard = 0; }
+        else ok = false;
+        p.loaded = ok;
+        if (!ok) {
+            p.broken = true;
+            LogError(L"plugin: " + PluginKey(p) +
+                     L" FAULTED in Load - skipped for the rest of this session");
+        }
+    }
+    p.loadMs = (long long)(GetTickCount64() - t0);
+    LogInfo(L"plugin: reloaded " + PluginKey(p) + L" (" +
+            std::to_wstring(p.loadMs) + L"ms)");
+    return true;
 }
 
 // Ask plugins to handle the line (first plugin that returns run != 0 wins).
 static void DdClose();   // fwd (defined with the drop-down below)
 
-// v0.35 plugin DX: one bad plugin must never take the host with it. MinGW's
-// GCC has no __try, so the guard is the classic MinGW pattern: a process-wide
-// exception filter that longjmps back to the guarded call while the stack is
-// still intact - but ONLY while a plugin export is on the stack (the flag).
-// A host crash keeps its old unhandled behavior (CONTINUE_SEARCH).
-static jmp_buf        g_pluginJmp;
-static volatile long  g_pluginGuard = 0;
-static LONG WINAPI PluginFaultFilter(EXCEPTION_POINTERS* ep) {
-    (void)ep;
-    if (g_pluginGuard) { g_pluginGuard = 0; longjmp(g_pluginJmp, 1); }
-    return EXCEPTION_CONTINUE_SEARCH;
-}
-
 static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
     std::string ansi = ToAnsi(line);
-    static bool s_filter = false;
-    if (!s_filter) { SetUnhandledExceptionFilter(PluginFaultFilter); s_filter = true; }
+    EnsureFaultFilter();
     for (auto& p : g_plugins) {
         if (!p.RunString || !PluginLoadAllowed(p) || p.broken) continue;
         if (!p.loaded && p.Load) { p.Load(mainWnd); p.loaded = true; }
@@ -1671,6 +1992,51 @@ static ExecType RunPlugins(const std::wstring& line, HWND mainWnd) {
         }
     }
     return EXC_NONE;
+}
+
+// v0.36 §4b (ROADMAP-V1): per-plugin ET counters + a tiny result cache.
+// Rows are keyed by the exact ANSI line for 1.5 s, so typing "ab" -> "abc"
+// -> "ab" answers the old line from cache instead of asking the dll again;
+// /reread, /reload and RESCAN invalidate hard. The round-trip itself now
+// runs under the fault guard - a bad GetCountET retires the plugin, not the
+// console. Callers feed the returned rows through their own add().
+static void PluginEtRows(Plugin& p, const std::string& aLine,
+                         std::vector<std::wstring>& out) {
+    unsigned long long now = GetTickCount64();
+    for (auto& e : p.etCache)
+        if (e.aLine == aLine && e.tick && now - e.tick < 8000) {
+            p.etCacheHits += 1;
+            out = e.rows;
+            return;
+        }
+    out.clear();
+    EnsureFaultFilter();
+    unsigned long long t0 = GetTickCount64();
+    bool ok = true;
+    if (setjmp(g_pluginJmp) == 0) {
+        g_pluginGuard = 1;
+        int cnt = p.GetCountET(aLine.c_str());
+        if (cnt < 0) cnt = 0;
+        if (cnt > 100) cnt = 100;                    // dd caps at 100 rows anyway
+        for (int i = 0; i < cnt; ++i) {
+            const char* r = p.GetStringET(i);
+            if (r) out.push_back(FromAnsi(r));
+        }
+        g_pluginGuard = 0;
+    } else { g_pluginGuard = 0; ok = false; }
+    p.etCalls += 1;
+    p.etMsTotal += (long long)(GetTickCount64() - t0);
+    if (!ok) {
+        p.broken = true;
+        out.clear();
+        LogError(L"plugin: " + PluginKey(p) +
+                 L" FAULTED in GetCountET - skipped for the rest of this session");
+        return;
+    }
+    p.etRows += (long long)out.size();
+    Plugin::EtEntry e; e.aLine = aLine; e.rows = out; e.tick = now;
+    p.etCache.insert(p.etCache.begin(), e);
+    if (p.etCache.size() > 8) p.etCache.pop_back();
 }
 
 // ---------------------------------------------------------------- forward decls
@@ -2274,6 +2640,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
             L"Ghost text: when one row continues the line, End (or Right) accepts the dimmed tail\n"
             L"Scheduled (v0.34): in 10m <cmd> | at 18:30 <cmd> | /timers | /cancel <n>|all | /dnd [min]\n"
             L"Dashboards (v0.35): /stats | /plugdebug | /export history <f.csv> [redact] | /import history <f.csv>\n"
+            L"Plugin DX (v0.36): /reload <plugin> hot-reloads one dll | declare words in Plugins\\<name>.tbplugin.json\n"
             L"Favorites (v0.35): Ctrl+S stars the selected row - type \"favs \" to filter them; autostart on|off|status\n"
             L"Plugin utilities: ts (epoch/ISO converter, ts clip) | slug text [snake|pascal] | sha256 <file> | sha256 /verify SHA256SUMS | cpu ram batt disk sys | clip type <n> | clip ring\n"
             L"/settings opens the settings dialog, /config opens its alias editor.";
@@ -2406,6 +2773,7 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         ReloadHotkey(mainWnd);
         LoadThemes();               // v0.15: themes\*.theme.ini picked up too
         ApplyThemeVisual();
+        InvalidateEtCaches();       // v0.36 §4b: settings changed -> rows may change
         if (mainWnd) { InvalidateRect(mainWnd, nullptr, TRUE);
                        RECT rc; GetClientRect(mainWnd, &rc);
                        SendMessageW(mainWnd, WM_SIZE, 0,
@@ -2422,6 +2790,31 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         TbMessageBox(mainWnd, msg.c_str(), L"TypeBox — plugins", MB_OK | MB_ICONINFORMATION);
     } else if (c == L"/unload") {
         CallPluginsUnload();
+    } else if (c == L"/reload") {
+        // v0.36 plugin DX (ROADMAP #42): hot-reload ONE dll in place -
+        // FreeLibrary + LoadLibrary without restarting the host. The natural
+        // loop for plugin authors: edit -> build -> `/reload myplugin`.
+        std::wstring name = Trim(RestWords(line));
+        if (name.empty()) {
+            LogInfo(L"/reload: usage");
+            InternalAnswer(mainWnd, L(STR_RLD_USAGE));
+        } else {
+            Plugin* hit = nullptr;
+            for (auto& p : g_plugins)
+                if (_wcsicmp(PluginKey(p).c_str(), name.c_str()) == 0) { hit = &p; break; }
+            if (!hit) {
+                std::wstring ans = std::wstring(L(STR_RLD_NOPLG)) + L" " + name;
+                LogInfo(L"/reload: " + ans);
+                InternalAnswer(mainWnd, ans);
+            } else {
+                bool ok = ReloadPlugin(*hit, mainWnd);
+                std::wstring ans = std::wstring(L(ok ? STR_RLD_OK : STR_RLD_FAIL)) +
+                                   L" " + PluginKey(*hit) + L" (" +
+                                   std::to_wstring(hit->loadMs) + L"ms)";
+                LogInfo(L"/reload: " + ans);
+                InternalAnswer(mainWnd, ans);
+            }
+        }
     } else if (c == L"/export") {
         // Export settings: copy the portable ini to the given file.
         // v0.35 (RI3 #207): `/export history <file.csv> [redact]` writes the
@@ -2721,22 +3114,33 @@ static void RunInternal(const std::wstring& line, HWND mainWnd) {
         // v0.35 plugin DX (ROADMAP-V1 v0.36 row, RI3 #270 early-landed):
         // who answered what, how often, how slow - and who faulted once and
         // was respectfully retired for the rest of the session.
-        std::wstring ans;
-        if (g_plugins.empty()) ans = L(STR_PLDBG_EMPTY);
+        std::wstring ans, full;
+        if (g_plugins.empty()) { ans = L(STR_PLDBG_EMPTY); full = ans; }
         else {
             ans = std::wstring(L(STR_PLDBG_PRE)) + L" " +
                   std::to_wstring((int)g_plugins.size()) + L" | ";
             int shown = 0;
+            full = ans;                                    // v0.36: the log keeps EVERYONE
             for (auto& p : g_plugins) {
-                if (shown >= 6) { ans += L", ..."; break; }
-                if (shown) ans += L"  |  ";
+                if (shown) full += L"  |  ";
                 long long avg = p.hits ? p.msTotal / p.hits : 0;
-                ans += PluginKey(p) + (p.broken ? L" FAULT" : (p.loaded ? L" ok" : L" idle")) +
-                       L" " + std::to_wstring(p.hits) + L"/" + std::to_wstring(avg) + L"ms";
+                long long etAvg = p.etCalls ? p.etMsTotal / p.etCalls : 0;
+                // v0.35 contract: `<key> ok <hits>/<avg>ms` stays untouched -
+                // the v0.36 ET fields are APPENDED (old gates match prefixes).
+                std::wstring seg = PluginKey(p) + (p.broken ? L" FAULT" : (p.loaded ? L" ok" : L" idle")) +
+                       L" " + std::to_wstring(p.hits) + L"/" + std::to_wstring(avg) + L"ms" +
+                       L" et " + std::to_wstring(p.etCalls) + L"/" + std::to_wstring(etAvg) +
+                       L"ms c" + std::to_wstring(p.etCacheHits);
+                full += seg;
+                if (shown < 6) {                           // console view stays curated
+                    if (shown) ans += L"  |  ";
+                    ans += seg;
+                }
                 ++shown;
             }
+            if (shown > 6) ans += L", ...";
         }
-        LogInfo(L"/plugdebug: " + ans);
+        LogInfo(L"/plugdebug: " + full);
         SetWindowTextW(g_edit, ans.c_str());
         SendMessageW(g_edit, EM_SETSEL, 0, -1);
         g_internalAnswer = true;
@@ -3236,7 +3640,7 @@ static const wchar_t* const kInternalCmds[] = {
     L"/about", L"/cancel", L"/checkconfig", L"/config", L"/day", L"/dnd", L"/exit",
     L"/export", L"/help",
     L"/hide", L"/homedir", L"/import", L"/inidir", L"/inifiles", L"/load",
-    L"/log", L"/openconfig", L"/path", L"/plugdebug", L"/reread", L"/settings",
+    L"/log", L"/openconfig", L"/path", L"/plugdebug", L"/reload", L"/reread", L"/settings",
     L"/show", L"/stats", L"/sys", L"/tabs", L"/timers", L"/unload", L"/undo", L"/update" };
 
 struct Anchor { int lamp = -1; int labelId = -1; };   // -1 = lights off
@@ -4492,7 +4896,7 @@ static void TabComplete(HWND edit) {
                 for (const wchar_t* cmd : { L"/about", L"/checkconfig", L"/config",
                      L"/day", L"/exit", L"/export", L"/help", L"/hide", L"/homedir", L"/import",
                      L"/inidir", L"/inifiles", L"/load", L"/log", L"/openconfig", L"/path",
-                     L"/plugdebug", L"/reread", L"/settings", L"/show", L"/stats",
+                     L"/plugdebug", L"/reload", L"/reread", L"/settings", L"/show", L"/stats",
                      L"/sys", L"/tabs", L"/unload", L"/undo", L"/update" })
                     add(cmd);
             }
@@ -4520,13 +4924,14 @@ static void TabComplete(HWND edit) {
             // v0.32 perf: the wide->ANSI line conversion happens ONCE per
             // rebuild, not once per plugin.
             {
-                std::string aLine = ToAnsi(text);
+                std::string aLine = ToAnsi(text);   // v0.32 perf + v0.36 §4b cache
                 for (auto& p : g_plugins)
                     if (p.GetCountET && p.GetStringET && !p.broken) {
                         // v0.24: whole line, not just the caret word - plugins key
                         // their subcommand templates on "cmd " (cliphist "clip ri").
-                        int cnt = p.GetCountET(aLine.c_str());
-                        for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
+                        std::vector<std::wstring> rows;
+                        PluginEtRows(p, aLine, rows);
+                        for (auto& r : rows) add(r);
                     }
             }
         g_etPos = 0;
@@ -5000,8 +5405,9 @@ static void DdUpdate(HWND mainWnd) {
             std::string aLine = ToAnsi(text);   // v0.32 perf: convert the line ONCE
             for (auto& p : g_plugins)
                 if (p.GetCountET && p.GetStringET && PluginLoadAllowed(p) && !p.broken) {
-                    int cnt = p.GetCountET(aLine.c_str());  // v0.24: whole line
-                    for (int i = 0; i < cnt; ++i) add(FromAnsi(p.GetStringET(i)));
+                    std::vector<std::wstring> rows;   // v0.36 §4b: counters + cache
+                    PluginEtRows(p, aLine, rows);
+                    for (auto& r : rows) add(r);
                 }
         }
     }
@@ -5453,7 +5859,10 @@ enum { IDB_OK = 101, IDB_APPLY, IDB_CANCEL,
        IDB_EN_ADDVAR, IDB_EN_UPDATEVAR, IDB_EN_DELETEVAR,
        IDB_TH_SAVEAS, IDB_TH_DEL, IDT_TH_COMBO, IDT_TH_NAME,
        IDB_SN_ADD, IDB_SN_UPDATE, IDB_SN_DELETE,           // v0.33 snippets page
-       IDB_SE_ADD, IDB_SE_UPDATE, IDB_SE_DELETE };         // v0.33 search engines page
+       IDB_SE_ADD, IDB_SE_UPDATE, IDB_SE_DELETE,           // v0.33 search engines page
+       IDB_PL_RELOAD };             // v0.36 hot reload (LAST on purpose: every
+                                   // earlier id keeps its numeric value - tbtest
+                                   // suites click settings children by that id)
 
 static std::wstring GetText(HWND h) {
     int n = GetWindowTextLengthW(h);
@@ -5645,15 +6054,30 @@ static void PluginsEditRow(int idx) {
     SendMessageW(g_plHistChk, BM_SETCHECK, r.saveHist ? BST_CHECKED : BST_UNCHECKED, 0);
     std::wstring info;
     for (auto& p : g_plugins)
-        if (PluginKey(p) == r.name && p.GetInfo) {
-            TInfo ti = p.GetInfo();
-            auto add = [&info](const wchar_t* label, const char* v) {
-                if (v && *v) info += std::wstring(label) + L": " + FromAnsi(v) + L"\n";
-            };
-            add(L"Name", ti.name); add(L"Version", ti.version);
-            add(L"Description", ti.description); add(L"Author", ti.author);
-            add(L"Copyright", ti.copyright); add(L"Homepage", ti.homepage);
+        if (PluginKey(p) == r.name) {
+            if (p.GetInfo) {
+                TInfo ti = p.GetInfo();
+                auto add = [&info](const wchar_t* label, const char* v) {
+                    if (v && *v) info += std::wstring(label) + L": " + FromAnsi(v) + L"\n";
+                };
+                add(L"Name", ti.name); add(L"Version", ti.version);
+                add(L"Description", ti.description); add(L"Author", ti.author);
+                add(L"Copyright", ti.copyright); add(L"Homepage", ti.homepage);
+            }
             info += PluginLoadAllowed(p) ? L"Status: loaded" : L"Status: disabled";
+            if (p.broken) info += L" (FAULTED)";
+            // v0.36 plugin DX: what the sidecar manifest declared.
+            if (p.hasManifest) {
+                info += L"\nmanifest";
+                if (!p.manVersion.empty())  info += L" v" + p.manVersion;
+                if (!p.manAuthor.empty())   info += L" by " + p.manAuthor;
+                if (!p.manHostmin.empty())  info += L" needs>=" + p.manHostmin;
+                info += L"\nwords: ";
+                for (size_t i = 0; i < p.manWords.size() && i < 8; ++i) {
+                    if (i) info += L", ";
+                    info += p.manWords[i];
+                }
+            }
             break;
         }
     if (info.empty()) info = L"(plugin not present on disk)";
@@ -6140,6 +6564,19 @@ static LRESULT CALLBACK SettingsProc(HWND h, UINT m, WPARAM w, LPARAM l) {
                     LogInfo(L"settings: all plugins unloaded");
                     return 0;
                 }
+                if (bid == IDB_PL_RELOAD) {
+                    // v0.36 (ROADMAP #42): hot-reload the selected dll.
+                    PluginsReadRow();
+                    if (g_plSel >= 0 && g_plSel < (int)g_plRows.size()) {
+                        for (auto& p : g_plugins)
+                            if (PluginKey(p) == g_plRows[g_plSel].name) {
+                                ReloadPlugin(p, parent);
+                                PluginsEditRow(g_plSel);
+                                break;
+                            }
+                    }
+                    return 0;
+                }
                 if (bid == IDB_PL_ABOUT || bid == IDB_PL_OPTIONS) {
                     PluginsReadRow();
                     if (g_plSel >= 0 && g_plSel < (int)g_plRows.size()) {
@@ -6479,6 +6916,9 @@ static void SettingsCreate(HWND mainWnd, int startPage) {
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_UNLOAD),  px + 90, 240, 80, IDB_PL_UNLOAD);
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_ABOUT),   px, 270, 80, IDB_PL_ABOUT);
     MkButton(g_setPage[PG_PLUGINS], L(STR_PL_OPTIONS), px + 90, 270, 80, IDB_PL_OPTIONS);
+    // v0.36 (ROADMAP #42): hot-reload the selected dll in place - the loop
+    // for plugin authors is build -> press -> type, no host restart.
+    MkButton(g_setPage[PG_PLUGINS], L(STR_PL_RELOAD),  px, 300, 90, IDB_PL_RELOAD);
     MkLabel(g_setPage[PG_PLUGINS], L(STR_PL_HINT), 8, 412, 190);
 
     // --- Environment (own PATH folders + %variables%, like the OS dialog)
